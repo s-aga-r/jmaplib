@@ -171,8 +171,11 @@ class CapabilitySpec:
     #: the caller opts in.
     experimental: bool = False
     #: Disambiguates two specs claiming the same URN by inspecting the advertised
-    #: capability object - the RFC 9610 ContactCard model and the legacy
-    #: Contact/ContactGroup model share ``urn:ietf:params:jmap:contacts``.
+    #: capability object. Nothing in this build needs it: contacts looked like the
+    #: motivating case, but the pre-RFC model turned out to be gated by *vendor*
+    #: URNs rather than sharing the IETF one, so it is three capabilities and not
+    #: two flavours. The hook stays for a capability that really does overload a
+    #: URN - and because a third-party spec may.
     matches: Callable[[Mapping[str, Any]], bool] | None = None
     #: Populated by ``__post_init__``; do not pass.
     methods_by_name: Mapping[str, MethodSpec] = field(default=_NO_METHODS, repr=False)

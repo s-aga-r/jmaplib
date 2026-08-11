@@ -83,6 +83,27 @@ class AddressBook(JMAPModel):
     my_rights: AddressBookRights | None = None
 
 
+class Media(JMAPModel):
+    """One photo, sound or logo attached to a card (RFC 9553 §2.6.4).
+
+    RFC 9610 §3 adds ``blobId`` and has servers prefer it over a ``data:`` URI, so
+    a contact list fetches thumbnails on demand rather than carrying every face
+    base64-encoded in the response. ``mediaType`` must be set alongside it.
+    """
+
+    #: The JSContact discriminator, e.g. ``"Media"``.
+    at_type: str | None = Field(default=None, alias="@type")
+    kind: str | None = None
+    uri: str | None = None
+    #: RFC 9610 §7.5.3's addition. Present instead of ``uri`` for binary content.
+    blob_id: str | None = None
+    media_type: str | None = None
+
+    @property
+    def is_blob_backed(self) -> bool:
+        return self.blob_id is not None
+
+
 class ContactCard(JMAPModel):
     """A person, company or group (RFC 9610 §3).
 
@@ -126,6 +147,33 @@ class ContactCard(JMAPModel):
             return []
         return [key for key, value in as_object(members).items() if value]
 
+    def media(self) -> dict[str, Media]:
+        """The card's photos, sounds and logos, validated (RFC 9553 §2.6.4).
+
+        A map keyed by JSContact's own media id. Provided because the interesting
+        property - whether an entry is blob-backed rather than a ``data:`` URI -
+        is otherwise reachable only by validating the raw dicts by hand, and that
+        distinction is the whole reason a contact list can stream thumbnails
+        instead of carrying every face inline.
+
+        Entries that do not validate are skipped rather than raising: ``media`` is
+        an extension point, and one odd entry should not cost the rest.
+        """
+        raw = self.jscontact("media")
+        if not is_object(raw):
+            return {}
+        found: dict[str, Media] = {}
+        for key, entry in as_object(raw).items():
+            try:
+                found[key] = Media.model_validate(entry)
+            except ValueError:
+                continue
+        return found
+
+    def photos(self) -> dict[str, Media]:
+        """Just the ``photo``-kind media, which is what a contact list shows."""
+        return {key: item for key, item in self.media().items() if item.kind == "photo"}
+
     def jscontact(self, name: str) -> Any:
         """Read a JSContact property by its exact wire name."""
         return (self.__pydantic_extra__ or {}).get(name)
@@ -139,24 +187,3 @@ def _text(value: Any) -> str | None:
     about its return type.
     """
     return value if isinstance(value, str) else None
-
-
-class Media(JMAPModel):
-    """One photo, sound or logo attached to a card (RFC 9553 §2.6.4).
-
-    RFC 9610 §3 adds ``blobId`` and has servers prefer it over a ``data:`` URI, so
-    a contact list fetches thumbnails on demand rather than carrying every face
-    base64-encoded in the response. ``mediaType`` must be set alongside it.
-    """
-
-    #: The JSContact discriminator, e.g. ``"Media"``.
-    at_type: str | None = Field(default=None, alias="@type")
-    kind: str | None = None
-    uri: str | None = None
-    #: RFC 9610 §7.5.3's addition. Present instead of ``uri`` for binary content.
-    blob_id: str | None = None
-    media_type: str | None = None
-
-    @property
-    def is_blob_backed(self) -> bool:
-        return self.blob_id is not None

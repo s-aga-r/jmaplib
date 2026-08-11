@@ -520,3 +520,48 @@ class TestLegacyContactsSpecs:
         assert CYRUS_CONTACTS.account_value is None
         assert FASTMAIL_CONTACTS.session_value is None
         assert CYRUS_CONTACTS.session_value is None
+
+
+class TestMediaAccessors:
+    """``media()`` is what makes the blob-vs-data-URI distinction reachable.
+
+    Without it, the point the model docstring leads with - that a photo arrives as
+    a blobId so a contact list can stream thumbnails rather than carrying every
+    face inline - could only be checked by validating the raw dicts by hand.
+    """
+
+    def card(self, media: object) -> ContactCard:
+        return ContactCard.from_wire({"id": "c1", "media": media})
+
+    def test_media_entries_are_validated(self):
+        card = self.card(
+            {"p1": {"@type": "Media", "kind": "photo", "blobId": "B1", "mediaType": "image/png"}}
+        )
+        photo = card.media()["p1"]
+        assert photo.blob_id == "B1"
+        assert photo.is_blob_backed
+
+    def test_a_data_uri_entry_is_not_blob_backed(self):
+        card = self.card({"p1": {"kind": "photo", "uri": "data:image/png;base64,AAA="}})
+        assert card.media()["p1"].is_blob_backed is False
+
+    def test_photos_are_filtered_from_other_media(self):
+        card = self.card(
+            {
+                "p1": {"kind": "photo", "blobId": "B1"},
+                "s1": {"kind": "sound", "blobId": "B2"},
+            }
+        )
+        assert set(card.photos()) == {"p1"}
+
+    def test_a_card_with_no_media_reads_as_empty(self):
+        assert ContactCard.from_wire({"id": "c1"}).media() == {}
+
+    def test_a_non_object_media_property_reads_as_empty(self):
+        assert self.card(["not", "an", "object"]).media() == {}
+
+    def test_one_odd_entry_does_not_cost_the_rest(self):
+        # `media` is an extension point, so a server may put something there this
+        # build does not understand. Dropping the batch would be worse.
+        card = self.card({"good": {"kind": "photo", "blobId": "B1"}, "bad": "not an object"})
+        assert set(card.media()) == {"good"}

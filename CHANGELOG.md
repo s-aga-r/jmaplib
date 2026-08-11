@@ -89,6 +89,11 @@ And four elsewhere:
 - `duration_seconds` accepted `PT` and summed it to zero — reading as a real limit
   of zero seconds rather than as unparseable — and accepted `P1W1D` although weeks
   are exclusive with days
+- `MethodSpec.matches` was documented as existing for contacts, citing the very
+  design `capabilities/contacts.py` opens by refuting
+- `ContactCard.media()` / `.photos()` now exist. `Media` was modelled but nothing
+  produced it, so the blob-vs-`data:`-URI distinction the type exists for was
+  reachable only by validating raw dicts by hand
 
 ## 0.3.0
 

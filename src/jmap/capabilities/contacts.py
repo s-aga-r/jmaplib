@@ -27,7 +27,7 @@ field names for a vocabulary nobody ratified would be worse than not having them
 
 The legacy method inventory is also *not* the standard six. ``Contact`` has no
 ``/queryChanges`` while ``ContactGroup`` does have ``/query`` - which the composed
-façades reproduce, so ``client.contacts_legacy.contact`` genuinely has no
+façades reproduce, so ``client.fastmail_contacts.contact`` genuinely has no
 ``.query_changes``.
 """
 
@@ -55,12 +55,23 @@ class ContactsCapability(JMAPModel):
     """The per-account ``urn:ietf:params:jmap:contacts`` object (RFC 9610 §1.4.1)."""
 
     #: How many address books one card may be in. ``None`` means no limit beyond
-    #: the number of address books that exist.
+    #: the number of address books that exist - **or** that the capability object
+    #: would not parse; see :meth:`of`.
     max_address_books_per_card: int | None = None
     may_create_address_book: bool = False
 
     @classmethod
     def of(cls, value: Any) -> ContactsCapability:
+        """Parse an advertised capability object, tolerating a malformed one.
+
+        All or nothing, like every other capability object in this library: one
+        field the server got wrong discards the valid ones beside it. That keeps a
+        bad object from making an otherwise working session unusable, at the cost
+        of one ambiguity worth knowing about - after a failed parse,
+        ``max_address_books_per_card is None`` reads as "no limit advertised" when
+        the truth is "could not tell". The conservative move on that path is to
+        treat the limit as unknown rather than absent.
+        """
         try:
             return cls.model_validate(dict(value))
         except (ValueError, TypeError):
@@ -76,10 +87,14 @@ def looks_like_rfc9610(capability: Any) -> bool:
     and a real Fastmail capture shows the IETF URN advertised as a bare ``{}``
     alongside a legacy-only account.
 
-    Prefer the vendor URNs: they are what actually gates the legacy methods, and
-    they are unambiguous. Note there is no ``isRFC`` flag here - Fastmail
-    advertises one on *calendars*, and a lookup that expects it on contacts reads
-    as absent and picks the wrong model silently.
+    Nothing inside the library consults this, deliberately: resolution goes by URN,
+    which is unambiguous. It is here for a caller inspecting a session by hand -
+    and to put the reasoning somewhere findable, since "look at the capability
+    object" is the approach a reader will otherwise reinvent.
+
+    Note there is no ``isRFC`` flag to look for. Fastmail advertises one on
+    *calendars*, and a lookup that expects the same on contacts reads as absent
+    and picks the wrong model silently.
     """
     if not isinstance(capability, dict):
         return False
