@@ -1,0 +1,323 @@
+"""The synchronous JMAP client.
+
+A thin shell over the I/O-free kernel: fetch the Session, resolve capabilities
+against it, then post batches and route the answers back. Everything interesting
+- what ``using`` should contain, how to split a batch, whether a failure may be
+retried - is decided elsewhere and merely *called* from here, which is what keeps
+this and :mod:`jmap.aio` from drifting apart.
+
+Discovery starts wherever the caller points it and follows redirects, because
+``/.well-known/jmap`` is a redirect on every real server (Stalwart answers 307,
+Fastmail 302). The status code is never asserted; what matters is landing on the
+session document with the ``Authorization`` header intact.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING, Any, Self
+
+import httpx
+
+from jmap._shell import (
+    as_json_object,
+    failure_of,
+    problem_of,
+    request_headers,
+    retry_delay,
+    session_is_stale,
+)
+from jmap.batch import Batch, all_mutations_guarded, is_mutating
+from jmap.core.errors import AuthenticationError, TransportError
+from jmap.core.ijson import dumps, loads
+from jmap.core.response import Response
+from jmap.core.retry import Failure, RetryPolicy, Safety, classify, should_retry
+from jmap.core.session import Session
+from jmap.defaults import default_registry
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from types import TracebackType
+
+    from jmap.capabilities.registry import ActiveCapabilities, Registry
+    from jmap.core.ids import Id
+    from jmap.core.invocation import Handle
+    from jmap.core.request import Request
+
+
+class BatchContext:
+    """A batch that executes when its ``with`` block exits.
+
+    Handles are readable afterwards. Executing on exit rather than on demand is
+    what makes back-references natural: everything queued in the block travels in
+    one request, so a later call can point at an earlier one's results.
+    """
+
+    __slots__ = ("_batch", "_client", "_extra_using")
+
+    def __init__(self, client: JMAPClient, batch: Batch, extra_using: frozenset[str]) -> None:
+        self._client = client
+        self._batch = batch
+        self._extra_using = extra_using
+
+    def add(
+        self,
+        name: str,
+        arguments: Mapping[str, Any] | None = None,
+        *,
+        account_id: Id | None = None,
+    ) -> Handle[Any]:
+        return self._batch.add(name, arguments, account_id=account_id)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        # Do not send a batch assembled by a block that raised: the caller's
+        # intent is unknown past the point it failed.
+        if exc_type is None:
+            self._client.execute(self._batch, extra_using=self._extra_using)
+
+
+class JMAPClient:
+    """A synchronous JMAP client bound to one session."""
+
+    session: Session
+    #: Where the session was fetched from, so it can be refetched.
+    session_url: str
+    capabilities: ActiveCapabilities
+    registry: Registry
+    retry_policy: RetryPolicy
+    default_account: Id | None
+    #: Set when a response reports a different ``sessionState``. The session is
+    #: not refetched automatically - that would turn one stale read into a
+    #: surprise round trip in the middle of someone's batch.
+    session_stale: bool
+
+    def __init__(
+        self,
+        session: Session,
+        capabilities: ActiveCapabilities,
+        http: httpx.Client,
+        *,
+        registry: Registry,
+        retry_policy: RetryPolicy | None = None,
+        default_account: Id | None = None,
+        owns_http: bool = False,
+        session_url: str = "",
+    ) -> None:
+        self.session = session
+        self.session_url = session_url or session.api_url
+        self.capabilities = capabilities
+        self.registry = registry
+        self.retry_policy = retry_policy or RetryPolicy()
+        self.default_account = default_account
+        self._http = http
+        self._owns_http = owns_http
+        self.session_stale = False
+
+    # -- construction ------------------------------------------------------- #
+    @classmethod
+    def connect(
+        cls,
+        url: str,
+        *,
+        auth: httpx.Auth,
+        registry: Registry | None = None,
+        account_id: Id | None = None,
+        experimental: bool = False,
+        retry_policy: RetryPolicy | None = None,
+        http: httpx.Client | None = None,
+        timeout: float = 30.0,
+    ) -> Self:
+        """Fetch the session from ``url`` and resolve what this server supports.
+
+        ``url`` may be the session endpoint or anything that redirects to it,
+        which is the normal case: ``https://example.com/.well-known/jmap``.
+        """
+        owns_http = http is None
+        client = http or httpx.Client(follow_redirects=True, timeout=timeout)
+        try:
+            session = _fetch_session(client, url, auth=auth)
+        except BaseException:
+            if owns_http:
+                client.close()
+            raise
+
+        client.auth = auth
+        registry = registry or default_registry()
+        account = account_id or _primary_account(session)
+        return cls(
+            session,
+            registry.resolve(session, account, experimental=experimental),
+            client,
+            registry=registry,
+            retry_policy=retry_policy,
+            default_account=account,
+            owns_http=owns_http,
+            session_url=url,
+        )
+
+    def refresh_session(self) -> None:
+        """Refetch the session and re-resolve capabilities.
+
+        Called by the application when :attr:`session_stale` is set. A server may
+        gain or lose a capability at any time, so the resolution is redone rather
+        than patched.
+        """
+        self.session = _fetch_session(self._http, self.session_url, auth=None)
+        self.capabilities = self.registry.resolve(self.session, self.default_account)
+        self.session_stale = False
+
+    # -- calling ------------------------------------------------------------ #
+    def batch(self, *, extra_using: frozenset[str] = frozenset()) -> BatchContext:
+        """Open a batch. Calls queued inside it travel in one request."""
+        return BatchContext(
+            self,
+            Batch(self.capabilities, default_account=self.default_account),
+            extra_using,
+        )
+
+    def call(
+        self,
+        name: str,
+        arguments: Mapping[str, Any] | None = None,
+        *,
+        account_id: Id | None = None,
+    ) -> Any:
+        """Make a single call and return its parsed result."""
+        batch = Batch(self.capabilities, default_account=self.default_account)
+        handle = batch.add(name, arguments, account_id=account_id)
+        self.execute(batch)
+        return handle.result
+
+    def echo(self, **arguments: Any) -> Any:
+        """``Core/echo`` - the cheapest proof that auth and routing both work."""
+        return self.call("Core/echo", arguments)
+
+    def execute(self, batch: Batch, *, extra_using: frozenset[str] = frozenset()) -> None:
+        """Send ``batch``, possibly as several requests, and resolve its handles."""
+        for request in batch.plan(extra_using=extra_using):
+            response = self._post(request, batch)
+            batch.absorb(response)
+            if session_is_stale(self.session, response.session_state):
+                self.session_stale = True
+
+    # -- transport ---------------------------------------------------------- #
+    def _post(self, request: Request, batch: Batch) -> Response:
+        mutating = is_mutating(batch, self.capabilities)
+        guarded = all_mutations_guarded(batch, self.capabilities)
+        body = dumps(request.to_wire()).encode()
+        attempt = 0
+
+        safety: Safety
+        delay: float | None
+        error: BaseException
+
+        while True:
+            attempt += 1
+            try:
+                response = self._http.post(
+                    self.session.api_url, content=body, headers=request_headers()
+                )
+            except httpx.TimeoutException as exc:
+                # A timeout is not a connection failure: the request went out, so
+                # the server may have applied it and simply answered too slowly.
+                safety, delay, error = classify(Failure.TIMEOUT), None, exc
+            except httpx.HTTPError as exc:
+                safety, delay, error = classify(Failure.CONNECT), None, exc
+            else:
+                problem = problem_of(response.status_code, response.headers, response.content)
+                if problem is None:
+                    return _parse_response(response.content)
+                if response.status_code == 401:
+                    raise AuthenticationError(
+                        "the server rejected these credentials",
+                        challenges=tuple(response.headers.get_list("www-authenticate")),
+                    )
+                safety = failure_of(response.status_code, problem)
+                delay = retry_delay(
+                    response.headers,
+                    policy_delay=self.retry_policy.backoff(attempt),
+                    now=time.time(),
+                )
+                error = problem
+
+            if not should_retry(
+                safety,
+                policy=self.retry_policy,
+                attempt=attempt,
+                mutating=mutating,
+                all_mutations_guarded=guarded,
+            ):
+                raise _as_error(error)
+            time.sleep(delay if delay is not None else self.retry_policy.backoff(attempt))
+
+    # -- lifecycle ---------------------------------------------------------- #
+    def close(self) -> None:
+        if self._owns_http:
+            self._http.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def __repr__(self) -> str:
+        return f"JMAPClient(username={self.session.username!r}, account={self.default_account!r})"
+
+
+def _as_error(error: BaseException) -> BaseException:
+    if isinstance(error, httpx.HTTPError):
+        return TransportError(str(error) or type(error).__name__)
+    return error
+
+
+def _parse_response(body: bytes) -> Response:
+    return Response.from_wire(as_json_object(loads(body), "the API"))
+
+
+def _fetch_session(http: httpx.Client, url: str, *, auth: httpx.Auth | None) -> Session:
+    """GET the session document, following whatever redirects stand in the way."""
+    kwargs: dict[str, Any] = {"headers": {"Accept": "application/json"}}
+    if auth is not None:
+        kwargs["auth"] = auth
+    try:
+        response = http.get(url, **kwargs)
+    except httpx.HTTPError as exc:
+        raise _as_error(exc) from exc
+    if response.status_code == 401:
+        raise AuthenticationError(
+            "the server rejected these credentials",
+            challenges=tuple(response.headers.get_list("www-authenticate")),
+        )
+    problem = problem_of(response.status_code, response.headers, response.content)
+    if problem is not None:
+        raise problem
+    parsed = as_json_object(loads(response.content), "the session endpoint")
+    # `response.url` is the post-redirect URL, which is what relative endpoint
+    # URLs in the document must resolve against.
+    return Session.from_wire(parsed, base_url=str(response.url))
+
+
+def _primary_account(session: Session) -> Id | None:
+    """The account to use when the caller names none.
+
+    Prefers the core capability's primary account, which every server sets, and
+    otherwise leaves it unset so the batch layer can raise a precise error rather
+    than guessing.
+    """
+    from jmap.capabilities.core import CORE_URN
+
+    return session.primary_account_for(CORE_URN)

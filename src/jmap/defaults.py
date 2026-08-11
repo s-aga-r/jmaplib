@@ -1,0 +1,23 @@
+"""The capability registry a client gets when the caller supplies none.
+
+Kept separate from :mod:`jmap.capabilities.registry` so that constructing a
+registry stays a pure act of registration, and separate from the client so that
+adding a capability does not mean touching either shell.
+
+A fresh :class:`~jmap.capabilities.registry.Registry` is built per call rather
+than shared as a module-level singleton: a registry is mutable, and an
+application that registers a private capability on it should not be silently
+changing what every other client in the process can speak.
+"""
+
+from __future__ import annotations
+
+from jmap.capabilities.core import CORE
+from jmap.capabilities.registry import Registry
+
+
+def default_registry() -> Registry:
+    """Every capability this build of the library knows about."""
+    registry = Registry()
+    registry.register(CORE)
+    return registry

@@ -66,12 +66,82 @@ Pre-alpha, under active development. Nothing is released yet.
 | Milestone | Scope | State |
 |---|---|---|
 | M1 | I/O-free protocol kernel | **done** |
-| M2 | Capability registry, auth, transports, sync + async shells | in progress |
-| M3 | Mail (RFC 8621), blobs → **0.1.0** | planned |
+| M2 | Capability registry, auth, transports, sync + async shells | **done** |
+| M3 | Mail (RFC 8621), blobs → **0.1.0** | next |
 
-M2 progress: capability model and registry, per-account resolution, the auth
-layer, response routing and the retry policy are in; the HTTP transports, twin
-client shells and batch builder are next.
+## Usage
+
+```python
+import httpx
+from jmap.auth import BasicAuth
+from jmap.client import JMAPClient
+
+with JMAPClient.connect(
+    "https://mail.example.com/.well-known/jmap",       # redirects are followed
+    auth=BasicAuth("alice@example.com", "app-password"),
+) as client:
+    client.echo(hello="world")
+```
+
+A JMAP request *is* a batch, so batching is the normal path rather than an
+optimisation. Calls queued in one block travel in one request, which is what
+makes back-references natural:
+
+```python
+with client.batch() as batch:
+    query = batch.add("Email/query", {"filter": {"inMailbox": inbox}})
+    emails = batch.add("Email/get", {"ids": query.ref_ids()})   # resolved server-side
+
+print(emails.result["list"])        # readable once the block exits
+```
+
+The async client is a mirror — same names, same behaviour, `await` in front:
+
+```python
+from jmap.aio import AsyncJMAPClient
+
+async with await AsyncJMAPClient.connect(url, auth=auth) as client:
+    async with client.batch() as batch:
+        query = batch.add("Email/query", {})
+        emails = batch.add("Email/get", {"ids": query.ref_ids()})
+```
+
+Everything either client decides — what `using` needs, how to split a batch,
+whether a failure may be retried — is computed by the same I/O-free kernel, so
+the two cannot disagree about protocol behaviour.
+
+### Failures are caught locally where possible
+
+These all raise before anything reaches the wire:
+
+| Situation | Error |
+|---|---|
+| Method no advertised capability provides | `UnsupportedMethodError` |
+| Mutation aimed at a read-only account | `ReadOnlyAccountError` |
+| No `accountId`, and no `primaryAccounts` entry to resolve one | `NoAccountError` |
+| Requesting a property the server never returns | `CapabilityFieldError` |
+| `/set` larger than `maxObjectsInSet` | `CapabilityFieldError` |
+| Reference chain that cannot fit `maxCallsInRequest` | `BatchTooLargeError` |
+
+An oversized `/set` raises rather than being split, because splitting it would
+break the single `ifInState` that makes it atomic.
+
+## Testing against the library
+
+The fake server ships with the package, so downstream tests need no network:
+
+```python
+from jmap.testing import FakeJMAPServer, ServerQuirks
+
+server = FakeJMAPServer(quirks=ServerQuirks(unknown_using_is_not_request=True))
+server.respond("Email/get", {"list": [{"id": "m1"}], "state": "s"})
+client = JMAPClient.connect(url, auth=auth, http=httpx.Client(**server.client_kwargs()))
+```
+
+It resolves back-references with the library's *own* pointer evaluator, so the
+test exercises what the client will really do, and `ServerQuirks` reproduces real
+deviations — Stalwart answering an unknown `using` URN with a batch-destroying
+`notRequest`, capabilities appearing only in `accountCapabilities`.
 
 ## Retry safety
 
