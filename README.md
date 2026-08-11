@@ -69,8 +69,30 @@ Pre-alpha, under active development. Nothing is released yet.
 | M2 | Capability registry, auth, transports, sync + async shells | in progress |
 | M3 | Mail (RFC 8621), blobs → **0.1.0** | planned |
 
-M2 progress: capability spec model, registry, per-account resolution and the auth
-layer are in; transports, the twin client shells and the batch builder are next.
+M2 progress: capability model and registry, per-account resolution, the auth
+layer, response routing and the retry policy are in; the HTTP transports, twin
+client shells and batch builder are next.
+
+## Retry safety
+
+JMAP has no idempotency key, so "retry on failure" is not a policy — it is a way
+to create duplicate drafts and double-send mail. A POST carrying `Email/set` that
+timed out may have fully applied, and the client cannot tell.
+
+So failures are classified by whether the request *provably never reached
+application*:
+
+| Situation | Verdict |
+|---|---|
+| Connection never established | safe — nothing was sent |
+| 429, 503, request-level `…:error:limit` | safe — rejected whole, no method ran |
+| Timeout after the bytes went out | only if the batch cannot change state… |
+| 5xx | …or every mutation carried `ifInState` |
+| 4xx | never — understood and refused |
+
+`ifInState` is what makes the middle rows safe: RFC 8620 §5.3 makes a guarded
+`/set` fail with `stateMismatch` if anything changed, so a retry of an
+already-applied request is rejected rather than duplicated.
 
 ## Authentication
 
