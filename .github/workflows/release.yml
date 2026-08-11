@@ -44,8 +44,10 @@ jobs:
       name: pypi
       url: https://pypi.org/p/jmaplib
     permissions:
+      # id-token alone is what signs and authorises. `attestations: write` was
+      # only ever for the GitHub attestation store, which this repository cannot
+      # use while it is private.
       id-token: write
-      attestations: write
       contents: read
     steps:
       - uses: actions/download-artifact@v4
@@ -53,11 +55,14 @@ jobs:
           name: dist
           path: dist/
 
-      - name: attest provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: "dist/*"
-
+      # No separate actions/attest-build-provenance step. It was doing the job
+      # twice and only one of the two can work here: that action writes to
+      # GitHub's own attestation store, which is unavailable on a user-owned
+      # *private* repository and fails the whole release with "please make this
+      # repository public". The publish action below already produces the PEP 740
+      # attestations PyPI actually records, signing each distribution with
+      # Sigstore under the same OIDC identity that authorises the upload - so
+      # provenance is not lost by dropping the step, only duplication is.
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           attestations: true
