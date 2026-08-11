@@ -438,7 +438,14 @@ but not the rule — so the same mistake is easy to make twice:
 
 ```python
 from jmap.models.mail.create import validate_email_create
-validate_email_create({"mailboxIds": {"mb1": True}, "textBody": [...], ...})
+
+validate_email_create(
+    {
+        "mailboxIds": {"mb1": True},
+        "textBody": [{"partId": "t", "type": "text/plain"}],
+        "bodyValues": {"t": {"value": "hello"}},
+    }
+)
 ```
 
 It catches server-assigned properties (`id`, `blobId`, `threadId`, `size`), the
@@ -484,6 +491,27 @@ plain `Email/get` and, on a server that lacks it, fail the *entire* request.
 
 `Identity` therefore lives under `:submission`, not `:mail`: it exists to name
 what you may send *from*.
+
+## Documentation
+
+Task-oriented guides live in [`docs/`](docs/index.md):
+
+| | |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install, connect, first request, async. |
+| [Capabilities](docs/capabilities.md) | What the server advertises decides what you can call. |
+| [Batching and references](docs/batching.md) | One request, many calls, chaining results. |
+| [Mail](docs/mail.md) | Mailboxes, searching, reading, composing, sending. |
+| [Blobs](docs/blobs.md) | Binary data, digests, lookup, copying. |
+| [Staying in sync](docs/sync.md) | Change streams, query views, state cursors. |
+| [Push](docs/push.md) | Event source, subscriptions, VAPID, WebSocket. |
+| [Authentication](docs/auth.md) | Presenting credentials, and acquiring them. |
+| [Errors](docs/errors.md) | Four failure levels, and which are safe to retry. |
+| [Other capabilities](docs/extensions.md) | Quota, Sieve, contacts, calendars, files, sharing, MDN, S/MIME. |
+| [Testing your own code](docs/testing.md) | The fake server that ships with the package. |
+
+The rest of this README is design rationale: why the library is shaped the way
+it is. If you want to *use* it, start with the guides.
 
 ## Usage
 
