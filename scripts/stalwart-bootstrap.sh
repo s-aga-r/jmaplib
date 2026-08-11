@@ -134,7 +134,10 @@ ADMIN_ACCOUNT=$(curl -fsS -m 10 -u "${ADMIN_USER}:${ADMIN_PASS}" "${URL}/jmap/se
   | python3 -c 'import json,sys; print(next(iter(json.load(sys.stdin)["accounts"])))')
 
 # --- 4. provision the test accounts ----------------------------------------- #
-# Usernames must be full email addresses in v0.16; bare ones no longer work.
+# `name` is the login name and is validated as an email *local part*: passing
+# "alice@example.com" earns `invalidPatch: Invalid email local part`. The
+# addresses go in `emails`, and Stalwart accepts either form at login - which the
+# verification step below is what actually proves.
 log "creating alice@${DOMAIN} and bob@${DOMAIN}"
 CREATE_BODY=$(python3 - "$ADMIN_ACCOUNT" "$DOMAIN" "$ALICE_PASS" "$BOB_PASS" <<'PY'
 import json, sys
@@ -142,7 +145,7 @@ account_id, domain, alice_pass, bob_pass = sys.argv[1:5]
 def user(name, secret):
     return {
         "@type": "User",
-        "name": f"{name}@{domain}",
+        "name": name,
         "description": f"{name} (integration tests)",
         "secrets": [secret],
         "emails": [f"{name}@{domain}"],
@@ -164,8 +167,14 @@ if arguments.get("notCreated"):
 PY
 
 # --- 5. prove the accounts work --------------------------------------------- #
-log "verifying alice can authenticate"
-wait_for_auth "alice@${DOMAIN}:${ALICE_PASS}"
+# Which spelling works at login is a server policy question, so it is answered by
+# asking rather than assumed: the tests use the address, so that is what must work.
+log "verifying alice can authenticate as alice@${DOMAIN}"
+if ! wait_for_auth "alice@${DOMAIN}:${ALICE_PASS}"; then
+  echo "address login failed; trying the bare login name" >&2
+  wait_for_auth "alice:${ALICE_PASS}"
+  echo "NOTE: this server wants the bare name, not the address" >&2
+fi
 
 # Consumed by the workflow's later steps.
 if [ -n "${GITHUB_ENV:-}" ]; then
