@@ -25,8 +25,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from jmap.auth import BasicAuth
-from jmap.client import JMAPClient
 from jmap.core.errors import MethodError, RequestError
 from jmap.models.responses import QueryChangesResponse
 from jmap.sync import (
@@ -37,9 +35,12 @@ from jmap.sync import (
     ResyncRequiredError,
     UncacheableQueryError,
 )
+from tests.integration.conftest import connect
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from jmap.client import JMAPClient
 
 pytestmark = pytest.mark.integration
 
@@ -60,7 +61,7 @@ def requires_method(client: JMAPClient, method: str) -> None:
 
 @pytest.fixture(scope="module")
 def alice() -> Iterator[JMAPClient]:
-    with JMAPClient.connect(JMAP_URL, auth=BasicAuth(ALICE, ALICE_PASSWORD)) as client:
+    with connect(ALICE, ALICE_PASSWORD) as client:
         yield client
 
 

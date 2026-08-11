@@ -151,8 +151,37 @@ class TestCapabilityResolution:
     def test_accounts_with_capability(self, session):
         assert session.accounts_with("urn:x:calendars") == (Id("b"),)
 
-    def test_two_accounts_have_no_sole_account(self, session):
-        assert session.sole_account() is None
+    def test_accounts_disagreeing_about_the_primary_imply_nothing(self, session):
+        # This fixture puts mail's primary on "a" and has a second account "b"
+        # that nothing points at - but only one URN is mapped, so there is a
+        # unanimous answer. Break the unanimity and there is none.
+        divided = Session.from_wire(
+            {
+                "accounts": {"a": {"name": "a"}, "b": {"name": "b"}},
+                "primaryAccounts": {"urn:x:mail": "a", "urn:x:calendars": "b"},
+                "username": "alice@example.com",
+                "state": "s1",
+            }
+        )
+        assert divided.implied_account() is None
+
+    def test_a_unanimous_primary_settles_it(self):
+        # The real-server case: a personal account alongside a shared team one.
+        # Every primaryAccounts entry names the personal account, so the server
+        # has already said which is the user's own - nothing is being guessed,
+        # and nothing points at the shared account at all.
+        session = Session.from_wire(
+            {
+                "accounts": {
+                    "bw": {"name": "a1@example.com", "isPersonal": True},
+                    "bh": {"name": "team@example.com", "isPersonal": False},
+                },
+                "primaryAccounts": {"urn:x:mail": "bw", "urn:x:contacts": "bw"},
+                "username": "a1@example.com",
+                "state": "s1",
+            }
+        )
+        assert session.implied_account() == Id("bw")
 
     def test_one_account_is_its_own_answer(self):
         # Blobs are account-scoped but capability-less, so primaryAccounts can
@@ -165,10 +194,23 @@ class TestCapabilityResolution:
                 "state": "s1",
             }
         )
-        assert session.sole_account() == Id("a")
+        assert session.implied_account() == Id("a")
+
+    def test_a_primary_naming_an_unlisted_account_is_not_trusted(self):
+        # The id would be unusable, so a malformed session gets no answer rather
+        # than one that fails later at the upload endpoint.
+        session = Session.from_wire(
+            {
+                "accounts": {"a": {"name": "a"}, "b": {"name": "b"}},
+                "primaryAccounts": {"urn:x:mail": "ghost"},
+                "username": "alice@example.com",
+                "state": "s1",
+            }
+        )
+        assert session.implied_account() is None
 
     def test_no_accounts_at_all_answers_none(self):
-        assert Session.from_wire({"accounts": {}}).sole_account() is None
+        assert Session.from_wire({"accounts": {}}).implied_account() is None
 
     def test_read_only_flag(self, session):
         assert session.is_read_only(Id("b"))

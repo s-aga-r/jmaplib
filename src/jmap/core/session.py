@@ -223,24 +223,42 @@ class Session:
         """
         return self.primary_accounts.get(urn)
 
-    def sole_account(self) -> Id | None:
-        """The account, when the session has exactly one.
+    def implied_account(self) -> Id | None:
+        """The account this session implies when the caller names none.
 
         Blob upload and download are account-scoped but belong to no capability,
-        so ``primaryAccounts`` has nothing to say about them: RFC 8620 §2 keys
-        that map by capability URN, and the core capability has no data to be
-        primary *for*. Real servers list nothing there for it - Stalwart does not
-        - which leaves an ordinary single-account session unable to name its own
-        account, and every blob upload failing on a session where no account was
-        ever ambiguous.
+        so ``primaryAccounts`` has no entry to look up: RFC 8620 §2 keys that map
+        by capability URN, and the core capability has no data to be primary
+        *for*. Real servers list nothing there for it. That leaves "whose blobs?"
+        with no direct answer, and refusing to answer it at all broke every
+        upload against servers where nothing was ambiguous in the first place.
 
-        Answering here is not the guess :meth:`primary_account_for` refuses. That
-        one declines to pick a favourite among several; this one reports the only
-        candidate there is, and still answers ``None`` the moment there are two.
+        Two situations are unambiguous, and both are checked here:
+
+        * **Every ``primaryAccounts`` entry naming the same account.** This is
+          not a guess. It is the server stating, for every kind of data it holds,
+          that this is the user's main account - so a personal account alongside
+          a shared team one resolves cleanly, because nothing points at the
+          shared one. A session with mail in one account and calendars in another
+          is *not* unanimous and gets no answer.
+        * **A session with exactly one account.** Nothing to choose between. This
+          is the case a freshly provisioned server presents, where
+          ``primaryAccounts`` may be empty entirely.
+
+        Anything else is ``None``, because picking a favourite among several is
+        how ``Email/*`` ends up aimed at a calendar-only shared account - which
+        is what :meth:`primary_account_for` refuses to do, for the same reason.
         """
-        if len(self.accounts) != 1:
-            return None
-        return next(iter(self.accounts))
+        primaries = set(self.primary_accounts.values())
+        if len(primaries) == 1:
+            unanimous = next(iter(primaries))
+            # A server naming an account it did not also list is malformed; the
+            # id would be unusable, so fall through rather than pass it on.
+            if unanimous in self.accounts:
+                return unanimous
+        if len(self.accounts) == 1:
+            return next(iter(self.accounts))
+        return None
 
     def accounts_with(self, urn: str) -> tuple[Id, ...]:
         """Every account whose ``accountCapabilities`` includes ``urn``."""

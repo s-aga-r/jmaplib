@@ -21,15 +21,16 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from jmap.auth import BasicAuth
 from jmap.capabilities.blob import BLOB_URN, BlobCapability
 from jmap.capabilities.sieve import SIEVE_URN, SieveAccountCapability
-from jmap.client import JMAPClient
 from jmap.core.errors import MethodError
 from jmap.models.blob import BlobUpload, DataSource
+from tests.integration.conftest import connect
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from jmap.client import JMAPClient
 
 pytestmark = pytest.mark.integration
 
@@ -52,7 +53,7 @@ def requires_method(client: JMAPClient, method: str) -> None:
 
 @pytest.fixture(scope="module")
 def alice() -> Iterator[JMAPClient]:
-    with JMAPClient.connect(JMAP_URL, auth=BasicAuth(ALICE, ALICE_PASSWORD)) as client:
+    with connect(ALICE, ALICE_PASSWORD) as client:
         yield client
 
 

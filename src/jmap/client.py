@@ -281,7 +281,7 @@ class JMAPClient:
         Blobs move over plain HTTP rather than as method calls, so this is not
         batchable and takes no ``using``.
         """
-        account = account_id or self.default_account or self.session.sole_account()
+        account = account_id or self.default_account or self.session.implied_account()
         if account is None:
             raise NoAccountError("upload", CORE_URN, reason=NO_BLOB_ACCOUNT)
         check_upload_size(len(content), self.capabilities.limits)
@@ -308,7 +308,7 @@ class JMAPClient:
         ``name`` and ``content_type`` only shape the response headers; the blob
         is addressed by ``blob_id`` alone.
         """
-        account = account_id or self.default_account or self.session.sole_account()
+        account = account_id or self.default_account or self.session.implied_account()
         if account is None:
             raise NoAccountError("download", CORE_URN, reason=NO_BLOB_ACCOUNT)
         response = self._http.get(

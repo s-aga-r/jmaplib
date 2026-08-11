@@ -46,9 +46,11 @@ def request_headers(*, accept_language: str | None = None) -> dict[str, str]:
 #: library: `primaryAccounts` cannot answer for blobs at all, so pointing at it
 #: would send the reader looking for a session field that is correctly absent.
 NO_BLOB_ACCOUNT: Final = (
-    "and blobs have no primaryAccounts entry to fall back on (RFC 8620 §2 keys "
-    "that map by capability, and blobs belong to none) - so pass account_id, or "
-    "set a default on the client"
+    "and this session implies no single account: blobs have no primaryAccounts "
+    "entry to look up (RFC 8620 §2 keys that map by capability, and blobs belong "
+    "to none), the session holds more than one account, and its primaryAccounts "
+    "entries do not all name the same one - so pass account_id, or set a default "
+    "on the client"
 )
 
 

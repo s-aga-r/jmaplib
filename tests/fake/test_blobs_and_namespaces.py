@@ -137,6 +137,17 @@ class TestBlobTransfer:
             assert uploaded.account_id == "a"
             assert client.download(str(uploaded.blob_id)) == b"x"
 
+    def test_a_shared_account_alongside_a_personal_one_is_no_obstacle(self):
+        # The real-server shape: the user's own account plus a shared team one.
+        # Every primaryAccounts entry names the personal account, so the server
+        # has already said which is theirs and nothing needs guessing.
+        fake = server(
+            accounts=TWO_ACCOUNTS,
+            primary_accounts={CORE_URN: "a", MAIL_URN: "a", SUBMISSION_URN: "a"},
+        )
+        with connect(fake) as client:
+            assert client.upload(b"x").account_id == "a"
+
     def test_upload_without_a_resolvable_account(self):
         fake = server(primary_accounts={}, accounts=TWO_ACCOUNTS)
         with connect(fake) as client, pytest.raises(NoAccountError, match="upload"):

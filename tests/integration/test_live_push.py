@@ -27,20 +27,21 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from jmap.auth import BasicAuth
 from jmap.capabilities.push import (
     VAPID_URN,
     WEBSOCKET_URN,
     VapidCapability,
     WebSocketCapability,
 )
-from jmap.client import JMAPClient
 from jmap.models.push import PushSubscription, StateChange
 from jmap.push import EventSourceClient, Ping, new_subscription
 from jmap.push.eventsource import MIN_PORTABLE_PING
+from tests.integration.conftest import connect
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from jmap.client import JMAPClient
 
 pytestmark = pytest.mark.integration
 
@@ -85,7 +86,7 @@ def requires_event_source(client: JMAPClient) -> None:
 
 @pytest.fixture(scope="module")
 def alice() -> Iterator[JMAPClient]:
-    with JMAPClient.connect(JMAP_URL, auth=BasicAuth(ALICE, ALICE_PASSWORD)) as client:
+    with connect(ALICE, ALICE_PASSWORD) as client:
         yield client
 
 

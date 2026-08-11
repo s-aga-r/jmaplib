@@ -22,13 +22,14 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from jmap.auth import BasicAuth
-from jmap.client import JMAPClient
 from jmap.core.ids import CreationRef
 from jmap.models.mail.headers import text
+from tests.integration.conftest import connect
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from jmap.client import JMAPClient
 
 pytestmark = pytest.mark.integration
 
@@ -59,13 +60,13 @@ def requires_method(client: JMAPClient, method: str) -> None:
 
 @pytest.fixture(scope="module")
 def alice() -> Iterator[JMAPClient]:
-    with JMAPClient.connect(JMAP_URL, auth=BasicAuth(ALICE, ALICE_PASSWORD)) as client:
+    with connect(ALICE, ALICE_PASSWORD) as client:
         yield client
 
 
 @pytest.fixture(scope="module")
 def bob() -> Iterator[JMAPClient]:
-    with JMAPClient.connect(JMAP_URL, auth=BasicAuth(BOB, BOB_PASSWORD)) as client:
+    with connect(BOB, BOB_PASSWORD) as client:
         yield client
 
 

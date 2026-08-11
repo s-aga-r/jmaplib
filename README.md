@@ -673,6 +673,19 @@ the redirect and the survival of the `Authorization` header across it are
 exercised for real. Everything the server does not implement skips with a reason
 naming the method, so a partial server still produces a useful run.
 
+**A TLS error from an `http://` URL is not a contradiction.** Only the session
+document is fetched from the URL you supply; every call after that goes to the
+`apiUrl` the *server* advertises, and a server that does not know its own public
+URL will advertise `https://<hostname>` regardless of how you reached it. For
+Stalwart that means `STALWART_PUBLIC_URL` is unset. Two env vars handle a
+certificate no public CA vouches for, which is the normal case for a self-hosted
+server:
+
+| | |
+|---|---|
+| `JMAP_TEST_CA=/path/to/cert.pem` | Trust this certificate. Verification still happens, so a wrong host or an expired certificate still fails. Prefer this. |
+| `JMAP_TEST_INSECURE=1` | Verify nothing. Also disables hostname checking, which is what catches a server advertising `https://localhost` when it means something else. |
+
 To raise a throwaway Stalwart instead, the recipe CI uses:
 
 ```console
