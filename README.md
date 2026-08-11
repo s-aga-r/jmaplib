@@ -39,10 +39,10 @@ from jmap.capabilities.core import CORE
 registry = Registry()
 registry.register(CORE)
 
-active = registry.resolve(session, account_id)   # per account, not per connection
-active.supports("Email/get")                     # method-granular, not capability-granular
-active.using_for(["Email/get"])                  # derived, then intersected with reality
-active.unknown_urns                              # advertised but unrecognised — surfaced, never dropped
+active = registry.resolve(session, account_id)  # per account, not per connection
+active.supports("Email/get")  # method-granular, not capability-granular
+active.using_for(["Email/get"])  # derived, then intersected with reality
+active.unknown_urns  # advertised but unrecognised — surfaced, never dropped
 ```
 
 Four rules fall out of that, each of which exists because a real server
@@ -69,8 +69,36 @@ Pre-alpha, under active development. Nothing is released yet.
 | M2 | Capability registry, auth, transports, sync + async shells | in progress |
 | M3 | Mail (RFC 8621), blobs → **0.1.0** | planned |
 
-M2 progress: capability spec model, registry and per-account resolution are in;
-auth, transports, the twin client shells and the batch builder are next.
+M2 progress: capability spec model, registry, per-account resolution and the auth
+layer are in; transports, the twin client shells and the batch builder are next.
+
+## Authentication
+
+RFC 8620 deliberately defines no auth scheme — the Session resource is simply an
+authenticated endpoint — so the library presents credentials and reads the
+`WWW-Authenticate` challenge that comes back.
+
+```python
+from jmap.auth import BasicAuth, BearerAuth, CallableAuth, OAuth2Auth, OAuth2Token
+
+BasicAuth("alice@example.com", "app-password")   # self-hosted, Fastmail app passwords
+BearerAuth("api-token")                          # API tokens, static access tokens
+CallableAuth(lambda: sign_request())             # escape hatch for anything else
+OAuth2Auth(OAuth2Token("access", refresh_token="r"), refresh=renew, store=my_store)
+```
+
+Two behaviours here are correctness rather than preference:
+
+- **Basic and Bearer never retry a 401.** The credential would be byte-identical
+  the second time, so a retry cannot succeed — it can only look like brute force,
+  and Stalwart fail2bans repeated failures.
+- **Refresh is single-flight and persists before it discards.** Fastmail rotates
+  the refresh token on every use and revokes the whole grant if an old one is
+  replayed, so concurrent 401s must produce exactly one refresh, and the new
+  token must reach your `TokenStore` before the old one is dropped.
+
+Interactive OAuth *acquisition* (PKCE, device flow, RFC 9728/8414 discovery)
+lands after 0.1.0; for now you bring a token.
 
 Specs tracked: RFC 8620, 8621, 8887, 9007, 9219, 9404, 9425, 9553, 9555, 9610,
 9661, 9670, 9749, plus `draft-ietf-jmap-calendars-27` and
