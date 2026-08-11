@@ -22,11 +22,12 @@ the client's job and this layer does no I/O.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from jmap.core.errors import MethodError, ServerPartialFailError
 from jmap.core.ids import Id
 from jmap.core.invocation import ParsedInvocation
+from jmap.core.narrow import as_list, as_object, is_list, is_object
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -67,22 +68,19 @@ class Response:
         # `x or default` would be wrong here: an empty value of the *wrong* type
         # is falsy, so `{}` for methodResponses would silently become a valid
         # empty list instead of the malformed response it is.
-        raw_responses = data.get("methodResponses")
+        raw_responses: Any = data.get("methodResponses")
         if raw_responses is None:
             raw_responses = []
-        if not isinstance(raw_responses, list):
+        if not is_list(raw_responses):
             raise MalformedResponseError("methodResponses must be an array")
 
-        created = data.get("createdIds")
+        created: Any = data.get("createdIds")
         if created is None:
             created = {}
-        if not isinstance(created, dict):
+        if not is_object(created):
             raise MalformedResponseError("createdIds must be an object")
-        # Bound to locals so the casts survive formatting. mypy narrows `created`
-        # on its own and calls the cast redundant; pyright does not and needs it,
-        # so the ignore is what lets both checkers pass.
-        triples = cast("list[list[Any]]", raw_responses)
-        pairs = cast("dict[Any, Any]", created)  # type: ignore[redundant-cast]
+        triples = as_list(raw_responses)
+        pairs = as_object(created)
         return cls(
             [ParsedInvocation.from_wire(triple) for triple in triples],
             created_ids={str(key): Id(str(value)) for key, value in pairs.items()},

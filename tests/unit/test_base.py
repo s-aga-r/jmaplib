@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Any
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from jmap.models.base import (
     UNSET,
@@ -18,6 +18,7 @@ from jmap.models.base import (
     UnsetType,
     omit_unset,
 )
+from jmap.models.responses import GetResponse
 
 
 class SampleMailbox(JMAPModel):
@@ -321,3 +322,31 @@ class TestOmitUnset:
 
     def test_all_unset(self):
         assert omit_unset(a=UNSET, b=UNSET) == {}
+
+
+class TestJMAPObjectAsAPydanticField:
+    """The fallback model has to work inside a typed response.
+
+    ``GetResponse[JMAPObject]`` is exactly the shape an advertised-but-unmodelled
+    capability produces, so without a pydantic schema the fallback would fail at
+    the one moment it exists for.
+    """
+
+    def test_a_mapping_is_wrapped(self):
+        response = GetResponse[JMAPObject].model_validate(
+            {"list": [{"id": "v1", "someProp": 1, "header:X": "raw"}]}
+        )
+        item = response.items[0]
+        assert isinstance(item, JMAPObject)
+        assert item.some_prop == 1
+        assert item["header:X"] == "raw"
+
+    def test_an_existing_instance_passes_through_unchanged(self):
+        existing = JMAPObject({"id": "v1"})
+        response = GetResponse[JMAPObject].model_validate({"list": [existing]})
+        assert response.items[0] is existing
+
+    @pytest.mark.parametrize("value", ["text", 5, None, [1, 2]])
+    def test_a_non_object_is_rejected(self, value):
+        with pytest.raises(ValidationError):
+            GetResponse[JMAPObject].model_validate({"list": [value]})

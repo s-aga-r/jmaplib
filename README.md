@@ -70,9 +70,28 @@ Pre-alpha, under active development. Nothing is released yet.
 | M3 | Mail (RFC 8621), blobs → **0.1.0** | in progress |
 
 M3 progress: RFC 8621 data models, the three mail capabilities (30 methods),
-typed response shapes, composed entity builders, header queries and `Email/set`
-creation constraints are in; `/get` auto-chunking, blob upload/download and the
-client-level namespaces are next.
+typed response shapes, composed entity builders, header queries, `Email/set`
+creation constraints and `/get` auto-chunking are in; blob upload/download and
+the client-level namespaces are next.
+
+### `/get` chunks itself; `/set` refuses to
+
+`maxObjectsInGet` caps how many ids one call may name, and a client holding a few
+thousand ids from a `/query` exceeds it routinely. `/get` is safe to split — it
+changes nothing — so it happens automatically and you still get one handle:
+
+```python
+emails = batch.add("Email/get", {"ids": three_thousand_ids})  # → 30 calls
+emails.result.items  # merged back
+```
+
+The one thing that doesn't recombine cleanly is the `state` string. Each chunk
+reports the state it was answered from, and if the data changed mid-read the
+merged result would be a mix of two points in time — undetectable afterwards. So
+mismatched states raise `TornReadError` rather than handing back a torn read.
+
+`/set` is **not** chunked, for the reason given above: splitting it would break
+the single `ifInState` that makes it atomic. It raises instead.
 
 ### Header queries own both halves of the round trip
 
@@ -85,12 +104,12 @@ and you silently get `None`.
 ```python
 from jmap.models.mail.headers import text, addresses, raw
 
-subject = text("Subject")            # header:Subject:asText
-subject.property_name                # what to request
-subject.read(email)                  # …and the key it comes back under
+subject = text("Subject")  # header:Subject:asText
+subject.property_name  # what to request
+subject.read(email)  # …and the key it comes back under
 
-raw("Received", all=True)            # header:Received:all — every hop
-addresses("To")                      # header:To:asAddresses
+raw("Received", all=True)  # header:Received:all — every hop
+addresses("To")  # header:To:asAddresses
 ```
 
 Without `:all` you get the **last** occurrence, not the first and not a list.

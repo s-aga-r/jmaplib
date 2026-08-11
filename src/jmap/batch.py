@@ -24,10 +24,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from jmap.capabilities.parsing import parser_for
 from jmap.capabilities.registry import UnsupportedMethodError
 from jmap.capabilities.spec import MethodKind
+from jmap.chunking import ChunkedHandle, chunk_get_call
 from jmap.core.errors import CapabilityFieldError, JMAPError
 from jmap.core.invocation import Handle, MethodCall
+from jmap.core.narrow import as_list, is_list
 from jmap.core.request import plan_requests
 from jmap.core.response import dispatch
 
@@ -135,9 +138,50 @@ class Batch:
 
         self._counter += 1
         call_id = f"c{self._counter}"
-        handle: Handle[Any] = Handle(call_id, MethodCall(name, args, parse=spec.parse))
+        # The parser is chosen from the method's shape and the type it acts on,
+        # so `Email/get` really does yield a GetResponse[Email] rather than a dict.
+        parse = parser_for(spec, self._capabilities.data_type(spec.type_name))
+        call = MethodCall(name, args, parse=parse)
+
+        chunks = self._split_if_oversized(spec, call)
+        if chunks is not None:
+            handles = [
+                Handle(self._next_call_id(), chunk) if index else Handle(call_id, chunk)
+                for index, chunk in enumerate(chunks)
+            ]
+            self._handles.extend(handles)
+            chunked: Handle[Any] = ChunkedHandle(handles)
+            return chunked
+
+        handle: Handle[Any] = Handle(call_id, call)
         self._handles.append(handle)
         return handle
+
+    def _next_call_id(self) -> str:
+        self._counter += 1
+        return f"c{self._counter}"
+
+    def _split_if_oversized(
+        self, spec: MethodSpec, call: MethodCall[Any]
+    ) -> list[MethodCall[Any]] | None:
+        """Split a ``/get`` naming more ids than the server will accept.
+
+        Only ``/get`` is chunked. ``/set`` is refused instead, because splitting
+        it would break the single ``ifInState`` that makes it atomic - see
+        :meth:`_check_set_sizes`.
+        """
+        if spec.kind is not MethodKind.GET:
+            return None
+        raw_ids: Any = call.arguments.get("ids")
+        # A ResultRef has no length here, and `None` means "every record" - in
+        # both cases the count is the server's problem, not ours.
+        if not is_list(raw_ids):
+            return None
+        ids = as_list(raw_ids)
+        limit = self._capabilities.limits.max_objects_in_get
+        if len(ids) <= limit:
+            return None
+        return chunk_get_call(call, ids, limit)
 
     # -- local gates -------------------------------------------------------- #
     def _require_method(self, name: str) -> MethodSpec:

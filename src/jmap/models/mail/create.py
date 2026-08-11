@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from jmap.core.narrow import as_list_of, as_object, is_object
 from jmap.core.patch import InvalidKeywordError, parse_keyword
 
 if TYPE_CHECKING:
@@ -98,13 +99,13 @@ def _check_mailbox_ids(email: Mapping[str, Any]) -> None:
             "`mailboxIds` is required on create: an email must belong to at least one mailbox",
             ["mailboxIds"],
         )
-    mailbox_ids = email["mailboxIds"]
-    if not isinstance(mailbox_ids, dict) or not mailbox_ids:
+    mailbox_ids: Any = email["mailboxIds"]
+    if not is_object(mailbox_ids) or not mailbox_ids:
         raise InvalidEmailCreateError(
             "`mailboxIds` must be a non-empty map of mailbox id to true",
             ["mailboxIds"],
         )
-    for key, value in _as_map(mailbox_ids).items():
+    for key, value in as_object(mailbox_ids).items():
         if value is not True:
             raise InvalidEmailCreateError(
                 f"`mailboxIds` values must be true, not {value!r}", [f"mailboxIds/{key}"]
@@ -112,12 +113,12 @@ def _check_mailbox_ids(email: Mapping[str, Any]) -> None:
 
 
 def _check_keywords(email: Mapping[str, Any]) -> None:
-    keywords = email.get("keywords")
+    keywords: Any = email.get("keywords")
     if keywords is None:
         return
-    if not isinstance(keywords, dict):
+    if not is_object(keywords):
         raise InvalidEmailCreateError("`keywords` must be a map of keyword to true", ["keywords"])
-    for key, value in _as_map(keywords).items():
+    for key, value in as_object(keywords).items():
         try:
             # parse_keyword enforces the RFC 8621 §4.1.1 charset and lower-casing.
             parse_keyword(str(key))
@@ -131,31 +132,15 @@ def _check_keywords(email: Mapping[str, Any]) -> None:
             )
 
 
-def _as_map(value: Any) -> Mapping[str, Any]:
-    """A value already proven to be a dict, typed for iteration."""
-    return cast("Mapping[str, Any]", value)
-
-
-def _as_parts(value: Any) -> list[Any]:
-    """A body property as a list, whether it holds one part or many.
-
-    ``bodyStructure`` is a single part; ``textBody`` and friends are lists.
-    """
-    # mypy narrows the isinstance on its own and calls the cast redundant;
-    # pyright does not and reports list[Unknown]. The ignore satisfies both, and
-    # keeping it here means it appears once rather than at every call site.
-    return cast("list[Any]", value) if isinstance(value, list) else [value]  # type: ignore[redundant-cast]
-
-
 def _as_part(value: Any, path: str) -> Mapping[str, Any]:
     """One body part, or a rejection naming where the bad value sits.
 
     Rejected rather than skipped: a non-object part would sail past validation
     and be refused by the server instead.
     """
-    if not isinstance(value, dict):
+    if not is_object(value):
         raise InvalidEmailCreateError("each body part must be an object", [path])
-    return cast("Mapping[str, Any]", value)
+    return as_object(value)
 
 
 def _check_body_parts(email: Mapping[str, Any]) -> None:
@@ -170,7 +155,7 @@ def _check_body_parts(email: Mapping[str, Any]) -> None:
         if value is None:
             continue
         is_list = isinstance(value, list)
-        for index, part in enumerate(_as_parts(value)):
+        for index, part in enumerate(as_list_of(value)):
             path = f"{key}/{index}" if is_list else key
             _check_one_body_part(_as_part(part, path), path)
 
@@ -204,11 +189,11 @@ def _check_one_body_part(part: Mapping[str, Any], path: str) -> None:
 def _check_body_values(email: Mapping[str, Any]) -> None:
     """Every ``partId`` used must have content in ``bodyValues``, and vice versa."""
     raw_values: Any = email.get("bodyValues") or {}
-    if not isinstance(raw_values, dict):
+    if not is_object(raw_values):
         raise InvalidEmailCreateError(
             "`bodyValues` must be a map of partId to value", ["bodyValues"]
         )
-    body_values = _as_map(raw_values)
+    body_values = as_object(raw_values)
 
     referenced = set(_iter_part_ids(email))
     missing = sorted(referenced - set(body_values))
@@ -230,7 +215,7 @@ def _iter_part_ids(email: Mapping[str, Any]) -> Iterable[str]:
         value: Any = email.get(key)
         if value is None:
             continue
-        for part in _as_parts(value):
+        for part in as_list_of(value):
             # _check_body_parts already proved each of these is an object.
             yield from _iter_part_ids_of(cast("Mapping[str, Any]", part))
 

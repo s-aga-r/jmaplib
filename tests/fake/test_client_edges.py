@@ -220,7 +220,7 @@ class TestClientLifecycle:
         policy = RetryPolicy(max_attempts=3, initial_backoff=0)
         with connect(fake, retry_policy=policy) as client:
             result = client.call("Email/set", {"create": {"d": {}}, "ifInState": "s1"})
-        assert result["newState"] == "s2"
+        assert result.new_state == "s2"
 
     def test_a_connection_failure_becomes_a_transport_error(self):
         def explode(_request: httpx.Request) -> httpx.Response:

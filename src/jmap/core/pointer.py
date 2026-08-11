@@ -18,7 +18,9 @@ server bug.
 
 from __future__ import annotations
 
-from typing import Any, Final, cast
+from typing import Any, Final
+
+from jmap.core.narrow import as_list, as_object, is_list, is_object
 
 WILDCARD: Final = "*"
 
@@ -78,15 +80,14 @@ def _index_array(items: list[Any], token: str, pointer: str) -> Any:
 
 
 def _resolve_tokens(value: Any, tokens: list[str], pointer: str) -> Any:
-    # The casts are not noise: narrowing an `Any` with isinstance yields an
-    # unparameterised container, which pyright reports as partially unknown. mypy
-    # narrows to `list[Any]` on its own and calls the same cast redundant, so the
-    # ignores below are what lets both checkers pass on one line of code.
+    # `as_list` rather than an inline cast: narrowing an `Any` with isinstance
+    # yields an unparameterised container that pyright reports as unknown, and
+    # correcting it inline is a cast mypy then calls redundant. See jmap.core.narrow.
     for position, token in enumerate(tokens):
         if token == WILDCARD:
-            if not isinstance(value, list):
+            if not is_list(value):
                 raise PointerError(pointer, f"'*' applied to {type(value).__name__}, not an array")
-            elements = cast("list[Any]", value)  # type: ignore[redundant-cast]
+            elements = as_list(value)
             rest = tokens[position + 1 :]
             if not rest:
                 # A trailing '*' is a no-op: the array is already the result.
@@ -96,19 +97,19 @@ def _resolve_tokens(value: Any, tokens: list[str], pointer: str) -> Any:
                 result: Any = _resolve_tokens(element, rest, pointer)
                 # The flattening rule: concatenate one level when the remainder
                 # produced an array, otherwise append the scalar.
-                if isinstance(result, list):
-                    collected.extend(cast("list[Any]", result))  # type: ignore[redundant-cast]
+                if is_list(result):
+                    collected.extend(as_list(result))
                 else:
                     collected.append(result)
             return collected
 
-        if isinstance(value, dict):
-            mapping = cast("dict[str, Any]", value)
+        if is_object(value):
+            mapping = as_object(value)
             if token not in mapping:
                 raise PointerError(pointer, f"no property {token!r}")
             value = mapping[token]
-        elif isinstance(value, list):
-            items = cast("list[Any]", value)  # type: ignore[redundant-cast]
+        elif is_list(value):
+            items = as_list(value)
             value = _index_array(items, token, pointer)
         else:
             raise PointerError(pointer, f"cannot traverse {token!r} into {type(value).__name__}")

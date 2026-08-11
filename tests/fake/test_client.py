@@ -167,8 +167,8 @@ class TestBatching:
                 query = batch.add("Email/query", {})
                 get = batch.add("Email/get", {"ids": query.ref_ids()})
 
-            assert query.result["ids"] == ["m1", "m2"]
-            assert get.result["list"] == [{"id": "m1"}]
+            assert query.result.ids == ["m1", "m2"]
+            assert [item.id for item in get.result.items] == ["m1"]
 
         assert len(server.requests) == 1
         assert len(server.requests[0]["methodCalls"]) == 2
@@ -315,8 +315,8 @@ class TestAsyncMirror:
                 query = batch.add("Email/query", {})
                 get = batch.add("Email/get", {"ids": query.ref_ids()})
 
-            assert query.result["ids"] == ["m1"]
-            assert get.result["list"] == [{"id": "m1"}]
+            assert query.result.ids == ["m1"]
+            assert [item.id for item in get.result.items] == ["m1"]
         assert len(server.requests) == 1
 
     @pytest.mark.asyncio

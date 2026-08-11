@@ -49,8 +49,9 @@ from typing import (
     cast,
 )
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler
 from pydantic.alias_generators import to_camel
+from pydantic_core import core_schema
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -120,6 +121,29 @@ class JMAPObject(Mapping[str, Any]):
     """
 
     __slots__ = ("_raw",)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, _source: Any, _handler: GetCoreSchemaHandler
+    ) -> core_schema.CoreSchema:
+        """Let pydantic use this as a field type.
+
+        Without it, ``GetResponse[JMAPObject]`` cannot be built - which is
+        exactly the shape an advertised-but-unmodelled capability produces, so
+        the fallback would fail at the one moment it exists for.
+        """
+        return core_schema.no_info_plain_validator_function(cls._validate)
+
+    @classmethod
+    def _validate(cls, value: Any) -> JMAPObject:
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, Mapping):
+            return cls(cast("Mapping[str, Any]", value))
+        # ValueError, not TypeError: pydantic converts only ValueError into a
+        # ValidationError, which is what carries the field path. A TypeError
+        # escapes as-is and the caller loses which property was wrong.
+        raise ValueError(f"expected a JSON object, got {type(value).__name__}")
 
     def __init__(self, raw: Mapping[str, Any]) -> None:
         # A ``dict`` is adopted rather than copied: it is already ours (freshly
