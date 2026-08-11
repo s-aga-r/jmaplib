@@ -123,6 +123,11 @@ class FakeJMAPServer:
         #: Blob id -> (bytes, content type), populated by uploads.
         self.blobs: dict[str, tuple[bytes, str]] = {}
         self._blob_counter = 0
+        #: Raw ``text/event-stream`` chunks the next event-source connection gets.
+        self.push_events: list[str] = []
+        #: Headers of every event-source request, so a test can assert that
+        #: ``Last-Event-ID`` really went back on a reconnect.
+        self.event_source_requests: list[dict[str, str]] = []
 
     # -- configuration ------------------------------------------------------ #
     def handle(self, method: str, handler: Handler) -> None:
@@ -179,6 +184,8 @@ class FakeJMAPServer:
             return httpx.Response(307, headers={"Location": f"{self.base_url}/jmap/session"})
         if path.endswith("/jmap/session"):
             return httpx.Response(200, json=self.session_document)
+        if "/jmap/eventsource/" in path:
+            return self._event_source(request)
         if "/jmap/upload/" in path:
             return self._upload(request)
         if "/jmap/download/" in path:
@@ -186,6 +193,43 @@ class FakeJMAPServer:
         if path.rstrip("/").endswith("/jmap"):
             return self._api(request)
         return httpx.Response(404, json={"type": "about:blank", "status": 404})
+
+    def push(
+        self,
+        account_id: str,
+        states: Mapping[str, str],
+        *,
+        event_id: str = "",
+        retry: int | None = None,
+    ) -> None:
+        """Queue a ``state`` event for the next event-source connection.
+
+        Queued rather than delivered, because the fake has no way to interrupt a
+        client that is not currently connected - and a client that reconnects
+        expects to be told what it missed, which is exactly what the queue models.
+        """
+        self.push_events.append(
+            _state_event(
+                {"@type": "StateChange", "changed": {account_id: dict(states)}}, event_id, retry
+            )
+        )
+
+    def push_ping(self, interval: int) -> None:
+        """Queue a ``ping`` event.
+
+        Deliberately carries no id: RFC 8620 §7.3 forbids it, and a fake that sent
+        one would hide the bug where a client resumes from a keep-alive.
+        """
+        self.push_events.append(f'event: ping\ndata: {{"interval": {interval}}}\n\n')
+
+    def _event_source(self, request: httpx.Request) -> httpx.Response:
+        """RFC 8620 §7.3. A ``text/event-stream`` of whatever has been queued."""
+        self.event_source_requests.append(dict(request.headers))
+        events, self.push_events = self.push_events, []
+        body = "".join(events)
+        return httpx.Response(
+            200, content=body.encode(), headers={"Content-Type": "text/event-stream"}
+        )
 
     def store_blob(self, content: bytes, content_type: str = DEFAULT_BLOB_TYPE) -> str:
         """Add a blob and return its id, as either upload path would."""
@@ -355,6 +399,15 @@ class FakeJMAPServer:
                 raise PointerError(str(reference.get("path")), "no such earlier call")
             resolved[key[1:]] = resolve(source, str(reference.get("path")))
         return resolved
+
+
+def _state_event(payload: Mapping[str, Any], event_id: str, retry: int | None = None) -> str:
+    """One ``state`` event in ``text/event-stream`` framing."""
+    lines = [f"retry: {retry}"] if retry is not None else []
+    if event_id:
+        lines.append(f"id: {event_id}")
+    lines += ["event: state", f"data: {dumps(payload)}", ""]
+    return "\n".join(lines) + "\n"
 
 
 def _echo(arguments: dict[str, Any], _server: FakeJMAPServer) -> dict[str, Any]:

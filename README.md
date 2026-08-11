@@ -62,7 +62,8 @@ misbehaves without it:
 
 ## Status
 
-**0.2.0** — Core, Mail, Blob, Quota and Sieve. See [CHANGELOG.md](CHANGELOG.md).
+**0.3.0** — Core, Mail, Blob, Quota, Sieve and push. See
+[CHANGELOG.md](CHANGELOG.md).
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -71,9 +72,10 @@ misbehaves without it:
 | M3 | Mail (RFC 8621), blobs → **0.1.0** | **done** |
 | M4 | Sync engine: change following, query views, state cursors | **done** |
 | M5 | Blob (RFC 9404), Quota (RFC 9425), Sieve (RFC 9661) → **0.2.0** | **done** |
-| M6+ | Push, Contacts, Calendars, FileNode, OAuth acquisition | planned |
+| M6 | Push: EventSource, PushSubscription, VAPID, WebSocket → **0.3.0** | **done** |
+| M7+ | Contacts, Calendars, FileNode, OAuth acquisition | planned |
 
-> **One caveat worth stating plainly.** 1361 tests and 100% coverage all run
+> **One caveat worth stating plainly.** 1531 tests and 100% coverage all run
 > against the in-process fake server. The live integration suite is written and
 > ready in `tests/integration/`, but has not been run against a real server:
 > Stalwart's v0.16 headless bootstrap is unresolved (see
@@ -220,6 +222,55 @@ keep the indices meaningful. Removals are applied before insertions because the
 `added` indices describe the list *after* removals, and an id appearing in *both*
 arrays is a move, not a delete. The implementation reproduces the RFC's worked
 example exactly, and that example is a test.
+
+### Push
+
+Three transports, one idea: a `StateChange` names which types moved in which
+accounts and nothing else. So whichever way it arrives — and whether or not some
+are dropped — the follow-up is the same `/changes` call, and the client converges.
+Push is an optimisation, never a second source of truth.
+
+```python
+from jmap.push import EventSourceClient
+
+source = EventSourceClient(client, types=("Email", "Mailbox"), ping=30)
+for event in source.listen():  # reconnects, resuming each time
+    for account, states in event.outdated(my_cursors).items():
+        ...  # only what actually moved
+```
+
+`outdated()` is the method that matters. A `StateChange` arriving does not mean
+something changed *for you* — compare it against what you hold, or you re-fetch
+types that never moved. And RFC 8620 §7.1 notes a notification can land while your
+own `/set` is still in flight, so `matches()` recognises your own write.
+
+Two rules here are silent when broken, so the library encodes both:
+
+- **A ping is not a cursor.** RFC 8620 §7.3 forbids a ping from setting an event
+  id. A client tracking "the last thing I received" resumes from a keep-alive and
+  skips every change before it. The resume cursor is unmoved by pings.
+- **`closeafter=state` ending the response is success.** Buffering proxies
+  otherwise hold a stream back indefinitely, so the server ending it after one
+  event is what was asked for. `listen()` reconnects rather than backing off.
+
+Registering a URL instead is a three-step dance, and the middle step is the
+security property: the server pushes a `PushVerification` and makes **no further
+request** to that URL until the code comes back — which is what stops a
+subscription being used to aim a JMAP server at a third party. The verification
+can arrive *before* the `/set` response that created the subscription (§7.2.3), so
+`PendingVerification` records codes as they land and claims them later, in
+whichever order the two actually happen.
+
+Over a WebSocket (RFC 8887) the same socket carries requests, responses, errors
+and notifications, distinguished only by `@type`. Responses may come back **out of
+order** — §4.3.2 says so — so `WebSocketProtocol` correlates by request id rather
+than assuming FIFO. Its `pushState` token makes a reconnect cost one exchange
+instead of a `/changes` call per type.
+
+VAPID (RFC 9749) adds one field and one obligation: rotating the application
+server key destroys subscriptions tied to the old one, and nothing raises when it
+happens — notifications just stop. `needs_recreating(session, key)` is how you
+find out.
 
 ### `/get` chunks itself; `/set` refuses to
 

@@ -189,6 +189,16 @@ class JMAPClient:
         self.capabilities = self.registry.resolve(self.session, self.default_account)
         self.session_stale = False
 
+    @property
+    def http(self) -> httpx.Client:
+        """The underlying HTTP client.
+
+        Exposed so the push shells can hold a streaming connection open on the
+        same authenticated client rather than opening a second one - the event
+        source needs exactly the credentials this client already carries.
+        """
+        return self._http
+
     # -- calling ------------------------------------------------------------ #
     def batch(self, *, extra_using: frozenset[str] = frozenset()) -> BatchContext:
         """Open a batch. Calls queued inside it travel in one request."""

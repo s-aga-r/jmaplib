@@ -20,6 +20,7 @@ from jmap.capabilities.mail import (
     SUBMISSION,
     VACATION,
 )
+from jmap.capabilities.push import VAPID, WEBSOCKET
 from jmap.capabilities.quota import QUOTA
 from jmap.capabilities.registry import Registry
 from jmap.capabilities.sieve import SIEVE
@@ -28,6 +29,17 @@ from jmap.capabilities.sieve import SIEVE
 def default_registry() -> Registry:
     """Every capability this build of the library knows about."""
     registry = Registry()
-    for spec in (CORE, MAIL, SUBMISSION, VACATION, SMIME_VERIFY, BLOB, QUOTA, SIEVE):
+    for spec in (
+        CORE,
+        MAIL,
+        SUBMISSION,
+        VACATION,
+        SMIME_VERIFY,
+        BLOB,
+        QUOTA,
+        SIEVE,
+        WEBSOCKET,
+        VAPID,
+    ):
         registry.register(spec)
     return registry

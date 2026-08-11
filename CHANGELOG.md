@@ -5,6 +5,57 @@ with one deliberate exception: capabilities marked `experimental=True` track IET
 drafts and are excluded from the compatibility promise. See `jmap.SPEC_REVISIONS`
 for exactly which revision of each spec this build implements.
 
+## 0.3.0
+
+Push. Three transports for one idea: a `StateChange` names which types moved in
+which accounts and nothing more, so whichever way it arrives - and whether or not
+some are dropped - the follow-up is the same `/changes` call. That is what makes
+push an optimisation rather than a second source of truth.
+
+### Added
+
+**Event source** (RFC 8620 §7.3) - `jmap.push.EventSourceClient` and its async
+twin, over a `text/event-stream` parser that is I/O-free and therefore fully
+testable without a socket.
+
+- `SSEParser` handles the parts that are silent when wrong: a CRLF split across
+  two reads is one terminator, several `data:` lines join with newlines, an event
+  with no data is not dispatched, and the last event id **persists** across events
+- Reconnection resumes rather than restarts. `Last-Event-ID` goes back every time,
+  so a drop costs latency instead of data
+- **A ping is not a cursor.** RFC 8620 §7.3 forbids a ping from setting an event
+  id; resuming from one skips every change that arrived before it
+- `closeafter=state` is modelled as success, not a lost connection - it exists
+  because buffering proxies otherwise hold notifications back indefinitely
+- Requested types are checked against the session, because a server simply never
+  pushes a type it does not have and that is indistinguishable from silence
+
+**PushSubscription lifecycle** (RFC 8620 §7.2) - `new_subscription()`,
+`verification_update()`, `renewal_update()`, `mine()`, and `PendingVerification`
+for the §7.2.3 race where the verification push beats the `/set` response that
+created the subscription. `PushSubscription` is now a typed model; `url` and
+`keys` are refused locally because asking earns `forbidden` for the whole call.
+
+**WebSocket** (RFC 8887) - `WebSocketProtocol`, the I/O-free framing and
+demultiplexing layer: `@type` dispatch, request/response correlation by id
+(§4.3.2 lets the server answer out of order), request-level errors as messages
+rather than status codes, and `pushState` tracking so a reconnect costs one
+exchange instead of a `/changes` per type. `should_reauthenticate()` distinguishes
+close code 1008 - credentials expired, so redialling loops forever - from the
+retryable ones.
+
+**VAPID** (RFC 9749) - `urn:ietf:params:jmap:webpush-vapid`, and
+`needs_recreating()` for §5's key rotation. Nothing raises when a key rotates: the
+server destroys the subscription and notifications simply stop, so the client has
+to ask.
+
+### Changed
+
+- `JMAPClient.http` / `AsyncJMAPClient.http` expose the underlying HTTP client, so
+  a push connection reuses the credentials the client already carries
+- `FakeJMAPServer` serves a real event source: `push()`, `push_ping()` and
+  `event_source_requests` make resumption and the ping rule testable end to end
+
 ## 0.2.0
 
 Blob management, Quota and Sieve - the three standalone RFCs that turn a mail

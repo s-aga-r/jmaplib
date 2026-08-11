@@ -15,6 +15,7 @@ from jmap.capabilities.blob import BLOB_TYPE
 from jmap.capabilities.spec import CapabilitySpec, DataTypeSpec, MethodKind, MethodSpec
 from jmap.core.limits import LimitKey
 from jmap.models.blob import BlobCopyResponse
+from jmap.models.push import PushSubscription
 
 CORE_URN: Final = "urn:ietf:params:jmap:core"
 
@@ -22,6 +23,7 @@ CORE_URN: Final = "urn:ietf:params:jmap:core"
 #: earns ``forbidden`` - and the object is global rather than per-account.
 PUSH_SUBSCRIPTION: Final = DataTypeSpec(
     name="PushSubscription",
+    model=PushSubscription,
     never_request_properties=frozenset({"url", "keys"}),
 )
 
