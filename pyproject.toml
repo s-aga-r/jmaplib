@@ -174,7 +174,7 @@ type = "layers"
 # contract must not fail the build before they exist.
 layers = [
     "(jmap.client) | (jmap.aio)",
-    "jmap.api",
+    "(jmap.api)",
     "jmap.capabilities",
     "jmap.models",
     "jmap.core",

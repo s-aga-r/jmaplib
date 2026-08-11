@@ -184,10 +184,18 @@ class CapabilityNotSupportedError(JMAPError):
     destroying every unrelated call batched alongside it.
     """
 
-    def __init__(self, urn: str, *, advertised: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        urn: str,
+        *,
+        advertised: frozenset[str] = frozenset(),
+        message: str | None = None,
+    ) -> None:
         self.urn = urn
         self.advertised = advertised
-        super().__init__(f"server does not advertise {urn}")
+        # Subclasses pass their own wording rather than reassigning `args`, which
+        # reads as an override of BaseException.args to a strict type checker.
+        super().__init__(message or f"server does not advertise {urn}")
 
 
 class CapabilityFieldError(JMAPError):
