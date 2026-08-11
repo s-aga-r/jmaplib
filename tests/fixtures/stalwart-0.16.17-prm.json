@@ -1,0 +1,1 @@
+{"resource":"https://localhost","authorization_servers":["https://localhost"],"scopes_supported":["openid","offline_access","urn:ietf:params:oauth:scope:mail","urn:ietf:params:oauth:scope:contacts","urn:ietf:params:oauth:scope:calendars"],"bearer_methods_supported":["header"]}

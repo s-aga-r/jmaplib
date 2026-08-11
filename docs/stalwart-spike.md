@@ -1,0 +1,174 @@
+# M0a — Stalwart v0.16.17 bootstrap spike
+
+Run against the native `stalwart-aarch64-apple-darwin` binary from release `v0.16.17`
+(2026-08-10), on plain HTTP port 8080. Findings below are **measured**, not from docs.
+
+## Resolved: the two disputed plan items
+
+Both settled — not from the running server, but from the **management schema** that
+`stalwart-cli` caches (`~/Library/Caches/stalwart-cli/*/schema-*.json`, 918 KB, 150 object
+types). This is the authoritative machine-readable description of the management API.
+
+### 1. `x:Account/set`, not `x:Principal/set`
+
+Both names exist, but they are different things:
+
+| Name | `permissionPrefix` | What it is |
+|---|---|---|
+| `x:Account` | `sysAccount` | *"Defines a user or group account for authentication and email access."* Variants `x:Account/User` → schema `x:UserAccount`, `x:Account/Group` → `x:GroupAccount`. **This is the user-creation object.** |
+| `Principal` (no `x:`) | `jmapPrincipal` | *"Represents an entity that can own or share resources."* The standard **RFC 9670 JMAP Principal** data type. |
+
+There is no `x:Principal`. The source-reading researcher was right; the reviewer conflated
+the standard JMAP type with the management object.
+
+`x:UserAccount` fields for provisioning: `name`, `emailAddress`, `domainId` (objectId →
+`x:Domain`), `credentials` (objectList → `x:Credential`), `aliases`, `roles`, `permissions`,
+`quotas`, `locale` (default `en_US`), `timeZone`, `memberGroupIds`, `memberTenantId`.
+
+### 2. The HTTP listener: create it explicitly
+
+Not fully settled by schema alone, but the schema makes the answer moot — and decides it in
+the reviewer's favour operationally. `x:NetworkListener` defaults are
+`{"protocol": "smtp", "useTls": true, …}`, so **`useTls` defaults to true**. A CI script must
+therefore never rely on a seeded plain-HTTP listener; create one explicitly:
+
+```json
+["x:NetworkListener/set", {"create": {"http": {
+  "name": "http-test", "bind": ["0.0.0.0:8080"], "protocol": "http", "useTls": false}}}, "c0"]
+```
+
+### Bonus: the exact bootstrap payload
+
+`x:Bootstrap` is a **singleton** (id `"singleton"`) with these properties — note `username`
+(`emailAddress` format) and `secret`, which create the *permanent* admin:
+
+`blobStore`, `dataStore`, `defaultDomain`, `directory`, `dnsServer`, `generateDkimKeys`,
+`inMemoryStore`, `requestTlsCertificate`, `searchStore`, `secret`, `serverHostname`,
+`tracer`, `username`.
+
+Defaults: `{"blobStore":{"@type":"Default"}, "dataStore":{"@type":"RocksDb","path":"/var/lib/stalwart/"},
+"directory":{"@type":"Internal"}, "dnsServer":{"@type":"Manual"}, "generateDkimKeys":true,
+"requestTlsCertificate":true, …}`
+
+And the JMAP limits to pin in CI live on `x:Jmap`: `maxMethodCalls`, `setMaxObjects`,
+`getMaxResults`, `queryMaxResults`, `changesMaxResults`, `maxConcurrentRequests`,
+`maxConcurrentUploads`, `maxRequestSize`, `maxUploadSize`, `uploadQuota`.
+
+## Confirmed facts
+
+| Claim | Result |
+|---|---|
+| `/.well-known/jmap` redirects | **307** → `{public_url}/jmap/session`. Fastmail uses 302 — assert the invariant, never the code. |
+| Unauthenticated `GET /jmap/session` | **200** with full `capabilities`, empty `accounts`/`username`. Never use it as a readiness probe. |
+| `/healthz/live` | **200 even in bootstrap mode.** Also useless as a readiness probe. |
+| `/api/*` REST management | **Gone** (404). v0.16 removed it, as documented. |
+| `STALWART_PUBLIC_URL` | Applied to `/.well-known/jmap` redirect and session URLs. |
+| Core capability limits | `maxSizeUpload` 50000000, `maxConcurrentUpload` 4, `maxSizeRequest` 10000000, `maxConcurrentRequests` 4, `maxCallsInRequest` **16**, `maxObjectsInGet` 500, `maxObjectsInSet` 500. |
+| Collations | `i;ascii-numeric`, `i;ascii-casemap`, `i;unicode-casemap`. |
+| Auth schemes offered | Two `www-authenticate` headers: `Bearer realm="Stalwart Server", resource_metadata="/.well-known/oauth-protected-resource"` and `Basic realm="Stalwart Server"`. |
+| RFC 9728 PRM | Present at `/.well-known/oauth-protected-resource`. Scopes: `openid`, `offline_access`, `urn:ietf:params:oauth:scope:{mail,contacts,calendars}`. |
+| RFC 8414 AS metadata | Present. Grants: `authorization_code`, `refresh_token`, `urn:ietf:params:oauth:grant-type:device_code`. PKCE `S256` only. |
+| Password grant | **Not supported** — `POST /auth/token` with `grant_type=password` → `{"error":"invalid_grant"}`. |
+| Device flow | **Works.** `POST /auth/device` → `device_code`, `user_code`, `expires_in` 1800, `interval` 5. Token polling correctly returns `authorization_pending`. |
+
+Session capabilities advertised in bootstrap mode (16): `core`, `mail`, `calendars`,
+`calendars:parse`, `contacts`, `contacts:parse`, `filenode`, `principals`,
+`principals:availability`, `submission`, `vacationresponse`, `sieve`, `blob`, `quota`,
+`webpush-vapid`, `websocket`. No `mdn`, no `smimeverify` — confirming those ship
+fixture-verified only.
+
+## Quirks worth encoding in `compat/`
+
+1. **`STALWART_PUBLIC_URL` is only partially honoured.** The `/.well-known/jmap` redirect
+   respects it, but these do **not** — they hardcode `https://localhost`:
+   - `capabilities["urn:ietf:params:jmap:websocket"].url` → `wss://localhost/jmap/ws`
+   - OAuth `issuer`, `token_endpoint`, `authorization_endpoint`, `device_authorization_endpoint`
+   - device flow `verification_uri`
+
+   A strict RFC 8414 client validates the issuer and will reject this. A strict RFC 8887
+   client will dial an unreachable `wss://` host. Both need a quirk shim.
+
+2. **`urn:ietf:params:jmap:webpush-vapid` is advertised unconditionally**, with an
+   auto-generated `applicationServerKey`. Research had claimed it appears only when a VAPID
+   key is configured — not so.
+
+3. **`sieve` carries `{"implementation": "Stalwart v1.0.0"}`** — a non-empty capability value
+   the models must tolerate.
+
+## Blocker: headless authentication in bootstrap mode
+
+**`STALWART_RECOVERY_ADMIN` is not read from the process environment.** The server's own
+startup banner says to set it *"in the env file"*. Passing it as a process env var — the
+form every doc page and the Docker guide shows — is silently ignored: the server still
+generates a random temporary password, and the pinned credential never authenticates.
+
+This is the single most important CI finding, and it invalidates the bootstrap step the
+plan described.
+
+With the *printed* temporary password (`admin` / random 16 chars), authentication still
+failed on every route tried:
+
+| Attempt | Result |
+|---|---|
+| `Basic` on `GET /jmap/session` | 401 |
+| `Basic` on `POST /jmap` (`x:Bootstrap/get`) | 401 |
+| `POST /api/auth` `{type:"authDevice", accountName:"admin", ...}` | `{"type":"failure"}` (= invalid credentials) |
+| Same, with `admin@macbook-pro.local`, `admin@localhost`, `administrator` | `{"type":"failure"}` |
+| `POST /api/auth` `{type:"authCode", ...}` | 401 (this type appears to need an existing session) |
+
+`{"type":"auth"}` returns a *deserialization* error, which confirms `authCode` and
+`authDevice` are the only valid discriminators — so the request shape is right and the
+credential itself is being rejected.
+
+The login page (`/login`) POSTs to `/api/auth` with `credentials: "same-origin"`, so the
+browser flow likely establishes a cookie via `GET /admin` first. That is the untested path.
+
+## `stalwart-cli` does not bypass the blocker
+
+Tested: `stalwart-cli` v1.0.12 (`stalwartlabs/cli`, a separate binary, `.tar.xz` assets — not
+`.tar.gz`). It authenticates with **Basic** (`--user`/`--password`) or a Bearer `--api-key`,
+and its `--debug` flag prints every request. Against a bootstrap-mode server with the printed
+temporary password:
+
+```
+[debug] -> GET http://localhost:8080/api/schema
+[debug] <- status=401 Unauthorized
+warning: failed to refresh schema (authentication failed (HTTP 401)); using cached copy
+[debug] -> GET http://localhost:8080/jmap/session
+[debug] <- status=401 Unauthorized
+error: authentication failed (HTTP 401)
+```
+
+So the official tool hits exactly the same wall — which is strong evidence the bootstrap
+temporary admin genuinely does not accept Basic auth, rather than a mistake in how it was
+being presented. `stalwart-cli` is the right provisioning tool **after** bootstrap, not a way
+through it.
+
+Useful side effects of running it: it revealed the `GET /api/schema` endpoint, and its
+on-disk schema cache is what resolved both disputed items above.
+
+## Recommended next step
+
+Two candidate routes, neither yet proven:
+
+1. **Find the env file.** The startup banner says to set `STALWART_RECOVERY_ADMIN` *"in the
+   env file"*. Locating that file's expected path is the smallest change that makes the
+   documented flow work.
+2. **Browser-driven bootstrap, once.** Complete the wizard at `/admin` in a real browser
+   against a throwaway instance, capture the resulting `x:Bootstrap/set` payload from devtools,
+   then replay it headlessly. The permanent admin it creates *does* accept Basic auth (that is
+   how `stalwart-cli` is meant to be used), so everything downstream unblocks.
+
+Route 2 is the more certain of the two and yields a verbatim, replayable payload.
+
+## Reproduction
+
+```bash
+curl -sL -o sw.tar.gz \
+  https://github.com/stalwartlabs/stalwart/releases/download/v0.16.17/stalwart-aarch64-apple-darwin.tar.gz
+tar xzf sw.tar.gz && mkdir -p etc data
+STALWART_PUBLIC_URL=http://localhost:8080 ./stalwart --config "$PWD/etc/config.json"
+# password is printed once, to stdout, at startup
+```
+
+Captured fixtures: `tests/fixtures/stalwart-0.16.17-{session-bootstrap,as-metadata,prm}.json`
