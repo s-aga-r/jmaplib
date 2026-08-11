@@ -61,23 +61,22 @@ misbehaves without it:
 
 ## Status
 
-Pre-alpha, under active development. Nothing is released yet.
+**0.1.0** — Core protocol and RFC 8621 Mail. See [CHANGELOG.md](CHANGELOG.md).
 
 | Milestone | Scope | State |
 |---|---|---|
 | M1 | I/O-free protocol kernel | **done** |
 | M2 | Capability registry, auth, transports, sync + async shells | **done** |
-| M3 | Mail (RFC 8621), blobs → **0.1.0** | in progress |
+| M3 | Mail (RFC 8621), blobs → **0.1.0** | **done** |
+| M4+ | Sync engine, push, Contacts, Calendars, FileNode, Sieve, Quota | planned |
 
-M3's code is complete: RFC 8621 models, the three mail capabilities (30 methods),
-typed responses, composed entity builders, header queries, `Email/set` creation
-constraints, `/get` auto-chunking, blob transfer and the capability namespaces.
-
-**0.1.0 is not tagged yet**, deliberately. The integration suite is written but
-has never run: Stalwart's v0.16 headless bootstrap is unsolved (see
-[`docs/stalwart-spike.md`](docs/stalwart-spike.md)), so every claim below is
-verified against the in-process fake server and not yet against a real one. That
-is the one thing a release needs, so it comes first.
+> **One caveat worth stating plainly.** 1161 tests and 100% coverage all run
+> against the in-process fake server. The live integration suite is written and
+> ready in `tests/integration/`, but has not been run against a real server:
+> Stalwart's v0.16 headless bootstrap is unresolved (see
+> [`docs/stalwart-spike.md`](docs/stalwart-spike.md), which includes an upstream
+> documentation bug found along the way). Point it at any bootstrapped server with
+> `JMAP_TEST_URL`, `JMAP_TEST_USER` and `JMAP_TEST_PASS` to verify for yourself.
 
 ### Capability namespaces
 
