@@ -40,6 +40,15 @@ breaking change, so it is now a test failure rather than something noticed later
   on nothing. The `smimeStatusAtDelivery` *property* was also missing, and it is
   the one that does not change as trust anchors are removed, which is what makes
   "was this trusted when it arrived?" answerable at all
+- **The package did not import on Python 3.11**, the version `requires-python`
+  declares as the floor. A bare `MappingProxyType({})` as a dataclass field
+  default is rejected there — 3.11 refuses any *unhashable* default, and a
+  mappingproxy is one; 3.12 relaxed the check to reject only list/dict/set by
+  type, so it is invisible on a newer interpreter. Present since the first weeks
+  of the project, caught by CI from the second commit onwards, and never read.
+  `tests/unit/test_public_api.py` now asserts no dataclass field carries an
+  unhashable default, so the failure is reachable from whatever version you
+  happen to run tests on
 - **Two properties were serialised under names no server reads.** RFC 9007's
   `reportingUA` and the calendars draft's `mayRSVP` both carry an acronym, and
   pydantic's camelCase generator lowercases all but its first letter — producing

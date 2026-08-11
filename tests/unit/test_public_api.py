@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+import pytest
 
 import jmap
 
@@ -233,3 +235,53 @@ class TestAcronymAliases:
 
         assert to_camel("reporting_ua") == "reportingUa"
         assert to_camel("may_rsvp") == "mayRsvp"
+
+
+class TestDataclassDefaults:
+    """No dataclass field may carry an unhashable default.
+
+    Python 3.11's dataclasses reject one outright, and a ``mappingproxy`` is
+    unhashable - so a bare ``MappingProxyType({})`` default makes the package fail
+    to *import* on the version ``requires-python`` declares as the floor. 3.12
+    relaxed the check to reject only list/dict/set by type, which is why this is
+    completely invisible when developing on a newer interpreter.
+
+    It was invisible here for the whole project: CI caught it from the second
+    commit onwards and nobody read CI. This test makes the failure reachable from
+    the version people actually run tests on.
+    """
+
+    def dataclass_fields(self) -> list[tuple[str, Any]]:
+        import dataclasses
+
+        found: list[tuple[str, Any]] = []
+        for info in pkgutil.walk_packages(jmap.__path__, prefix="jmap."):
+            module = importlib.import_module(info.name)
+            for name in dir(module):
+                candidate = getattr(module, name)
+                if not isinstance(candidate, type) or not dataclasses.is_dataclass(candidate):
+                    continue
+                if candidate.__module__ != info.name:
+                    continue  # re-exported; checked where it is defined
+                for field in dataclasses.fields(candidate):
+                    found.append((f"{info.name}.{name}", field))
+        return found
+
+    def test_the_walk_finds_something(self):
+        # A guard that silently inspects nothing is worse than no guard.
+        assert len(self.dataclass_fields()) > 50
+
+    def test_every_default_is_hashable(self):
+        import dataclasses
+
+        for owner, field in self.dataclass_fields():
+            if field.default is dataclasses.MISSING:
+                continue
+            try:
+                hash(field.default)
+            except TypeError:  # pragma: no cover - the failure this exists to catch
+                pytest.fail(
+                    f"{owner}.{field.name} defaults to an unhashable "
+                    f"{type(field.default).__name__}; Python 3.11 refuses to build the "
+                    f"class. Use `field(default_factory=...)`."
+                )

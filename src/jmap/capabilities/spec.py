@@ -35,6 +35,12 @@ if TYPE_CHECKING:
 
 CapabilityValueT = TypeVar("CapabilityValueT")
 
+#: Shared empty mappings, handed out by ``default_factory`` rather than used as a
+#: bare default. Python 3.11's dataclasses reject any unhashable default - and a
+#: ``mappingproxy`` is unhashable - so a bare one makes the whole package fail to
+#: *import* on the version ``requires-python`` declares as the floor. 3.12 relaxed
+#: the check to reject only list/dict/set by type, which is why this is invisible
+#: unless you actually run 3.11.
 _NO_STRINGS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
@@ -90,7 +96,7 @@ class MethodSpec:
     #: Method-specific arguments beyond the standard shape, mapped to a short
     #: description used in error messages: ``collapseThreads``,
     #: ``expandRecurrences``, ``onDestroyRemoveEmails`` and the rest.
-    extra_args: Mapping[str, str] = _NO_STRINGS
+    extra_args: Mapping[str, str] = field(default_factory=lambda: _NO_STRINGS)
     #: Name of an argument that lists JMAP *data type names* whose owning
     #: capabilities must therefore appear in ``using``. ``Blob/lookup`` is the
     #: motivating case: RFC 9404 §4.3 requires the capability defining each
@@ -130,11 +136,11 @@ class DataTypeSpec:
     #: how a capability that adds *properties but no methods* gets into ``using``
     #: at all; ``urn:ietf:params:jmap:smimeverify`` is the motivating case, and
     #: omitting it degrades silently rather than erroring (RFC 8620 §1.8).
-    adds_properties: Mapping[str, str] = _NO_STRINGS
+    adds_properties: Mapping[str, str] = field(default_factory=lambda: _NO_STRINGS)
     #: Filter condition name -> URN that gates it.
-    adds_filter_fields: Mapping[str, str] = _NO_STRINGS
+    adds_filter_fields: Mapping[str, str] = field(default_factory=lambda: _NO_STRINGS)
     #: Comparator property -> URN that gates it.
-    adds_sort_options: Mapping[str, str] = _NO_STRINGS
+    adds_sort_options: Mapping[str, str] = field(default_factory=lambda: _NO_STRINGS)
     #: A type that only ever arrives over the push channel and has no methods:
     #: ``EmailDelivery``. It must still be a legal value in
     #: ``PushSubscription.types`` and the EventSource ``types`` parameter.
@@ -178,8 +184,10 @@ class CapabilitySpec:
     #: URN - and because a third-party spec may.
     matches: Callable[[Mapping[str, Any]], bool] | None = None
     #: Populated by ``__post_init__``; do not pass.
-    methods_by_name: Mapping[str, MethodSpec] = field(default=_NO_METHODS, repr=False)
-    types_by_name: Mapping[str, DataTypeSpec] = field(default=_NO_TYPES, repr=False)
+    methods_by_name: Mapping[str, MethodSpec] = field(
+        default_factory=lambda: _NO_METHODS, repr=False
+    )
+    types_by_name: Mapping[str, DataTypeSpec] = field(default_factory=lambda: _NO_TYPES, repr=False)
 
     def __post_init__(self) -> None:
         # Indexed once at construction: every request looks methods up by name,

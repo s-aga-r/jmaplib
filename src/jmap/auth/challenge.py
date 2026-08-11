@@ -22,7 +22,7 @@ starts a new challenge.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -37,6 +37,9 @@ _PARAM_RE: Final = re.compile(
 )
 _SCHEME_RE: Final = re.compile(r"\A[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
 
+#: Shared empty params. See the note on the field below.
+_NO_PARAMS: Final[Mapping[str, str]] = MappingProxyType({})
+
 
 @dataclass(frozen=True, slots=True)
 class Challenge:
@@ -45,7 +48,9 @@ class Challenge:
     #: Lower-cased, because RFC 9110 says the scheme is case-insensitive and
     #: servers are inconsistent about it ("Bearer", "bearer", "BEARER").
     scheme: str
-    params: Mapping[str, str] = MappingProxyType({})
+    # `default_factory`, not a bare default: Python 3.11's dataclasses reject an
+    # unhashable default, and a mappingproxy is one.
+    params: Mapping[str, str] = field(default_factory=lambda: _NO_PARAMS)
 
     @property
     def realm(self) -> str | None:
