@@ -179,6 +179,34 @@ That explained why the earlier attempts failed — they used an unregistered cli
 replaying the corrected flow headlessly, with `client_id=stalwart-webui`, real PKCE and the
 password from the startup banner, **still returns `{"type": "failure"}`**.
 
+## The credential format is wrong in the docs
+
+Reading the source settled two things the documentation gets wrong.
+
+**It is a process environment variable.** `crates/store/src/registry/local.rs:42` is a plain
+`std::env::var("STALWART_RECOVERY_ADMIN")`, split on the first `:` and trimmed. The startup
+banner's *"in the env file"* just means the usual systemd `EnvironmentFile`, not a mechanism
+of its own.
+
+**The part after the colon is a password *hash*, not a password.**
+`crates/common/src/auth/authentication.rs:86` passes it straight to `verify_secret_hash`,
+and `crates/directory/src/core/secret.rs:135` accepts only:
+
+| Form | Example |
+|---|---|
+| PHC prefix | `$argon2id$...`, `$2b$...` |
+| BSDi crypt | `_...` |
+| LDAP-style | `{PLAIN}pw`, `{ARGON2}...`, `{SSHA256}...`, `{CRYPT}...` |
+
+Anything else falls through to an `Unsupported algorithm` error — so
+`STALWART_RECOVERY_ADMIN=admin:hunter2`, exactly as every doc page and the banner itself
+write it, can never authenticate.
+
+This is confirmed empirically, not just read: with
+`STALWART_RECOVERY_ADMIN='admin:{PLAIN}SpikePass123'` the server **stops printing a temporary
+password**, which it only does when the pinned credential was accepted. With a bare
+plaintext value it prints one, silently ignoring the variable.
+
 ## Status: still blocked
 
 Everything tried, all with the credential the server itself printed:
@@ -189,15 +217,30 @@ Everything tried, all with the credential the server itself printed:
 | `/api/auth` `authDevice` (device flow) | `{"type": "failure"}` |
 | `/api/auth` `authCode` with correct client id + PKCE | `{"type": "failure"}` |
 | `stalwart-cli` v1.0.12 | 401 |
-| `STALWART_RECOVERY_ADMIN` as a process env var | silently ignored |
+| `STALWART_RECOVERY_ADMIN=admin:plaintext` | silently ignored (wrong format) |
+| `STALWART_RECOVERY_ADMIN=admin:{PLAIN}pw`, bootstrap mode | accepted, but Basic auth still 401 |
+| `STALWART_RECOVERY_ADMIN=admin:{PLAIN}pw`, recovery mode + `config.json` | Basic auth still 401 |
 
-The temporary bootstrap admin appears not to authenticate through any documented path. The
-remaining lead is the startup banner's own wording — *"set `STALWART_RECOVERY_ADMIN` in the
-env file"* — which implies a file the server reads that is neither documented nor discovered.
-Finding it is probably a five-minute fix; guessing at it has not been.
+So the credential is now demonstrably *registered* and still does not authenticate — on
+`/jmap/session`, `/jmap`, `/api/schema` or `/api/account`, in either mode, and for account
+names `admin`, `admin@localhost` and `admin@<hostname>` alike.
 
-Worth asking upstream rather than guessing further: the flow is documented, the credential is
-printed, and the two do not meet.
+The decisive observation: at `STALWART_RECOVERY_MODE_LOG_LEVEL=trace` the server logs **no
+authentication event at all** for these requests. `route_auth_request` is never reached, so
+the rejection happens in the HTTP layer above it. That is a different problem from a bad
+credential, and it is where the next person should start —
+`crates/http/src/auth/` rather than the directory or registry code.
+
+## What to do next
+
+1. **Report the documentation bug upstream.** `username:password` is wrong everywhere it
+   appears; it must be `username:{PLAIN}password` or a real hash. That is worth filing
+   regardless of the rest, because it silently no-ops today.
+2. **Ask upstream how the recovery admin is meant to reach the HTTP auth layer**, quoting the
+   trace-level silence above.
+3. **Meanwhile**, point the integration suite at an already-bootstrapped server. Nothing in
+   `tests/integration/` depends on how the server was created - only on
+   `JMAP_TEST_URL`, `JMAP_TEST_USER` and `JMAP_TEST_PASS`.
 
 ## Reproduction
 

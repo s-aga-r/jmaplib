@@ -18,6 +18,11 @@
 #     x:Account/User -> schema x:UserAccount). There is no x:Principal — the
 #     unprefixed `Principal` is the standard RFC 9670 JMAP type.
 #   * Usernames must be full email addresses in v0.16.
+#   * STALWART_RECOVERY_ADMIN takes a password *hash*, not a password: the value
+#     after the colon goes to verify_secret_hash, which accepts a PHC string or an
+#     LDAP-style prefix. `admin:hunter2` is silently ignored; `admin:{PLAIN}hunter2`
+#     is accepted (the server then stops printing a temporary password). Every doc
+#     page and the startup banner itself get this wrong.
 set -euo pipefail
 
 URL="${STALWART_URL:-http://localhost:8080}"
@@ -48,11 +53,15 @@ done
 # which is neither documented nor found. The randomly generated temporary password
 # it prints instead is rejected by every documented path.
 #
-# The WebUI flow is now known (see docs/stalwart-spike.md): OAuth authorization
-# code + PKCE, client_id=stalwart-webui, POST /api/auth with type "authCode", then
-# exchange client_code at /auth/token. Replaying that headlessly with the printed
-# password still returns {"type":"failure"}, as do Basic auth, the device flow and
-# stalwart-cli. The credential and the flow do not meet.
+# With the correct {PLAIN} format the credential is demonstrably registered - the
+# server stops printing a temporary password - and Basic auth still returns 401 in
+# both bootstrap and recovery mode. At trace level no authentication event is
+# logged at all, so the rejection happens in the HTTP layer before
+# route_auth_request is reached. See docs/stalwart-spike.md for the full matrix.
+#
+# Until that is resolved, point the integration suite at an already-bootstrapped
+# server: nothing in tests/integration/ cares how it was created.
+RECOVERY_ADMIN="admin:{PLAIN}${ADMIN_PASS}"   # note the {PLAIN} prefix
 echo "ERROR: bootstrap authentication is unsolved; see docs/stalwart-spike.md" >&2
 exit 1
 
