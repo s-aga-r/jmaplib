@@ -172,3 +172,34 @@ class TestAccount:
     def test_repr_mentions_read_only(self):
         account = Account.from_wire("a", {"name": "x", "isReadOnly": True})
         assert "read_only=True" in repr(account)
+
+
+class TestCapabilityValueFallthrough:
+    """The account-level lookup must fall back rather than shadow."""
+
+    @pytest.fixture
+    def session(self) -> Session:
+        return Session.from_wire(
+            {
+                "capabilities": {"urn:x:mail": {"fromSession": True}},
+                "accounts": {
+                    "a": {"name": "alice", "accountCapabilities": {"urn:x:other": {}}},
+                    # A capability whose value is not an object at all: out of
+                    # spec, but a client must not hand the caller a non-mapping.
+                    "b": {"name": "bob", "accountCapabilities": {"urn:x:mail": "nonsense"}},
+                },
+            }
+        )
+
+    def test_account_lacking_the_urn_falls_back_to_session_level(self, session):
+        assert session.capability_value("urn:x:mail", Id("a")) == {"fromSession": True}
+
+    def test_unknown_account_falls_back_to_session_level(self, session):
+        assert session.capability_value("urn:x:mail", Id("zzz")) == {"fromSession": True}
+
+    def test_non_mapping_account_value_falls_back(self, session):
+        assert session.capability_value("urn:x:mail", Id("b")) == {"fromSession": True}
+
+    def test_non_mapping_session_value_reads_as_absent(self):
+        session = Session.from_wire({"capabilities": {"urn:x:mail": "nonsense"}})
+        assert session.capability_value("urn:x:mail") == {}

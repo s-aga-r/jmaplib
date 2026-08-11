@@ -181,8 +181,9 @@ def plan_requests(
             batches.append(current)
             current = []
         current.extend(component)
-    if current:
-        batches.append(current)
+    # No `if current` guard: every component is non-empty and every iteration
+    # extends `current`, so after the loop it always holds the final batch.
+    batches.append(current)
 
     return [
         Request(

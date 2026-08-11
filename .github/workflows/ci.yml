@@ -63,6 +63,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: uv sync --all-extras
       - name: unit + wire + fake tests
+        # Coverage is gated at 100% via [tool.coverage.report] fail_under.
         run: uv run pytest -m "not integration" --cov --cov-report=xml
       - uses: codecov/codecov-action@v5
         if: matrix.python == '3.13' && matrix.os == 'ubuntu-latest'

@@ -37,9 +37,10 @@ Issues = "https://github.com/s-aga-r/jmaplib/issues"
 
 # The fake JMAP server will ship as a pytest plugin so downstream users get
 # `jmap_fake_server` / `jmap_client` fixtures from `pip install jmaplib` alone.
-# Registered in M2, when the fixtures exist. Enabling it earlier only distorts
-# coverage: pytest loads entry-point plugins before coverage starts, so importing
-# `jmap.testing.plugin` executes `jmap/__init__.py` untraced.
+# Registering it costs coverage accuracy, though: pytest loads entry-point
+# plugins before coverage starts, so importing `jmap.testing.plugin` executes
+# `jmap/__init__.py` untraced and every module it pulls in reads as partly
+# covered. Enable it once the fixtures exist, with COVERAGE_PROCESS_START set.
 # [project.entry-points.pytest11]
 # jmaplib = "jmap.testing.plugin"
 
@@ -139,6 +140,11 @@ source = ["src/jmap"]
 branch = true
 
 [tool.coverage.report]
+# 100% is enforced, not aspirational. The kernel is pure functions over plain
+# data, so anything uncovered is either dead code or a branch nobody thought
+# through - both worth a build failure.
+fail_under = 100
+show_missing = true
 exclude_also = ["if TYPE_CHECKING:", "@overload", "raise NotImplementedError"]
 
 # --------------------------------------------------------------------------- #

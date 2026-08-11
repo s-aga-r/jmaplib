@@ -194,3 +194,41 @@ class TestDeriveUsing:
             "urn:ietf:params:jmap:mail",
             "urn:ietf:params:jmap:smimeverify",
         }
+
+
+class TestComponentMerging:
+    """Union-find edge cases in the reference-component grouping."""
+
+    def test_redundant_union_when_two_calls_share_a_target(self):
+        # c2 references both c0 and c1, and c1 already references c0, so the
+        # second union finds them already merged. All three must land together.
+        calls = pairs(
+            ("c0", call("Email/query")),
+            ("c1", call("Email/get", ids=ResultRef("c0", "Email/query", "/ids"))),
+            (
+                "c2",
+                call(
+                    "Thread/get",
+                    ids=ResultRef("c1", "Email/get", "/list/*/threadId"),
+                    other=ResultRef("c0", "Email/query", "/ids"),
+                ),
+            ),
+        )
+        plans = plan_requests(calls, using=USING, max_calls_in_request=3)
+        assert len(plans) == 1
+        assert [cid for cid, _ in plans[0].method_calls] == ["c0", "c1", "c2"]
+
+    def test_two_references_to_the_same_call_from_one_call(self):
+        calls = pairs(
+            ("c0", call("Email/query")),
+            (
+                "c1",
+                call(
+                    "Email/get",
+                    ids=ResultRef("c0", "Email/query", "/ids"),
+                    properties=ResultRef("c0", "Email/query", "/queryState"),
+                ),
+            ),
+        )
+        plans = plan_requests(calls, using=USING, max_calls_in_request=2)
+        assert len(plans) == 1
