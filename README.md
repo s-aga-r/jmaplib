@@ -81,9 +81,9 @@ authenticated endpoint — so the library presents credentials and reads the
 ```python
 from jmap.auth import BasicAuth, BearerAuth, CallableAuth, OAuth2Auth, OAuth2Token
 
-BasicAuth("alice@example.com", "app-password")   # self-hosted, Fastmail app passwords
-BearerAuth("api-token")                          # API tokens, static access tokens
-CallableAuth(lambda: sign_request())             # escape hatch for anything else
+BasicAuth("alice@example.com", "app-password")  # self-hosted, Fastmail app passwords
+BearerAuth("api-token")  # API tokens, static access tokens
+CallableAuth(lambda: sign_request())  # escape hatch for anything else
 OAuth2Auth(OAuth2Token("access", refresh_token="r"), refresh=renew, store=my_store)
 ```
 

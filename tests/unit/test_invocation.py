@@ -83,7 +83,7 @@ class TestHandle:
 
     def test_result_after_fulfilment(self):
         handle: Handle[dict[str, Any]] = Handle("c0", call())
-        handle._fulfil({"list": [{"id": "m1"}]})
+        handle.fulfil({"list": [{"id": "m1"}]})
         assert handle.result == {"list": [{"id": "m1"}]}
         assert handle.error is None
         assert handle.is_resolved
@@ -93,7 +93,7 @@ class TestHandle:
         # discarding its siblings' results.
         handle = Handle("c0", call())
         error = MethodError("unknownMethod", "c0", {})
-        handle._fail(error)
+        handle.fail(error)
 
         assert handle.error is error
         with pytest.raises(MethodError, match="unknownMethod"):
@@ -104,7 +104,7 @@ class TestHandle:
         # sharing the same call id. Merging it would corrupt the result.
         handle: Handle[dict[str, Any]] = Handle("c0", call("EmailSubmission/set"))
         extra = ParsedInvocation("Email/set", {"updated": {"m1": None}}, "c0")
-        handle._fulfil({"created": {"s1": {"id": "s1"}}}, extra=(extra,))
+        handle.fulfil({"created": {"s1": {"id": "s1"}}}, extra=(extra,))
 
         assert handle.result == {"created": {"s1": {"id": "s1"}}}
         assert len(handle.extra) == 1
@@ -113,5 +113,5 @@ class TestHandle:
     def test_repr_reflects_state(self):
         handle = Handle("c0", call("Email/get"))
         assert "pending" in repr(handle)
-        handle._fulfil({})
+        handle.fulfil({})
         assert "ok" in repr(handle)

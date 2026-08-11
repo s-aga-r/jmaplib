@@ -38,7 +38,7 @@ class TestReprs:
     def test_handle_repr_tracks_state_transitions(self):
         handle: Handle[dict[str, Any]] = Handle("c0", call("Email/query"))
         assert "pending" in repr(handle)
-        handle._fulfil({})
+        handle.fulfil({})
         assert "ok" in repr(handle)
 
     def test_request_repr_lists_method_names_and_using(self):

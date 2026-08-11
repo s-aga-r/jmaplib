@@ -200,12 +200,21 @@ class Handle(Generic[R]):
         return ResultRef(self.call_id, self.call.name, "/updatedProperties")
 
     # -- reading results ---------------------------------------------------- #
-    def _fulfil(self, result: R, extra: tuple[ParsedInvocation, ...] = ()) -> None:
+    def fulfil(self, result: R, extra: tuple[ParsedInvocation, ...] = ()) -> None:
+        """Record this call's answer.
+
+        Called by the response dispatcher, not by user code: a handle is filled
+        in exactly once, when its request comes back.
+        """
         self._result = result
         self._extra = extra
         self._resolved = True
 
-    def _fail(self, error: MethodError) -> None:
+    def fail(self, error: MethodError) -> None:
+        """Record that this call errored, for re-raising when the result is read.
+
+        Called by the response dispatcher, not by user code.
+        """
         self._error = error
         self._resolved = True
 
