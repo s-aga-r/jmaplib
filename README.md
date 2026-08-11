@@ -61,7 +61,8 @@ misbehaves without it:
 
 ## Status
 
-**0.1.0** — Core protocol and RFC 8621 Mail. See [CHANGELOG.md](CHANGELOG.md).
+**0.1.0** released; the sync engine is on `main`, unreleased. See
+[CHANGELOG.md](CHANGELOG.md).
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -71,7 +72,7 @@ misbehaves without it:
 | M4 | Sync engine: change following, query views, state cursors | **done** |
 | M5+ | Push, Contacts, Calendars, FileNode, Sieve, Quota | planned |
 
-> **One caveat worth stating plainly.** 1161 tests and 100% coverage all run
+> **One caveat worth stating plainly.** 1224 tests and 100% coverage all run
 > against the in-process fake server. The live integration suite is written and
 > ready in `tests/integration/`, but has not been run against a real server:
 > Stalwart's v0.16 headless bootstrap is unresolved (see
