@@ -652,6 +652,55 @@ uv run lint-imports                                   # layering contracts
 uv run pytest --cov                                   # must be 100%
 ```
 
+### Running against a live server
+
+Integration tests are deselected by default; `-m integration` selects them. They
+need a server and two accounts — the second one exists so the delivery test
+(alice sends, bob receives) runs rather than skips, and that assertion is the one
+thing the fake server cannot make.
+
+Against a server you already have, no bootstrap is involved:
+
+```console
+JMAP_TEST_URL=https://mail.example.com/.well-known/jmap \
+JMAP_TEST_USER=alice@example.com JMAP_TEST_PASS=... \
+JMAP_TEST_USER2=bob@example.com  JMAP_TEST_PASS2=... \
+  uv run pytest -m integration
+```
+
+Point `JMAP_TEST_URL` at `/.well-known/jmap` rather than the API URL: that way
+the redirect and the survival of the `Authorization` header across it are
+exercised for real. Everything the server does not implement skips with a reason
+naming the method, so a partial server still produces a useful run.
+
+To raise a throwaway Stalwart instead, the recipe CI uses:
+
+```console
+docker run -d --name jmaplib-test -p 18080:8080 \
+  -e STALWART_PUBLIC_URL=http://localhost:18080 \
+  -e STALWART_RECOVERY_ADMIN="admin:$STALWART_RECOVERY_ADMIN_PASS" \
+  -v jmaplib-test-data:/var/lib/stalwart \
+  stalwartlabs/stalwart:v0.16.17
+
+STALWART_URL=http://localhost:18080 STALWART_CONTAINER=jmaplib-test \
+STALWART_RECOVERY_ADMIN_PASS=... ./scripts/stalwart-bootstrap.sh
+```
+
+The script prints alice's and bob's generated passwords at the end. Two details
+are load-bearing: **no config file is mounted**, because bootstrap mode triggers
+only when the server finds none, and the volume is a **named volume**, because the
+image runs as UID/GID 2000 and cannot write a bind mount. `STALWART_PUBLIC_URL`
+must match the published port or the session advertises URLs nothing can reach.
+
+> The script completes setup and restarts the container it is given. Point it only
+> at a throwaway instance — never at a server holding anything you want to keep.
+> Pick a host port nothing else uses, too: Stalwart defaults `socket_reuse_port`
+> to true, so a second server binds an occupied port *silently* and the kernel
+> then splits requests between the two.
+
+`python -m jmap.testing.conformance <url> --user … --password … --markdown`
+renders what any server actually supports, method by method.
+
 **Coverage is gated at 100%**, not aspirational. The kernel is pure functions
 over plain data, so anything uncovered is either dead code or a branch nobody
 thought through — both worth failing the build over. `lint-imports` enforces the
