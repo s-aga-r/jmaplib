@@ -67,7 +67,21 @@ Pre-alpha, under active development. Nothing is released yet.
 |---|---|---|
 | M1 | I/O-free protocol kernel | **done** |
 | M2 | Capability registry, auth, transports, sync + async shells | **done** |
-| M3 | Mail (RFC 8621), blobs → **0.1.0** | next |
+| M3 | Mail (RFC 8621), blobs → **0.1.0** | in progress |
+
+M3 progress: all RFC 8621 data models and the three mail capabilities (30 methods)
+are registered; typed entity facades, header queries, `Email/set` creation
+constraints, `/get` auto-chunking and blob upload/download are next.
+
+### Mail is three capabilities, not one
+
+RFC 8621 defines `…:mail`, `…:submission` and `…:vacationresponse` separately,
+and servers advertise them independently — a read-only archive account may have
+mail without submission. Merging them would put `:submission` in `using` for a
+plain `Email/get` and, on a server that lacks it, fail the *entire* request.
+
+`Identity` therefore lives under `:submission`, not `:mail`: it exists to name
+what you may send *from*.
 
 ## Usage
 
@@ -77,7 +91,7 @@ from jmap.auth import BasicAuth
 from jmap.client import JMAPClient
 
 with JMAPClient.connect(
-    "https://mail.example.com/.well-known/jmap",       # redirects are followed
+    "https://mail.example.com/.well-known/jmap",  # redirects are followed
     auth=BasicAuth("alice@example.com", "app-password"),
 ) as client:
     client.echo(hello="world")
@@ -90,9 +104,9 @@ makes back-references natural:
 ```python
 with client.batch() as batch:
     query = batch.add("Email/query", {"filter": {"inMailbox": inbox}})
-    emails = batch.add("Email/get", {"ids": query.ref_ids()})   # resolved server-side
+    emails = batch.add("Email/get", {"ids": query.ref_ids()})  # resolved server-side
 
-print(emails.result["list"])        # readable once the block exits
+print(emails.result["list"])  # readable once the block exits
 ```
 
 The async client is a mirror — same names, same behaviour, `await` in front:
