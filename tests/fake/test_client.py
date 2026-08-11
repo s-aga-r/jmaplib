@@ -19,7 +19,12 @@ from jmap.capabilities.core import CORE, CORE_URN
 from jmap.capabilities.registry import Registry, UnsupportedMethodError
 from jmap.capabilities.spec import CapabilitySpec, DataTypeSpec, MethodKind, MethodSpec
 from jmap.client import JMAPClient
-from jmap.core.errors import AuthenticationError, CapabilityNotSupportedError, RequestError
+from jmap.core.errors import (
+    AuthenticationError,
+    CapabilityNotSupportedError,
+    RequestError,
+    TransportError,
+)
 from jmap.core.ids import Id
 from jmap.core.retry import RetryPolicy
 from jmap.testing import FakeJMAPServer, ServerQuirks
@@ -356,3 +361,54 @@ class TestAsyncMirror:
     async def test_repr(self):
         async with await connect_async(mail_server()) as client:
             assert "alice@example.com" in repr(client)
+
+
+class TestAddressDiscovery:
+    """Connecting from an email address rather than a URL (RFC 8620 §2.2)."""
+
+    def test_the_well_known_url_is_tried(self):
+        fake = FakeJMAPServer(base_url="https://example.com")
+        with JMAPClient.discover(
+            "alice@example.com",
+            auth=BasicAuth("alice", "pw"),
+            use_srv=False,
+            http=httpx.Client(**fake.client_kwargs()),
+        ) as client:
+            assert client.session.username == "alice@example.com"
+
+    def test_a_bare_domain_works_too(self):
+        # What a user types when they know their provider but not their address.
+        fake = FakeJMAPServer(base_url="https://example.com")
+        with JMAPClient.discover(
+            "example.com",
+            auth=BasicAuth("alice", "pw"),
+            use_srv=False,
+            http=httpx.Client(**fake.client_kwargs()),
+        ) as client:
+            assert client.session.api_url
+
+    def test_the_last_failure_is_what_surfaces(self):
+        # The well-known URL is tried last, so its error is the one a user can
+        # most easily go and check by hand.
+        def refuse(_request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("nothing listening")
+
+        with pytest.raises(TransportError, match="nothing listening"):
+            JMAPClient.discover(
+                "alice@example.com",
+                auth=BasicAuth("alice", "pw"),
+                use_srv=False,
+                http=httpx.Client(transport=httpx.MockTransport(refuse)),
+            )
+
+    def test_a_server_error_is_also_a_reason_to_move_on(self):
+        def broken(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(502, content=b"bad gateway")
+
+        with pytest.raises(RequestError):
+            JMAPClient.discover(
+                "alice@example.com",
+                auth=BasicAuth("alice", "pw"),
+                use_srv=False,
+                http=httpx.Client(transport=httpx.MockTransport(broken)),
+            )

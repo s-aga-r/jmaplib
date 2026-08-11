@@ -12,7 +12,7 @@ from typing import Final
 
 # Unannotated on purpose: hatchling's default version regex only matches a bare
 # `__version__ = "..."` assignment.
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 #: Maps a capability URN to the exact spec revision this library implements.
 SPEC_REVISIONS: Final[dict[str, str]] = {
@@ -32,8 +32,15 @@ SPEC_REVISIONS: Final[dict[str, str]] = {
     "urn:ietf:params:jmap:sieve": "RFC 9661",
     "urn:ietf:params:jmap:webpush-vapid": "RFC 9749",
     # Experimental — tracking drafts, excluded from the SemVer promise.
+    #
+    # The calendars draft is in the RFC Editor queue but *blocked* on
+    # draft-ietf-calext-jscalendarbis, and its own normative reference (bis-17) is
+    # already behind the current bis-18. Its wire names can still change; the
+    # event body is JSCalendar 2.0, not RFC 8984.
     "urn:ietf:params:jmap:calendars": "draft-ietf-jmap-calendars-27",
     "urn:ietf:params:jmap:calendars:parse": "draft-ietf-jmap-calendars-27",
+    # Availability lives in the calendars draft, *not* in RFC 9670 — that
+    # document defines no custom methods at all.
     "urn:ietf:params:jmap:principals:availability": "draft-ietf-jmap-calendars-27",
     "urn:ietf:params:jmap:filenode": "draft-ietf-jmap-filenode-14",
 }

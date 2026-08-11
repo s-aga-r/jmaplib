@@ -38,7 +38,7 @@ from jmap.blobs import (
     upload_url,
 )
 from jmap.capabilities.core import CORE_URN
-from jmap.core.errors import AuthenticationError, TransportError
+from jmap.core.errors import AuthenticationError, RequestError, TransportError
 from jmap.core.ijson import dumps, loads
 from jmap.core.response import Response
 from jmap.core.retry import Failure, RetryPolicy, Safety, classify, should_retry
@@ -176,6 +176,40 @@ class JMAPClient:
             default_account=account,
             owns_http=owns_http,
             session_url=url,
+        )
+
+    @classmethod
+    def discover(
+        cls,
+        address: str,
+        *,
+        auth: httpx.Auth,
+        use_srv: bool = True,
+        **kwargs: Any,
+    ) -> Self:
+        """Connect using only an email address or domain (RFC 8620 §2.2).
+
+        Tries each candidate in preference order - SRV targets first, then
+        ``https://<domain>/.well-known/jmap`` - and returns the first that yields
+        a session. The well-known guess alone is not enough: Fastmail answers 404
+        there, so a client that only tries it cannot reach one of the largest JMAP
+        deployments in existence.
+
+        The error raised on total failure is the *last* one, which is the
+        well-known URL's - the one a user can most easily check by hand.
+        """
+        from jmap.discovery import candidate_urls
+
+        failure: BaseException | None = None
+        for url in candidate_urls(address, use_srv=use_srv):
+            try:
+                return cls.connect(url, auth=auth, **kwargs)
+            except (TransportError, RequestError) as exc:
+                failure = exc
+        raise (
+            failure
+            if failure is not None
+            else TransportError(f"no JMAP server could be found for {address!r}")
         )
 
     def refresh_session(self) -> None:

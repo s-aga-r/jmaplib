@@ -203,3 +203,48 @@ class TestCapabilityValueFallthrough:
     def test_non_mapping_session_value_reads_as_absent(self):
         session = Session.from_wire({"capabilities": {"urn:x:mail": "nonsense"}})
         assert session.capability_value("urn:x:mail") == {}
+
+
+class TestAccountOnlyCapabilities:
+    """``account_capability_value`` deliberately does *not* fall back.
+
+    Some capabilities are defined to appear only per account - RFC 9670's
+    ``:principals:owner`` is the case - and reading the session-level map for one
+    of those turns "this account has none" into a confident wrong answer.
+    """
+
+    def session(self, **account_capabilities: object) -> Session:
+        return Session.from_wire(
+            {
+                "capabilities": {"urn:x": {"from": "session"}},
+                "accounts": {"a": {"name": "a", "accountCapabilities": account_capabilities}},
+                "primaryAccounts": {},
+                "username": "alice",
+                "apiUrl": "https://jmap.example.com/jmap/",
+                "state": "s0",
+            }
+        )
+
+    def test_the_account_value_is_returned(self):
+        session = self.session(**{"urn:x": {"from": "account"}})
+        assert session.account_capability_value("urn:x", Id("a")) == {"from": "account"}
+
+    def test_the_session_value_is_never_consulted(self):
+        assert self.session().account_capability_value("urn:x", Id("a")) == {}
+
+    def test_no_account_means_nothing_to_read(self):
+        assert self.session().account_capability_value("urn:x", None) == {}
+
+    def test_an_unknown_account_reads_as_empty(self):
+        assert self.session().account_capability_value("urn:x", Id("nope")) == {}
+
+    def test_a_non_mapping_value_is_treated_as_absent(self):
+        # Out of spec but survivable; handing back a string the caller will index
+        # is worse than saying the capability carries nothing.
+        session = self.session(**{"urn:x": "not an object"})
+        assert session.account_capability_value("urn:x", Id("a")) == {}
+
+    def test_the_fallback_lookup_still_falls_back(self):
+        # `capability_value` keeps its RFC 8620 §2 behaviour - this is a second
+        # method, not a change to the first.
+        assert self.session().capability_value("urn:x", Id("a")) == {"from": "session"}

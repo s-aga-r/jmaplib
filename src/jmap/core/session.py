@@ -196,6 +196,24 @@ class Session:
         # rather than handing the caller something it cannot index.
         return cast("Mapping[str, Any]", value) if isinstance(value, Mapping) else {}
 
+    def account_capability_value(self, urn: str, account_id: Id | None) -> Mapping[str, Any]:
+        """The capability object for ``urn`` from ``accountCapabilities`` *only*.
+
+        Distinct from :meth:`capability_value`, which falls back to the
+        session-level map. Some capabilities are defined to appear only per
+        account - RFC 9670's ``:principals:owner`` is the case - and for those the
+        fallback would read a session-level value that a conformant server never
+        publishes, turning "this account has no owner" into a confident wrong
+        answer against a server that publishes one anyway.
+        """
+        if account_id is None:
+            return {}
+        account = self.accounts.get(account_id)
+        if account is None:
+            return {}
+        value: Any = account.account_capabilities.get(urn)
+        return cast("Mapping[str, Any]", value) if isinstance(value, Mapping) else {}
+
     def primary_account_for(self, urn: str) -> Id | None:
         """The default account for a capability, per ``primaryAccounts``.
 
