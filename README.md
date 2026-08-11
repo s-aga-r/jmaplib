@@ -70,9 +70,48 @@ Pre-alpha, under active development. Nothing is released yet.
 | M3 | Mail (RFC 8621), blobs → **0.1.0** | in progress |
 
 M3 progress: RFC 8621 data models, the three mail capabilities (30 methods),
-typed response shapes and the composed entity builders are in; header queries,
-`Email/set` creation constraints, `/get` auto-chunking and blob upload/download
-are next.
+typed response shapes, composed entity builders, header queries and `Email/set`
+creation constraints are in; `/get` auto-chunking, blob upload/download and the
+client-level namespaces are next.
+
+### Header queries own both halves of the round trip
+
+A header is fetched by asking for a property whose *name encodes the request* —
+and RFC 8621 §4.1.2 says the server echoes that name back **exactly as sent**.
+Request `header:subject` and the answer is keyed `header:subject`; request
+`header:Subject` and it is keyed `header:Subject`. Ask one way, read the other,
+and you silently get `None`.
+
+```python
+from jmap.models.mail.headers import text, addresses, raw
+
+subject = text("Subject")            # header:Subject:asText
+subject.property_name                # what to request
+subject.read(email)                  # …and the key it comes back under
+
+raw("Received", all=True)            # header:Received:all — every hop
+addresses("To")                      # header:To:asAddresses
+```
+
+Without `:all` you get the **last** occurrence, not the first and not a list.
+
+### Creation constraints are checked before sending
+
+`Email/set` is the one place the object you send is not shaped like the one you
+get back. The server refuses with `invalidProperties`, which names the property
+but not the rule — so the same mistake is easy to make twice:
+
+```python
+from jmap.models.mail.create import validate_email_create
+validate_email_create({"mailboxIds": {"mb1": True}, "textBody": [...], ...})
+```
+
+It catches server-assigned properties (`id`, `blobId`, `threadId`, `size`), the
+read-only `headers` list, describing the body *both* ways at once, empty
+`mailboxIds`, malformed keywords, body parts with both or neither of
+`partId`/`blobId`, and `bodyValues` entries that are unreferenced or missing.
+It is deliberately a **subset** of §4.6 — anything needing server state (does the
+mailbox exist? is the blob still live?) is left to the server.
 
 ### The method surface matches the server
 
@@ -97,8 +136,8 @@ than exceptions — raising would discard the objects that *did* change:
 
 ```python
 result = emails.set(create={"d1": {...}}).result
-result.created_id("d1")          # server-assigned id, or None
-result.creation_errors           # {"d2": SetError(type="overQuota")}
+result.created_id("d1")  # server-assigned id, or None
+result.creation_errors  # {"d2": SetError(type="overQuota")}
 ```
 
 ### Mail is three capabilities, not one
