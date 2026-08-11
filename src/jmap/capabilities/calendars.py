@@ -53,16 +53,21 @@ AVAILABILITY_URN: Final = "urn:ietf:params:jmap:principals:availability"
 CALENDAR_ALERT_TYPE: Final = "CalendarAlert"
 CALENDAR_ALERT_EVENT: Final = "calendarAlert"
 
-#: JSCalendar's ``Duration`` is ``P (dur-date / dur-time / dur-week)``: weeks are
-#: mutually exclusive with days and times, so they get their own pattern rather
-#: than being another optional group that would let ``P1W1D`` through.
+#: JSCalendar's ``Duration`` ABNF is ``P (dur-date / dur-time / dur-week)``, which
+#: makes weeks exclusive with days and times. Real servers do not honour that:
+#: Stalwart v0.16 advertises ``maxExpandedQueryDuration: "P52W1D"``. Since this
+#: parser only ever *reads* values a server sent, rejecting the combination would
+#: silently switch the limit check off against the most likely server - so weeks
+#: are accepted alongside the rest, and the strictness is spent where it earns
+#: something instead.
 _WEEKS: Final = re.compile(r"\AP(?P<weeks>\d+)W\Z")
 
 #: The ``(?=\d)`` after ``T`` is load-bearing: without it ``PT`` and ``P1DT``
 #: match with every time component absent, and a dangling designator then sums to
 #: zero - which reads as a real limit of zero seconds rather than as unparseable.
+#: Weeks are an optional leading group here for the reason given above.
 _DATE_TIME: Final = re.compile(
-    r"\AP(?:(?P<days>\d+)D)?"
+    r"\AP(?:(?P<weeks>\d+)W)?(?:(?P<days>\d+)D)?"
     r"(?:T(?=\d)(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?)?\Z"
 )
 

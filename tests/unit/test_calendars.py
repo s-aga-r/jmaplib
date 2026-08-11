@@ -775,13 +775,16 @@ class TestMalformedDurations:
     def test_a_dangling_time_designator_after_weeks_is_not_a_duration(self):
         assert duration_seconds("P1WT") is None
 
-    def test_weeks_are_exclusive_with_days(self):
-        # JSCalendar's ABNF is `P (dur-date / dur-time / dur-week)`, so weeks
-        # cannot be combined with anything else.
-        assert duration_seconds("P1W1D") is None
+    def test_weeks_combined_with_days_are_accepted(self):
+        # The ABNF makes them exclusive; a real Stalwart v0.16 advertises
+        # `maxExpandedQueryDuration: "P52W1D"` regardless. This parser only ever
+        # reads what a server sent, and rejecting the combination would silently
+        # switch the limit check off against the most likely server.
+        assert duration_seconds("P52W1D") == 52 * 604800 + 86400
+        assert duration_seconds("P1W1D") == 604800 + 86400
 
-    def test_weeks_are_exclusive_with_times(self):
-        assert duration_seconds("P1WT2H") is None
+    def test_weeks_combined_with_times_are_accepted(self):
+        assert duration_seconds("P1WT2H") == 604800 + 7200
 
     def test_an_unparseable_limit_disables_the_check(self):
         # The point of returning None: a limit nobody can read must not become a

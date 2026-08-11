@@ -1,115 +1,182 @@
 #!/usr/bin/env bash
 # Bring a fresh Stalwart v0.16 instance up headlessly and provision test accounts.
 #
-# STATUS: INCOMPLETE. The bootstrap-mode authentication step below is unsolved —
-# see docs/stalwart-spike.md. Everything around it has been verified against a real
-# v0.16.17 server; only step 2 is guesswork, and the CI job that calls this script
-# runs with continue-on-error until it works.
+# The thing that blocked this for a long time, stated plainly so nobody re-derives
+# it: **bootstrap mode triggers only when no configuration file exists.** Passing
+# a `--config` that points at a real file - even a minimal datastore-only one -
+# starts the server in normal mode with an empty database, where there is no
+# administrator and never will be, and every request 401s forever. The earlier
+# version of this script wrote a config file first, which is precisely why it
+# could never authenticate.
 #
-# What the spike established (do not "clean these up", they are all load-bearing):
-#   * STALWART_PUBLIC_URL must be set, or the session advertises unreachable
-#     https://<hostname> URLs for apiUrl/uploadUrl/downloadUrl/eventSourceUrl.
-#   * The container runs as UID/GID 2000 — use named volumes, never bind mounts.
-#   * /healthz returns 200 even in bootstrap mode, and an unauthenticated
-#     GET /jmap/session returns 200 with empty accounts. Neither proves readiness;
-#     poll an *authenticated* session fetch instead.
-#   * The management API is JMAP under `urn:stalwart:jmap`, addressed as
-#     x:<Object>/get|set|query. The user object is x:Account (variants
-#     x:Account/User -> schema x:UserAccount). There is no x:Principal — the
-#     unprefixed `Principal` is the standard RFC 9670 JMAP type.
-#   * Usernames must be full email addresses in v0.16.
-#   * STALWART_RECOVERY_ADMIN takes a password *hash*, not a password: the value
-#     after the colon goes to verify_secret_hash, which accepts a PHC string or an
-#     LDAP-style prefix. `admin:hunter2` is silently ignored; `admin:{PLAIN}hunter2`
-#     is accepted (the server then stops printing a temporary password). Every doc
-#     page and the startup banner itself get this wrong.
+# The rest of what the (corrected) spike established:
+#
+#   * `STALWART_RECOVERY_ADMIN=admin:<password>` takes a **plaintext password**
+#     and IS read from the process environment. An earlier note here claimed it
+#     needed a hash and was ignored unless placed in an env file; both were wrong,
+#     and both were concluded from probing the wrong server. Setting it suppresses
+#     the randomly generated temporary password, which is what makes this script
+#     deterministic - otherwise the password is printed once, to stdout, and must
+#     be scraped from the container log.
+#   * Bootstrap mode listens on **8080** and serves the JMAP endpoint at `/jmap/`.
+#   * The management API is JMAP under the `urn:stalwart:jmap` capability, which is
+#     advertised at *account* level only - never in the session-level map.
+#   * `x:Bootstrap/get` returns a `singleton` object with the whole server config.
+#     `x:Bootstrap/set` applies it, writes the config file to the `--config` path,
+#     and returns the **permanent administrator's username and generated secret**
+#     in `updated.singleton`. That response is the only time the secret is shown.
+#   * The datastore config file it writes is one tagged object; the valid `@type`
+#     values are RocksDb, Sqlite, FoundationDb, PostgreSql and MySql.
+#   * After the restart the temporary admin no longer applies - the permanent one
+#     provisioned above is the credential to use.
+#   * `STALWART_PUBLIC_URL` must be set, or the session advertises unreachable
+#     `https://<hostname>` URLs for apiUrl/uploadUrl/downloadUrl/eventSourceUrl.
+#   * The container runs as UID/GID 2000 - use named volumes, never bind mounts.
+#   * An unauthenticated `GET /jmap/session` returns 200 with empty accounts, so it
+#     is not a readiness probe. Poll an *authenticated* fetch instead.
 set -euo pipefail
 
 URL="${STALWART_URL:-http://localhost:8080}"
 DOMAIN="${STALWART_DOMAIN:-example.com}"
-ADMIN_USER="admin@${DOMAIN}"
-ADMIN_PASS="${STALWART_ADMIN_PASS:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')}"
+CONTAINER="${STALWART_CONTAINER:-stalwart}"
+CONFIG_PATH="${STALWART_CONFIG_PATH:-/opt/stalwart/etc/config.json}"
+
+# Pinned so the flow is deterministic. Must match what the container was started
+# with; see the CI workflow.
+RECOVERY_ADMIN_USER="${STALWART_RECOVERY_ADMIN_USER:-admin}"
+RECOVERY_ADMIN_PASS="${STALWART_RECOVERY_ADMIN_PASS:?set STALWART_RECOVERY_ADMIN_PASS}"
+
 ALICE_PASS="${ALICE_PASSWORD:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')}"
 BOB_PASS="${BOB_PASSWORD:-$(head -c 24 /dev/urandom | base64 | tr -d '/+=')}"
 
-jmap_call() {
-  # $1 = auth header value, $2 = methodCalls JSON array
-  curl -sS -m 30 -X POST "${URL}/jmap" \
-    -H "Authorization: $1" \
+log() { printf '\n=== %s\n' "$*"; }
+
+jmap() {
+  # $1 = "user:pass", $2 = methodCalls JSON array
+  curl -sS -m 30 -X POST "${URL}/jmap/" \
+    -u "$1" \
     -H 'Content-Type: application/json' \
     -d "{\"using\":[\"urn:ietf:params:jmap:core\",\"urn:stalwart:jmap\"],\"methodCalls\":$2}"
 }
 
-# --- 1. wait for the bootstrap listener ------------------------------------- #
-echo "waiting for ${URL} ..."
-for _ in $(seq 1 60); do
-  if curl -sf -m 2 "${URL}/jmap/session" >/dev/null 2>&1; then break; fi
-  sleep 1
-done
-
-# --- 2. authenticate against bootstrap mode --------------------------------- #
-# UNSOLVED. Passing STALWART_RECOVERY_ADMIN=admin:<pw> as a process env var is
-# silently ignored — the server's own banner says it must go "in the env file",
-# which is neither documented nor found. The randomly generated temporary password
-# it prints instead is rejected by every documented path.
-#
-# With the correct {PLAIN} format the credential is demonstrably registered - the
-# server stops printing a temporary password - and Basic auth still returns 401 in
-# both bootstrap and recovery mode. At trace level no authentication event is
-# logged at all, so the rejection happens in the HTTP layer before
-# route_auth_request is reached. See docs/stalwart-spike.md for the full matrix.
-#
-# Until that is resolved, point the integration suite at an already-bootstrapped
-# server: nothing in tests/integration/ cares how it was created.
-RECOVERY_ADMIN="admin:{PLAIN}${ADMIN_PASS}"   # note the {PLAIN} prefix
-echo "ERROR: bootstrap authentication is unsolved; see docs/stalwart-spike.md" >&2
-exit 1
-
-# --- 3. complete bootstrap (payload shape confirmed from the schema) --------- #
-# x:Bootstrap is a singleton; `username` and `secret` create the PERMANENT admin,
-# which — unlike the temporary one — does accept Basic auth.
-# shellcheck disable=SC2317  # unreachable until step 2 is solved
-bootstrap() {
-  jmap_call "$1" "$(cat <<JSON
-[["x:Bootstrap/set", {"update": {"singleton": {
-  "serverHostname": "${DOMAIN}",
-  "defaultDomain": "${DOMAIN}",
-  "username": "${ADMIN_USER}",
-  "secret": "${ADMIN_PASS}",
-  "dataStore": {"@type": "RocksDb", "path": "/var/lib/stalwart/"},
-  "directory": {"@type": "Internal"},
-  "requestTlsCertificate": false,
-  "generateDkimKeys": false,
-  "tracer": {"@type": "Stdout"}
-}}}, "c0"]]
-JSON
-)"
+wait_for_auth() {
+  # $1 = "user:pass". An *authenticated* session fetch is the only honest probe:
+  # the unauthenticated one answers 200 long before there is anything behind it.
+  local creds="$1" i
+  for i in $(seq 1 90); do
+    if curl -fsS -m 5 -u "$creds" -o /dev/null "${URL}/jmap/session" 2>/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "timed out waiting for an authenticated session at ${URL}" >&2
+  return 1
 }
 
-# --- 4. after `docker restart`: pin limits and create users ------------------ #
-# Stalwart's x:Jmap defaults are tight (maxMethodCalls 16, setMaxObjects 500,
-# getMaxResults 500, maxConcurrentRequests 4). Pin them so a Stalwart default
-# change surfaces as a clear assertion failure, not a mysterious requestTooLarge.
-# Also create an explicit plain-HTTP listener: x:NetworkListener defaults to
-# useTls=true, so never rely on a seeded one.
-# shellcheck disable=SC2317
-provision() {
-  local auth="Basic $(printf '%s:%s' "${ADMIN_USER}" "${ADMIN_PASS}" | base64)"
-  jmap_call "$auth" "$(cat <<JSON
-[["x:NetworkListener/set", {"create": {"http": {
-    "name": "http-test", "bind": ["0.0.0.0:8080"], "protocol": "http", "useTls": false}}}, "c0"],
- ["x:Jmap/set", {"update": {"singleton": {
-    "maxMethodCalls": 16, "setMaxObjects": 500, "getMaxResults": 500,
-    "maxConcurrentRequests": 4}}}, "c1"],
- ["x:Account/set", {"create": {
-    "alice": {"name": "alice", "emailAddress": "alice@${DOMAIN}",
-              "credentials": {"0": {"@type": "Password", "secret": "${ALICE_PASS}"}}},
-    "bob":   {"name": "bob",   "emailAddress": "bob@${DOMAIN}",
-              "credentials": {"0": {"@type": "Password", "secret": "${BOB_PASS}"}}}}}, "c2"]]
-JSON
+# --- 1. bootstrap mode ------------------------------------------------------ #
+log "waiting for bootstrap mode as ${RECOVERY_ADMIN_USER}"
+wait_for_auth "${RECOVERY_ADMIN_USER}:${RECOVERY_ADMIN_PASS}"
+
+ACCOUNT_ID=$(curl -fsS -m 10 -u "${RECOVERY_ADMIN_USER}:${RECOVERY_ADMIN_PASS}" "${URL}/jmap/session" \
+  | python3 -c 'import json,sys; print(next(iter(json.load(sys.stdin)["accounts"])))')
+log "recovery account id: ${ACCOUNT_ID}"
+
+# --- 2. apply the server configuration -------------------------------------- #
+# `dataStore` is left as the server chose it: the container image already points
+# at its own volume, and overriding the path here is how you end up writing to a
+# directory the UID 2000 process cannot create.
+log "applying bootstrap configuration"
+SET_BODY=$(python3 - "$ACCOUNT_ID" "$DOMAIN" <<'PY'
+import json, sys
+account_id, domain = sys.argv[1], sys.argv[2]
+update = {
+    "singleton": {
+        "serverHostname": "localhost",
+        "defaultDomain": domain,
+        # Both off: CI has no public DNS, and requesting a certificate or
+        # generating DKIM keys makes startup wait on the network.
+        "requestTlsCertificate": False,
+        "generateDkimKeys": False,
+        "tracer": {"@type": "Stdout", "enable": True, "level": "info", "ansi": False},
+    }
+}
+print(json.dumps([["x:Bootstrap/set", {"accountId": account_id, "update": update}, "c0"]]))
+PY
+)
+SET_RESPONSE=$(jmap "${RECOVERY_ADMIN_USER}:${RECOVERY_ADMIN_PASS}" "$SET_BODY")
+echo "$SET_RESPONSE" | head -c 400; echo
+
+# The permanent administrator's secret is shown exactly once, here.
+eval "$(python3 - <<PY
+import json
+response = json.loads('''$SET_RESPONSE''')
+name, arguments, _ = response["methodResponses"][0]
+if name == "error":
+    raise SystemExit(f"x:Bootstrap/set failed: {arguments}")
+singleton = arguments.get("updated", {}).get("singleton") or {}
+if not singleton.get("username") or not singleton.get("secret"):
+    raise SystemExit(f"no administrator returned: {arguments}")
+print(f'ADMIN_USER={singleton["username"]}')
+print(f'ADMIN_PASS={singleton["secret"]}')
+PY
 )"
+log "permanent administrator: ${ADMIN_USER}"
+
+# --- 3. restart into normal mode -------------------------------------------- #
+# The config file now exists, so the next start is a normal one. Restarting the
+# container is the only way to get there; the running process stays in bootstrap
+# mode until it exits.
+log "restarting into normal mode"
+docker restart "$CONTAINER" >/dev/null
+wait_for_auth "${ADMIN_USER}:${ADMIN_PASS}"
+
+ADMIN_ACCOUNT=$(curl -fsS -m 10 -u "${ADMIN_USER}:${ADMIN_PASS}" "${URL}/jmap/session" \
+  | python3 -c 'import json,sys; print(next(iter(json.load(sys.stdin)["accounts"])))')
+
+# --- 4. provision the test accounts ----------------------------------------- #
+# Usernames must be full email addresses in v0.16; bare ones no longer work.
+log "creating alice@${DOMAIN} and bob@${DOMAIN}"
+CREATE_BODY=$(python3 - "$ADMIN_ACCOUNT" "$DOMAIN" "$ALICE_PASS" "$BOB_PASS" <<'PY'
+import json, sys
+account_id, domain, alice_pass, bob_pass = sys.argv[1:5]
+def user(name, secret):
+    return {
+        "@type": "User",
+        "name": f"{name}@{domain}",
+        "description": f"{name} (integration tests)",
+        "secrets": [secret],
+        "emails": [f"{name}@{domain}"],
+    }
+create = {"alice": user("alice", alice_pass), "bob": user("bob", bob_pass)}
+print(json.dumps([["x:Account/set", {"accountId": account_id, "create": create}, "c0"]]))
+PY
+)
+CREATE_RESPONSE=$(jmap "${ADMIN_USER}:${ADMIN_PASS}" "$CREATE_BODY")
+echo "$CREATE_RESPONSE" | head -c 600; echo
+python3 - <<PY
+import json
+response = json.loads('''$CREATE_RESPONSE''')
+name, arguments, _ = response["methodResponses"][0]
+if name == "error":
+    raise SystemExit(f"x:Account/set failed: {arguments}")
+if arguments.get("notCreated"):
+    raise SystemExit(f"accounts not created: {arguments['notCreated']}")
+PY
+
+# --- 5. prove the accounts work --------------------------------------------- #
+log "verifying alice can authenticate"
+wait_for_auth "alice@${DOMAIN}:${ALICE_PASS}"
+
+# Consumed by the workflow's later steps.
+if [ -n "${GITHUB_ENV:-}" ]; then
   {
     echo "ALICE_PASSWORD=${ALICE_PASS}"
     echo "BOB_PASSWORD=${BOB_PASS}"
-  } >> "${GITHUB_ENV:-/dev/stdout}"
-}
+    echo "STALWART_ADMIN_USER=${ADMIN_USER}"
+    echo "STALWART_ADMIN_PASS=${ADMIN_PASS}"
+  } >> "$GITHUB_ENV"
+fi
+
+log "bootstrap complete"
+echo "  alice@${DOMAIN} / ${ALICE_PASS}"
+echo "  bob@${DOMAIN} / ${BOB_PASS}"

@@ -1,7 +1,87 @@
-# M0a — Stalwart v0.16.17 bootstrap spike
+# Stalwart v0.16 bootstrap — solved
 
-Run against the native `stalwart-aarch64-apple-darwin` binary from release `v0.16.17`
-(2026-08-10), on plain HTTP port 8080. Findings below are **measured**, not from docs.
+> **Read this first.** An earlier version of this document called the bootstrap
+> "unsolved" and recorded three findings that were simply wrong. They were wrong
+> because the probes ran against port 8080 on a machine that already had a
+> Stalwart server on it — so the answers came from *that* server, not from the
+> instance under test. Anything below that is not marked **[verified]** should be
+> treated as unconfirmed.
+>
+> The corrected findings are in "The bootstrap chain" immediately below, and every
+> one of them is **[verified]** against an isolated instance on a private port.
+
+## The bootstrap chain [verified]
+
+**Bootstrap mode triggers only when no configuration file exists.** This is the
+whole blocker, and it is the opposite of what the old script did. Passing
+`--config` at a path that holds a real file — even a minimal datastore-only one —
+starts the server in *normal* mode against an empty database, where no
+administrator exists and none can be created, so every request 401s forever.
+Point `--config` at a path that does **not** exist and the server announces:
+
+```
+🔑 Stalwart bootstrap mode - temporary administrator account
+   username: admin
+   password: <random, printed once>
+```
+
+1. **Pin the temporary credential.** `STALWART_RECOVERY_ADMIN=admin:<password>`
+   takes a **plaintext password** and *is* read from the process environment.
+   Setting it suppresses the random password, which is what makes a CI run
+   deterministic. (The old note here claimed it needed a hash and was ignored
+   outside an env file. Both wrong; both concluded from the wrong server.)
+2. **Authenticate** with HTTP Basic as `admin:<password>`. Bootstrap mode listens
+   on **8080** and serves JMAP at `/jmap/`. `STALWART_RECOVERY_MODE_PORT` moves it,
+   which is how to test on a machine that already runs Stalwart.
+3. **`x:Bootstrap/get`** returns a `singleton` carrying the entire server config —
+   `serverHostname`, `defaultDomain`, `requestTlsCertificate`, `generateDkimKeys`,
+   `dataStore`, `blobStore`, `searchStore`, `inMemoryStore`, `directory`, `tracer`,
+   `dnsServer`.
+4. **`x:Bootstrap/set`** applies it, writes the config file to the `--config` path,
+   and returns the **permanent administrator** in `updated.singleton`:
+
+   ```json
+   {"username": "admin@example.com", "secret": "<generated>"}
+   ```
+
+   That response is the only time the secret is shown.
+5. **Restart.** The config file now exists, so the next start is a normal one. The
+   temporary admin no longer applies; use the permanent one.
+
+### Confirmed details [verified]
+
+* The config file is one tagged object. Valid `@type` values, from the server's own
+  parse error: `RocksDb`, `Sqlite`, `FoundationDb`, `PostgreSql`, `MySql`.
+* `urn:stalwart:jmap` is advertised at **account** level only, never in the
+  session-level map — the union rule the library implements.
+* An unauthenticated `GET /jmap/session` returns **200 with empty accounts**, so it
+  is not a readiness probe. Poll an *authenticated* fetch.
+* Environment variables the binary reads: `STALWART_HOSTNAME`, `STALWART_PUBLIC_URL`,
+  `STALWART_RECOVERY_MODE`, `STALWART_RECOVERY_MODE_PORT`,
+  `STALWART_RECOVERY_MODE_LOG_LEVEL`, `STALWART_RECOVERY_ADMIN`, `STALWART_ROLE`,
+  `STALWART_PUSH_SHARD`, `STALWART_HTTPS_PORT`.
+
+### Real advertised values worth keeping [verified]
+
+From an authenticated session on a freshly bootstrapped v0.16.14:
+
+* `maxExpandedQueryDuration: "P52W1D"` — **weeks combined with days.** JSCalendar's
+  ABNF makes those mutually exclusive, so a strict parser rejects it. A real server
+  sends it anyway.
+* `forbiddenNameChars: "/<>:\"\\|?*"`, and `forbiddenNodeNames` carrying `.`, `..`
+  and the Windows device names — matching the FileNode model exactly.
+* `supportedDigestAlgorithms: ["sha", "sha-256", "sha-512"]`,
+  `supportedTypeNames: ["Email", "Thread", "SieveScript"]`.
+* Stalwart advertises `urn:ietf:params:jmap:contacts:parse`, which is **not** a
+  capability this library models.
+
+---
+
+## Original spike notes (v0.16.17, 2026-08-10)
+
+Run against the native `stalwart-aarch64-apple-darwin` binary on plain HTTP port
+8080. **Caveat:** the port-8080 measurements below may describe a different server;
+see the warning at the top.
 
 ## Resolved: the two disputed plan items
 

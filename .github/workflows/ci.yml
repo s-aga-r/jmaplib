@@ -12,6 +12,10 @@ concurrency:
 
 env:
   UV_FROZEN: "1"
+  # Not a secret. It pins the temporary administrator of a throwaway container
+  # that exists for the ninety seconds of one job, on a port bound to the runner.
+  # Pinning it is what makes the bootstrap deterministic instead of a log scrape.
+  STALWART_RECOVERY_ADMIN_PASS: "ci-bootstrap-only"
 
 jobs:
   lint:
@@ -74,10 +78,10 @@ jobs:
   integration:
     name: live Stalwart
     runs-on: ubuntu-latest
-    # NOT yet gating. The v0.16 headless bootstrap is unsolved: STALWART_RECOVERY_ADMIN
-    # is ignored when passed as a process env var, and the printed temporary password is
-    # rejected over both Basic auth and the OAuth device flow. See docs/stalwart-spike.md.
-    # Flip continue-on-error to false the moment scripts/stalwart-bootstrap.sh works.
+    # Still non-gating while the end-to-end run is being proven in CI - the
+    # bootstrap chain is solved and verified locally, but "verified locally"
+    # is exactly the claim that hid a Python 3.11 failure here for months.
+    # Flip to false once this job has been green for a few consecutive runs.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -88,18 +92,26 @@ jobs:
 
       - name: start Stalwart
         run: |
+          # No config file is mounted or created: bootstrap mode triggers *only*
+          # when the server finds none, and providing one is what kept this
+          # unsolved. STALWART_RECOVERY_ADMIN pins the temporary credential so
+          # the flow is deterministic rather than scraped from the log.
           docker run -d --name stalwart \
             -p 8080:8080 \
             -e STALWART_PUBLIC_URL=http://localhost:8080 \
-            -v stalwart-etc:/etc/stalwart \
+            -e STALWART_RECOVERY_ADMIN="admin:${STALWART_RECOVERY_ADMIN_PASS}" \
             -v stalwart-data:/var/lib/stalwart \
             stalwartlabs/stalwart:v0.16.17
-          # Named volumes, not bind mounts: the image runs as UID/GID 2000.
+          # A named volume, not a bind mount: the image runs as UID/GID 2000.
+        env:
+          STALWART_RECOVERY_ADMIN_PASS: ${{ env.STALWART_RECOVERY_ADMIN_PASS }}
 
       - name: bootstrap and provision test accounts
         run: ./scripts/stalwart-bootstrap.sh
         env:
           STALWART_URL: http://localhost:8080
+          STALWART_CONTAINER: stalwart
+          STALWART_RECOVERY_ADMIN_PASS: ${{ env.STALWART_RECOVERY_ADMIN_PASS }}
 
       - name: integration suite
         run: uv run pytest -m integration
@@ -109,6 +121,18 @@ jobs:
           JMAP_TEST_URL: http://localhost:8080/.well-known/jmap
           JMAP_TEST_USER: alice@example.com
           JMAP_TEST_PASS: ${{ env.ALICE_PASSWORD }}
+          # Bob exists so the delivery test - alice sends, bob receives - is not
+          # skipped. It is the one assertion the fake server cannot make.
+          JMAP_TEST_USER2: bob@example.com
+          JMAP_TEST_PASS2: ${{ env.BOB_PASSWORD }}
+
+      - name: conformance matrix
+        if: always()
+        run: |
+          uv run python -m jmap.testing.conformance \
+            http://localhost:8080/.well-known/jmap \
+            --user alice@example.com --password "${{ env.ALICE_PASSWORD }}" \
+            --markdown >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: server logs on failure
         if: failure()
