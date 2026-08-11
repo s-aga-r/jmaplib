@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Trusted Publishing: no API token stored anywhere. PyPI verifies the OIDC identity
+# of this workflow, so `id-token: write` is what actually authorises the upload.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: tag matches package version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(uv run python -c 'from jmap.__about__ import __version__; print(__version__)')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $tag does not match __version__ $pkg"
+            exit 1
+          fi
+
+      - run: uv sync --all-extras
+      - name: full test suite must pass before publishing
+        run: uv run pytest -m "not integration"
+      - run: uv build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/jmaplib
+    permissions:
+      id-token: write
+      attestations: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: attest provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
