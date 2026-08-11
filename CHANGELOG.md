@@ -5,6 +5,91 @@ with one deliberate exception: capabilities marked `experimental=True` track IET
 drafts and are excluded from the compatibility promise. See `jmap.SPEC_REVISIONS`
 for exactly which revision of each spec this build implements.
 
+## 0.7.0
+
+Four milestones in one release: OAuth acquisition, Contacts, Sharing, Calendars
+and file storage. The last two are **experimental** — they track Internet-Drafts
+and are excluded from the SemVer promise; `jmap.SPEC_REVISIONS` publishes exactly
+which revision each targets, and neither resolves unless the caller passes
+`experimental=True`.
+
+### Added
+
+**OAuth acquisition** (RFC 6749, 7591, 7636, 8252, 8414, 8628, 9728). A 401
+carries a `resource_metadata` pointer, that document names an authorization
+server, its metadata names the endpoints, and the flow runs against those — so
+nothing has to be configured in advance.
+
+- Authorization-code flow with PKCE on a one-shot loopback listener, and RFC 8628
+  device flow with its full polling state machine
+- **S256 only.** RFC 7636's `plain` puts the verifier in the same URL as the
+  challenge, which defeats the point for exactly the clients that need it. A
+  server advertising neither is refused
+- RFC 8414's well-known segment is *inserted*, not appended, and the returned
+  `issuer` is checked against the one the URL was built from (§3.3) — without that
+  check any host answering the path can nominate a token endpoint
+- Dynamic client registration as a *public* client: a desktop application cannot
+  keep a secret, and one it ships is not a secret
+
+**Discovery** (`jmap.discovery`) — `_jmap._tcp` SRV records in RFC 2782 preference
+order, then `https://<domain>/.well-known/jmap`. `JMAPClient.discover(address)`
+walks the candidates. The well-known guess alone is not enough: Fastmail answers
+404 there.
+
+**Contacts** (RFC 9610) — `AddressBook` and `ContactCard`, with the JSContact body
+carried losslessly through `extra`. Plus **two vendor capabilities** for the
+pre-RFC `Contact`/`ContactGroup` model: the legacy methods are gated by
+`https://www.fastmail.com/dev/contacts` and `https://cyrusimap.org/ns/jmap/contacts`,
+*not* by the IETF URN — so they are three capabilities rather than two flavours of
+one, and `using` derivation gets it right for free. Their method inventory is not
+the standard six: `Contact` has no `/queryChanges`, `ContactGroup` does have
+`/query`.
+
+**Sharing** (RFC 9670) — `Principal`, `ShareNotification`, and `jmap.sharing` for
+`shareWith` maps. `grant()`/`revoke()` build *pointer* patches, because assigning
+the map revokes everyone absent from it. `Session.account_capability_value()` reads
+`accountCapabilities` without the session-level fallback, which
+`urn:ietf:params:jmap:principals:owner` requires.
+
+**Calendars** (draft-ietf-jmap-calendars-27, experimental) — `Calendar`,
+`CalendarEvent`, `ParticipantIdentity`, `CalendarEventNotification`, plus
+`Principal/getAvailability`, which lives in *this* draft rather than in RFC 9670.
+Local gates for `maxExpandedQueryDuration` and `maxAvailabilityDuration`, and for
+§5.11's rule that an expanding query forbids a FilterOperator entirely.
+
+**File storage** (draft-ietf-jmap-filenode-14, experimental) — `FileNode` with its
+`nodeType` union, and gates for the name rules, the sort list and the depth limit.
+`maxFileNodeDepth` is defined as one *more* than the ancestor count, so
+`max_ancestors` derives it once rather than at each call site.
+
+### Fixed
+
+Delegated test-writing found ten live bugs across the new code, all fixed here.
+Six were in OAuth and five of those were security-relevant:
+
+- `secrets.compare_digest` raises `TypeError` on non-ASCII `str`, and the redirect
+  state is attacker-controlled — one accented character escaped every
+  `except OAuthError` around the flow
+- An empty expected state accepted a redirect carrying no state at all: the CSRF
+  guard failed **open**
+- Extra authorization parameters could overwrite `state` and `code_challenge`
+- A JSON `null` for a required device-flow field became the literal string
+  `"None"` on the wire, leaving the client polling forever
+- `bool` subclasses `int`, so every `isinstance(value, int)` guard admitted `true`
+- The discovery documents inherited JMAP's camelCase alias generator and would
+  have serialised `authorizationServers`, a spelling neither RFC uses
+
+And four elsewhere:
+
+- `owner_of()`/`principal_account()` read `:principals:owner` through a lookup
+  that falls back to the session map, giving every unowned account the same bogus
+  owner and aiming `Principal/*` at the wrong account
+- `grant()` had no owner check and no way to supply one
+- `shareWith` pointers were not RFC 6901-escaped
+- `duration_seconds` accepted `PT` and summed it to zero — reading as a real limit
+  of zero seconds rather than as unparseable — and accepted `P1W1D` although weeks
+  are exclusive with days
+
 ## 0.3.0
 
 Push. Three transports for one idea: a `StateChange` names which types moved in

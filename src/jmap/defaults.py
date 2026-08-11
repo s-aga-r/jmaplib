@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from jmap.capabilities.blob import BLOB
 from jmap.capabilities.calendars import AVAILABILITY, CALENDARS, CALENDARS_PARSE
+from jmap.capabilities.contacts import CONTACTS, CYRUS_CONTACTS, FASTMAIL_CONTACTS
 from jmap.capabilities.core import CORE
 from jmap.capabilities.files import FILENODE
 from jmap.capabilities.mail import (
@@ -49,6 +50,9 @@ def default_registry() -> Registry:
         CALENDARS,
         CALENDARS_PARSE,
         AVAILABILITY,
+        CONTACTS,
+        FASTMAIL_CONTACTS,
+        CYRUS_CONTACTS,
     ):
         registry.register(spec)
     return registry

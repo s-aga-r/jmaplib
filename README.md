@@ -62,8 +62,7 @@ misbehaves without it:
 
 ## Status
 
-**0.3.0** — Core, Mail, Blob, Quota, Sieve and push. See
-[CHANGELOG.md](CHANGELOG.md).
+**0.7.0** — the whole ecosystem. See [CHANGELOG.md](CHANGELOG.md).
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -73,9 +72,28 @@ misbehaves without it:
 | M4 | Sync engine: change following, query views, state cursors | **done** |
 | M5 | Blob (RFC 9404), Quota (RFC 9425), Sieve (RFC 9661) → **0.2.0** | **done** |
 | M6 | Push: EventSource, PushSubscription, VAPID, WebSocket → **0.3.0** | **done** |
-| M7+ | Contacts, Calendars, FileNode, OAuth acquisition | planned |
+| M7 | OAuth acquisition (PKCE, device flow), SRV discovery | **done** |
+| M8 | Contacts (RFC 9610 + vendor), Sharing (RFC 9670) | **done** |
+| M9 | Calendars (draft-27) — *experimental* | **done** |
+| M10 | FileNode (draft-14) — *experimental* → **0.7.0** | **done** |
+| M11 | MDN, S/MIME, conformance matrix, docs → 1.0 | planned |
 
-> **One caveat worth stating plainly.** 1531 tests and 100% coverage all run
+> **Two caveats worth stating plainly.**
+>
+> **Calendars and FileNode are experimental** and do not resolve unless you pass
+> `experimental=True`. They track Internet-Drafts; the calendars draft is blocked
+> on `jscalendarbis` and its own normative reference is already a revision stale,
+> so its wire names can still change. `jmap.SPEC_REVISIONS` publishes exactly what
+> this build targets.
+>
+> **The JSCalendar and JSContact bodies are carried, not modelled.** A
+> `CalendarEvent` is a JSCalendar Event and a `ContactCard` is a JSContact Card;
+> both round-trip losslessly through the model's `extra` and are readable by exact
+> wire name (`event.jscalendar("recurrenceRule")`). What *is* modelled is the JMAP
+> layer around them, which is where the traps live. Field-by-field models for
+> those two vocabularies are a codegen job and are not done.
+>
+> 2019 tests and 100% coverage all run
 > against the in-process fake server. The live integration suite is written and
 > ready in `tests/integration/`, but has not been run against a real server:
 > Stalwart's v0.16 headless bootstrap is unresolved (see
@@ -271,6 +289,71 @@ VAPID (RFC 9749) adds one field and one obligation: rotating the application
 server key destroys subscriptions tied to the old one, and nothing raises when it
 happens — notifications just stop. `needs_recreating(session, key)` is how you
 find out.
+
+### Signing in
+
+`jmaplib` can find the server and get a token without being told either.
+
+```python
+from jmap.auth import OAuthClient
+
+metadata = OAuthClient.discover(challenge.resource_metadata)  # RFC 9728 → RFC 8414
+with OAuthClient(metadata, client_id="...") as oauth:
+    token = oauth.authorize(scope="urn:ietf:params:jmap:core")  # PKCE, loopback
+client = JMAPClient.discover("alice@example.com", auth=BearerAuth(token.access_token))
+```
+
+`JMAPClient.discover` tries `_jmap._tcp` SRV records before
+`https://<domain>/.well-known/jmap`, because the well-known guess alone is not
+enough — Fastmail answers 404 there.
+
+Two things in the OAuth path are security properties rather than conveniences,
+and both are the kind that work fine against a cooperative server:
+
+- **The well-known segment is inserted, not appended.** RFC 8414 §3.1 puts
+  `/.well-known/oauth-authorization-server` *between* host and path. Appending
+  happens to work for single-tenant deployments, which is exactly why that bug
+  survives to production.
+- **The returned `issuer` is checked against the one the URL was built from**
+  (§3.3). Without it, any host that merely answers that path can nominate
+  whichever token endpoint it likes.
+
+Only S256 PKCE is used. RFC 7636 also defines `plain`, where the challenge *is*
+the verifier — which defeats the point for precisely the clients that need it, so
+a server advertising neither is refused rather than downgraded to.
+
+### Sharing
+
+```python
+from jmap import sharing
+
+principals = sharing.principal_account(client.session, data_account_id)
+with client.batch() as batch:
+    batch.calendars.calendar.set(update={cal_id: sharing.grant(bob, {"mayReadItems": True})})
+```
+
+`grant()` and `revoke()` build *pointer* patches. Assigning `shareWith` wholesale
+revokes everyone absent from the new map — the difference between "add Bob" and
+"make Bob the only person with access". The owning Principal must never appear in
+the map at all (RFC 9670 §4), and the account you address the `/set` at is **not**
+the account the Principal ids come from: `principal_account()` is that lookup.
+
+### Contacts, two models
+
+RFC 9610 gave contacts `AddressBook` and `ContactCard`. Before it, Fastmail and
+Cyrus shipped `Contact` and `ContactGroup` — and those are gated by *vendor* URNs,
+not by `urn:ietf:params:jmap:contacts`. So they are three capabilities rather than
+two flavours of one, a server may advertise several at once, and `using` derivation
+handles it without being told:
+
+```python
+batch.contacts.contact_card.query(filter={"name/given": "Alice"})  # RFC 9610
+batch.fastmail_contacts.contact.query(filter={"text": "Alice"})  # pre-RFC
+```
+
+Calling `Contact/get` with only the IETF URN in `using` earns `unknownMethod` from
+a server that fully implements it, and the error names the *method* — which reads
+as "this server has no contacts" rather than "you declared the wrong capability".
 
 ### `/get` chunks itself; `/set` refuses to
 

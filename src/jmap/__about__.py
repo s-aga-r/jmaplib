@@ -12,7 +12,7 @@ from typing import Final
 
 # Unannotated on purpose: hatchling's default version regex only matches a bare
 # `__version__ = "..."` assignment.
-__version__ = "0.4.0"
+__version__ = "0.7.0"
 
 #: Maps a capability URN to the exact spec revision this library implements.
 SPEC_REVISIONS: Final[dict[str, str]] = {
@@ -26,7 +26,10 @@ SPEC_REVISIONS: Final[dict[str, str]] = {
     "urn:ietf:params:jmap:blob": "RFC 9404",
     "urn:ietf:params:jmap:quota": "RFC 9425",
     "urn:ietf:params:jmap:contacts": "RFC 9610",
-    "urn:ietf:params:jmap:contacts:parse": "RFC 9610",
+    # The pre-RFC contacts model, gated by vendor URNs rather than by the IETF
+    # one. A server may advertise both at once; Cyrus 3.10 does.
+    "https://www.fastmail.com/dev/contacts": "pre-RFC Contact/ContactGroup",
+    "https://cyrusimap.org/ns/jmap/contacts": "pre-RFC Contact/ContactGroup",
     "urn:ietf:params:jmap:principals": "RFC 9670",
     "urn:ietf:params:jmap:principals:owner": "RFC 9670",
     "urn:ietf:params:jmap:sieve": "RFC 9661",
