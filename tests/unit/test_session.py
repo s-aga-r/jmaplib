@@ -309,3 +309,51 @@ class TestAccountOnlyCapabilities:
         # `capability_value` keeps its RFC 8620 §2 behaviour - this is a second
         # method, not a change to the first.
         assert self.session().capability_value("urn:x", Id("a")) == {"from": "session"}
+
+
+class TestWhichAccountsCapabilityValue:
+    """The regression this exists for: a real Stalwart leaves most capability
+    objects *empty* at session level and puts every actual limit under
+    accountCapabilities. Reading the session-level copy when no account was named
+    therefore reports no limits at all - and for supportedDigestAlgorithms that
+    does not read as "unknown", it reads as "supports nothing"."""
+
+    @pytest.fixture
+    def session(self) -> Session:
+        return Session.from_wire(
+            {
+                "capabilities": {"urn:x:blob": {}},
+                "accounts": {
+                    "bw": {
+                        "name": "a1@example.com",
+                        "accountCapabilities": {
+                            "urn:x:blob": {"supportedDigestAlgorithms": ["sha-256"]}
+                        },
+                    },
+                    "bh": {"name": "team@example.com", "accountCapabilities": {}},
+                },
+                "primaryAccounts": {"urn:x:blob": "bw"},
+                "username": "a1@example.com",
+                "state": "s1",
+            }
+        )
+
+    def test_an_unnamed_account_resolves_to_the_capability_primary(self, session):
+        assert session.capability_account("urn:x:blob") == Id("bw")
+
+    def test_and_that_is_where_the_real_value_lives(self, session):
+        account = session.capability_account("urn:x:blob")
+        value = session.capability_value("urn:x:blob", account)
+        assert value["supportedDigestAlgorithms"] == ["sha-256"]
+
+    def test_reading_it_unscoped_is_what_used_to_lose_the_limits(self, session):
+        # Kept as documentation of the failure mode, not as desired behaviour.
+        assert session.capability_value("urn:x:blob") == {}
+
+    def test_a_named_account_is_never_second_guessed(self, session):
+        assert session.capability_account("urn:x:blob", Id("bh")) == Id("bh")
+
+    def test_a_capability_with_no_primary_falls_back_to_what_is_implied(self, session):
+        # Nothing is primary for this one, but every primaryAccounts entry names
+        # bw, so the session still implies an account.
+        assert session.capability_account("urn:x:other") == Id("bw")

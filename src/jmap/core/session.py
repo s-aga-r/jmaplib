@@ -196,6 +196,28 @@ class Session:
         # rather than handing the caller something it cannot index.
         return cast("Mapping[str, Any]", value) if isinstance(value, Mapping) else {}
 
+    def capability_account(self, urn: str, account_id: Id | None = None) -> Id | None:
+        """Which account's copy of ``urn``'s capability object to read.
+
+        Asking without naming an account is the common case and used to mean
+        "the session-level one", which on a real server is very nearly useless:
+        Stalwart leaves twelve of its sixteen capability objects **empty** at
+        session level and puts every actual limit in ``accountCapabilities``.
+        ``maxDelayedSend``, ``emailQuerySortOptions``, ``forbiddenNameChars``,
+        ``supportedDigestAlgorithms`` - all of them - read as absent, so the
+        gates built on them stop gating. ``supportedDigestAlgorithms`` is the
+        worst of the set, because empty does not read as "unknown, allow it" but
+        as "supports nothing", and a perfectly legal ``digest:sha-256`` is then
+        refused before it ever reaches the wire.
+
+        So an unnamed account resolves to the one the server itself nominates for
+        this capability, and only then to whatever the session implies. Both are
+        the server's own statements, not inference on our part.
+        """
+        if account_id is not None:
+            return account_id
+        return self.primary_account_for(urn) or self.implied_account()
+
     def account_capability_value(self, urn: str, account_id: Id | None) -> Mapping[str, Any]:
         """The capability object for ``urn`` from ``accountCapabilities`` *only*.
 

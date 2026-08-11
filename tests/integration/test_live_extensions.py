@@ -46,6 +46,24 @@ requires_server = pytest.mark.skipif(
 SCRIPT = 'require ["fileinto"];\r\nfileinto "INBOX";\r\n'
 
 
+def upload_blob(client: JMAPClient, content: str, content_type: str | None = None) -> str:
+    """Upload ``content`` and return its **real** blob id.
+
+    Deliberately its own request rather than a ``#creationId`` reference in the
+    same one. RFC 8620 §5.3 makes that substitution normative only for foreign
+    keys inside a ``/set``; a plain method argument such as
+    ``SieveScript/validate``'s ``blobId`` is outside what any server has promised.
+    Stalwart resolves the reference in ``Blob/get``'s ``ids`` and not in that one,
+    and answers ``blobNotFound`` - which is indistinguishable from a script the
+    engine rejected, and quietly turned a test of Sieve into a test of nothing.
+    """
+    with client.batch() as batch:
+        uploaded = batch.blob.blob.upload(
+            create={"s": BlobUpload(data=[DataSource.text(content)], type=content_type)}
+        )
+    return str(uploaded.result.created_id("s"))
+
+
 def requires_method(client: JMAPClient, method: str) -> None:
     if not client.capabilities.supports(method):
         pytest.skip(f"server does not implement {method}")
@@ -58,12 +76,18 @@ def alice() -> Iterator[JMAPClient]:
 
 
 def blob_capability(client: JMAPClient) -> BlobCapability:
-    return BlobCapability.of(client.session.capability_value(BLOB_URN, client.default_account))
+    return BlobCapability.of(
+        client.session.capability_value(
+            BLOB_URN, client.session.capability_account(BLOB_URN, client.default_account)
+        )
+    )
 
 
 def sieve_capability(client: JMAPClient) -> SieveAccountCapability:
     return SieveAccountCapability.of(
-        client.session.capability_value(SIEVE_URN, client.default_account)
+        client.session.capability_value(
+            SIEVE_URN, client.session.capability_account(SIEVE_URN, client.default_account)
+        )
     )
 
 
@@ -244,11 +268,9 @@ class TestSieve:
         requires_method(alice, "Blob/upload")
         if "fileinto" not in sieve_capability(alice).sieve_extensions:
             pytest.skip("server's Sieve engine has no fileinto")
+        blob_id = upload_blob(alice, SCRIPT, "application/sieve")
         with alice.batch() as batch:
-            batch.blob.blob.upload(
-                create={"s": BlobUpload(data=[DataSource.text(SCRIPT)], type="application/sieve")}
-            )
-            checked = batch.sieve.sieve_script.validate(blob_id="#s")
+            checked = batch.sieve.sieve_script.validate(blob_id=blob_id)
         assert checked.result.is_valid, checked.result.problem
 
     def test_validate_rejects_a_broken_script_without_raising(self, alice):
@@ -256,13 +278,15 @@ class TestSieve:
         # verdict arrives as an argument, so nothing here should raise.
         requires_method(alice, "SieveScript/validate")
         requires_method(alice, "Blob/upload")
+        blob_id = upload_blob(alice, "this is not sieve {{{")
         with alice.batch() as batch:
-            batch.blob.blob.upload(
-                create={"s": BlobUpload(data=[DataSource.text("this is not sieve {{{")])}
-            )
-            checked = batch.sieve.sieve_script.validate(blob_id="#s")
+            checked = batch.sieve.sieve_script.validate(blob_id=blob_id)
         assert checked.result.is_valid is False
         assert checked.result.problem is not None
+        # Any error at all used to satisfy this, so a server that never found the
+        # blob passed it while validating nothing. The verdict has to be about
+        # the script.
+        assert checked.result.problem.type != "blobNotFound"
 
     def test_the_script_name_limits_are_advertised_sanely(self, alice):
         # §1.2.1 requires at least 512 octets for ManageSieve compatibility, so a

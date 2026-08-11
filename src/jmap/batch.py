@@ -124,8 +124,14 @@ class Batch:
 
         Empty when the capability is unadvertised or carries no fields, so a caller
         parsing it gets the conservative defaults rather than an error.
+
+        The account is resolved rather than assumed - see
+        :meth:`Session.capability_account`. Reading the session-level copy when
+        no account was pinned is what makes these gates inert, or worse, against
+        a server that keeps its real limits per account.
         """
-        return self._capabilities.session.capability_value(urn, self._default_account)
+        session = self._capabilities.session
+        return session.capability_value(urn, session.capability_account(urn, self._default_account))
 
     def add(
         self,
