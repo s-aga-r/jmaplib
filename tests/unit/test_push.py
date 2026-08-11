@@ -467,13 +467,27 @@ class TestTheEventSourceDeadline:
     def test_a_ping_interval_becomes_the_deadline(self):
         # §7.3: the server sends an empty event every `ping` seconds, so silence
         # past that is evidence rather than patience.
-        listener = PushListener("https://x/es", close_after_state=False, ping=30)
-        assert listener.read_timeout == 30 + PING_TIMEOUT_SLACK
+        listener = PushListener("https://x/es", close_after_state=False, ping=60)
+        assert listener.read_timeout == 60 + PING_TIMEOUT_SLACK
 
     def test_the_deadline_leaves_room_for_a_late_ping(self):
-        listener = PushListener("https://x/es", close_after_state=False, ping=30)
+        listener = PushListener("https://x/es", close_after_state=False, ping=60)
         assert listener.read_timeout is not None
-        assert listener.read_timeout > 30
+        assert listener.read_timeout > 60
+
+    def test_a_request_below_the_portable_floor_still_allows_for_the_clamp(self):
+        # The regression this exists for. §7.3 lets a server set a minimum of up
+        # to 30s, so a 5s request may legally become a 30s interval - and a client
+        # that hangs up at 5s turns two conformant halves into a push feature that
+        # never delivers anything. Stalwart clamps to exactly 30.
+        listener = PushListener("https://x/es", close_after_state=False, ping=5)
+        assert listener.read_timeout == MIN_PORTABLE_PING + PING_TIMEOUT_SLACK
+
+    def test_a_request_above_the_portable_ceiling_needs_no_allowance(self):
+        # A server may only clamp this one *down*, which makes pings arrive
+        # sooner than the deadline assumes - never later.
+        listener = PushListener("https://x/es", close_after_state=False, ping=600)
+        assert listener.read_timeout == 600 + PING_TIMEOUT_SLACK
 
     def test_a_negative_ping_is_treated_as_none(self):
         listener = PushListener("https://x/es", close_after_state=False, ping=-1)

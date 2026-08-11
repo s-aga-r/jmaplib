@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import threading
 import time
 import uuid
 from typing import TYPE_CHECKING
@@ -36,6 +37,7 @@ from jmap.capabilities.push import (
 from jmap.client import JMAPClient
 from jmap.models.push import PushSubscription, StateChange
 from jmap.push import EventSourceClient, Ping, new_subscription
+from jmap.push.eventsource import MIN_PORTABLE_PING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -55,16 +57,20 @@ requires_server = pytest.mark.skipif(
 #: a server may coalesce changes before pushing them.
 PUSH_TIMEOUT = 15.0
 
-#: Every connection here asks for pings, and asks for them often. Two reasons,
-#: both structural rather than stylistic:
+#: Every connection here asks for pings: a ping is the only thing that bounds how
+#: long the client will wait on a silent stream, and with none requested the read
+#: blocks indefinitely - correct for a push client, useless for a test suite.
 #:
-#: * A ping is the only thing that bounds how long the client will wait on a
-#:   silent stream - with none requested the read blocks indefinitely, which is
-#:   correct for a push client and useless for a test suite.
-#: * Iteration only checks its own deadline *between* events, so the ping
-#:   interval is also the granularity of every timeout below. At the 30s these
-#:   tests used to ask for, a 15s budget could not be honoured at all.
-PING_SECONDS = 5
+#: Asking for less than this buys nothing. RFC 8620 §7.3 lets a server set a
+#: minimum of up to 30s, so a smaller request is simply clamped back up; Stalwart
+#: does exactly that. It also sets the pace of everything below, because a server
+#: sends nothing at all on connect - the first traffic on an idle account is the
+#: first ping, 30s in.
+PING_SECONDS = MIN_PORTABLE_PING
+
+#: Long enough to see that first ping, since several tests below need traffic on
+#: an account where nothing is happening.
+PING_TIMEOUT = PING_SECONDS + 20.0
 
 
 def requires_method(client: JMAPClient, method: str) -> None:
@@ -117,6 +123,42 @@ def destroy(client: JMAPClient, email_id: str) -> None:
         batch.mail.email.set(destroy=[email_id])
 
 
+#: How long to give the caller to get its stream open before writing.
+WRITE_DELAY = 2.0
+
+
+@contextlib.contextmanager
+def draft_written_after_connecting(
+    client: JMAPClient, mailbox_id: str, subject: str
+) -> Iterator[None]:
+    """Write a draft shortly *after* the caller opens its event source.
+
+    The ordering is the whole point. A server registers a push subscriber when
+    the stream opens and does not replay what it missed, so a change made before
+    connecting - which is what these tests used to do - is a change nobody will
+    ever be notified about. The test then waits out its entire budget for a
+    notification that was never going to come, and reports it as a push failure.
+
+    The write goes on a thread because the connection is only established by
+    iterating, which blocks: there is no point between "connected" and "waiting"
+    at which this thread of control gets to do anything.
+    """
+    created: list[str] = []
+
+    def write() -> None:
+        time.sleep(WRITE_DELAY)
+        created.append(make_draft(client, mailbox_id, subject))
+
+    writer = threading.Thread(target=write, daemon=True)
+    writer.start()
+    try:
+        yield
+    finally:
+        writer.join(timeout=PING_TIMEOUT)
+        for email_id in created:
+            destroy(client, email_id)
+
+
 @requires_server
 class TestEventSource:
     def test_the_connection_is_accepted(self, alice):
@@ -133,8 +175,13 @@ class TestEventSource:
         requires_event_source(alice)
         source = EventSourceClient(alice, close_after_state=True, ping=PING_SECONDS)
         # An error status or a wrong content type raises out of the iterator.
+        # Slow by nature: with nothing happening in the account, the first event
+        # is the first ping, and §7.3 lets the server hold that for 30s.
         with contextlib.closing(source.events()) as events:
-            assert next(events, None) is not None, "connection produced no events"
+            # Bounded by the client's own read deadline, which is derived from
+            # the ping interval - so a stream that goes silent raises rather than
+            # hanging here.
+            assert next(events, None) is not None, "connection closed without an event"
 
     def test_a_change_this_client_makes_is_pushed_back(self, alice, drafts):
         """The end-to-end proof, and the only one that needs a real server.
@@ -147,13 +194,10 @@ class TestEventSource:
         subject = f"jmaplib push {uuid.uuid4().hex[:8]}"
         source = EventSourceClient(alice, close_after_state=True, ping=PING_SECONDS)
 
-        email_id = make_draft(alice, drafts, subject)
-        try:
+        with draft_written_after_connecting(alice, drafts, subject):
             change = _wait_for_state_change(source, "Email")
-            assert change is not None, f"no Email StateChange within {PUSH_TIMEOUT}s"
-            assert "Email" in change.types()
-        finally:
-            destroy(alice, email_id)
+        assert change is not None, f"no Email StateChange within {PUSH_TIMEOUT}s"
+        assert "Email" in change.types()
 
     def test_the_cursor_comes_back_on_a_reconnect(self, alice, drafts):
         """Resumption is what makes a dropped connection cost latency, not data.
@@ -165,17 +209,17 @@ class TestEventSource:
         subject = f"jmaplib resume {uuid.uuid4().hex[:8]}"
         source = EventSourceClient(alice, close_after_state=True, ping=PING_SECONDS)
 
-        email_id = make_draft(alice, drafts, subject)
-        try:
+        with draft_written_after_connecting(alice, drafts, subject):
             _wait_for_state_change(source, "Email")
-            if not source.last_event_id:
-                pytest.skip("server sends no event ids, so there is nothing to resume from")
-            # The second connection carries Last-Event-ID; that it is accepted at
-            # all is the assertion, since a server rejecting it would raise.
-            with contextlib.closing(source.events()) as events:
-                next(events, None)
-        finally:
-            destroy(alice, email_id)
+        if not source.last_event_id:
+            pytest.skip("server sends no event ids, so there is nothing to resume from")
+
+        # The second connection carries Last-Event-ID; that it is accepted at all
+        # is the assertion, since a server rejecting it would raise. The destroy
+        # above is itself a change, so this need not wait for a ping.
+        second = f"jmaplib resume again {uuid.uuid4().hex[:8]}"
+        with draft_written_after_connecting(alice, drafts, second):
+            _wait_for_state_change(source, "Email")
 
     def test_a_ping_never_moves_the_cursor(self, alice):
         """RFC 8620 §7.3 forbids a ping from setting an event id.
@@ -187,7 +231,7 @@ class TestEventSource:
         source = EventSourceClient(alice, ping=PING_SECONDS)
         before = source.last_event_id
         saw_ping = False
-        deadline = time.monotonic() + PUSH_TIMEOUT
+        deadline = time.monotonic() + PING_TIMEOUT
         with contextlib.closing(source.events()) as events:
             for event in events:
                 if isinstance(event, Ping):
@@ -196,7 +240,7 @@ class TestEventSource:
                 if time.monotonic() > deadline:
                     break
         if not saw_ping:
-            pytest.skip("no ping arrived within the window")
+            pytest.skip(f"no ping arrived within {PING_TIMEOUT}s")
         assert source.last_event_id == before
 
 

@@ -36,6 +36,7 @@ from jmap.core.errors import AuthenticationError, TransportError
 from jmap.push.eventsource import (
     CLOSE_AFTER_NO,
     CLOSE_AFTER_STATE,
+    MIN_PORTABLE_PING,
     EventStream,
     event_source_url,
     stream_headers,
@@ -58,7 +59,9 @@ DEFAULT_RECONNECT_SECONDS = 3.0
 
 #: Added to the ping interval before a silent connection is declared dead. A
 #: server promising a ping "every n seconds" is not promising a stopwatch, and
-#: hanging up on it one second late costs a reconnect for nothing.
+#: hanging up on it one second late costs a reconnect for nothing. Generous
+#: because the cost of being wrong is asymmetric: too long delays noticing a dead
+#: connection, too short kills a healthy one.
 PING_TIMEOUT_SLACK = 10.0
 
 
@@ -100,10 +103,20 @@ class PushListener:
         deadline, so there is none: waiting indefinitely is what "tell me when
         something changes" means. A caller who wants to bound that instead should
         ask for pings, which is the mechanism the protocol provides for it.
+
+        The deadline is not the *requested* interval, though, because a server
+        may lengthen it - and one that clamps a 5s request up to 30s while the
+        client hangs up at 5s produces a dead push feature out of two conformant
+        halves. Stalwart clamps to exactly that. §7.3 bounds how far this can go:
+        a server's minimum may be no higher than :data:`MIN_PORTABLE_PING`, so
+        ``max(requested, 30)`` is an upper bound on the interval any conformant
+        server will actually use. Asking for *more* than
+        :data:`MAX_PORTABLE_PING` is safe for the opposite reason - a server may
+        only clamp that back down, which means pings arrive sooner, never later.
         """
         if self._ping <= 0:
             return None
-        return self._ping + PING_TIMEOUT_SLACK
+        return max(self._ping, MIN_PORTABLE_PING) + PING_TIMEOUT_SLACK
 
     @property
     def last_event_id(self) -> str:

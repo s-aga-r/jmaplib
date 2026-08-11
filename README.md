@@ -275,8 +275,10 @@ Two rules here are silent when broken, so the library encodes both:
 source is idle by design, so it does *not* inherit the HTTP client's read timeout
 — httpx defaults that to five seconds, which would hang up on every healthy
 connection. A requested ping is a promise of traffic on a schedule and becomes the
-deadline; with no ping requested there is no such promise and the client waits
-indefinitely, which is what "notify me when something changes" means.
+deadline — allowing for the fact that §7.3 lets a server round a request up to a
+minimum of 30 seconds, so asking for 5 and hanging up at 5 would kill a perfectly
+conformant connection. With no ping requested there is no promise at all and the
+client waits indefinitely, which is what "notify me when something changes" means.
 
 Registering a URL instead is a three-step dance, and the middle step is the
 security property: the server pushes a `PushVerification` and makes **no further
