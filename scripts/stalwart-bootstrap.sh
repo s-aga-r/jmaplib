@@ -134,22 +134,49 @@ ADMIN_ACCOUNT=$(curl -fsS -m 10 -u "${ADMIN_USER}:${ADMIN_PASS}" "${URL}/jmap/se
   | python3 -c 'import json,sys; print(next(iter(json.load(sys.stdin)["accounts"])))')
 
 # --- 4. provision the test accounts ----------------------------------------- #
-# `name` is the login name and is validated as an email *local part*: passing
-# "alice@example.com" earns `invalidPatch: Invalid email local part`. The
-# addresses go in `emails`, and Stalwart accepts either form at login - which the
-# verification step below is what actually proves.
+# The shape below is read off a real account rather than guessed. Two fields are
+# not what you would expect from JMAP habits, and both earn a bare
+# `invalidPatch: Invalid key for object` with an empty `properties` list - an
+# error that names nothing:
+#
+#   * `credentials` is a **map** keyed by an index string, each value a tagged
+#     `{"@type": "Password", "secret": ...}`. There is no `secrets` array.
+#   * the address is a single `emailAddress`, derived from `name` + the domain.
+#     There is no `emails` array, and `name` is the local part alone.
+#
+# `domainId` points at a Domain object, so it is read from the administrator that
+# bootstrap just created rather than assumed.
+log "reading the administrator for its domain"
+ADMIN_OBJECT=$(jmap "${ADMIN_USER}:${ADMIN_PASS}" \
+  "[[\"x:Account/get\",{\"accountId\":\"${ADMIN_ACCOUNT}\",\"ids\":null},\"c0\"]]")
+DOMAIN_ID=$(python3 - <<PY
+import json
+response = json.loads('''$ADMIN_OBJECT''')
+name, arguments, _ = response["methodResponses"][0]
+if name == "error":
+    raise SystemExit(f"x:Account/get failed: {arguments}")
+accounts = arguments.get("list") or []
+if not accounts or not accounts[0].get("domainId"):
+    raise SystemExit(f"no domainId on the administrator: {accounts}")
+print(accounts[0]["domainId"])
+PY
+)
+log "domain id: ${DOMAIN_ID}"
+
 log "creating alice@${DOMAIN} and bob@${DOMAIN}"
-CREATE_BODY=$(python3 - "$ADMIN_ACCOUNT" "$DOMAIN" "$ALICE_PASS" "$BOB_PASS" <<'PY'
+CREATE_BODY=$(python3 - "$ADMIN_ACCOUNT" "$DOMAIN_ID" "$ALICE_PASS" "$BOB_PASS" <<'PY'
 import json, sys
-account_id, domain, alice_pass, bob_pass = sys.argv[1:5]
+account_id, domain_id, alice_pass, bob_pass = sys.argv[1:5]
+
 def user(name, secret):
     return {
         "@type": "User",
         "name": name,
+        "domainId": domain_id,
         "description": f"{name} (integration tests)",
-        "secrets": [secret],
-        "emails": [f"{name}@{domain}"],
+        "credentials": {"0": {"@type": "Password", "secret": secret}},
     }
+
 create = {"alice": user("alice", alice_pass), "bob": user("bob", bob_pass)}
 print(json.dumps([["x:Account/set", {"accountId": account_id, "create": create}, "c0"]]))
 PY
@@ -157,15 +184,11 @@ PY
 CREATE_RESPONSE=$(jmap "${ADMIN_USER}:${ADMIN_PASS}" "$CREATE_BODY")
 echo "$CREATE_RESPONSE" | head -c 600; echo
 
-# On failure, ask the server what a user account actually looks like rather than
-# guessing again. The administrator created during bootstrap *is* an x:Account, so
-# reading it back shows the exact keys, populated - a more direct answer than a
-# schema, and one call away.
+# On failure, read an existing account back: it is the same object type, so its
+# populated keys are the authority on what this one should have looked like.
 if echo "$CREATE_RESPONSE" | grep -q notCreated; then
-  echo "--- creation failed; reading an existing account for its shape" >&2
-  jmap "${ADMIN_USER}:${ADMIN_PASS}" \
-    "[[\"x:Account/get\",{\"accountId\":\"${ADMIN_ACCOUNT}\",\"ids\":null},\"c0\"]]" \
-    | head -c 3000 >&2
+  echo "--- creation failed; here is a real account for comparison" >&2
+  echo "$ADMIN_OBJECT" | head -c 3000 >&2
   echo >&2
 fi
 

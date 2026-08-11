@@ -127,7 +127,9 @@ jobs:
           JMAP_TEST_PASS2: ${{ env.BOB_PASSWORD }}
 
       - name: conformance matrix
-        if: always()
+        # Only when the bootstrap actually produced a credential; running it with
+        # an empty password just prints an authentication failure.
+        if: env.ALICE_PASSWORD != ''
         run: |
           uv run python -m jmap.testing.conformance \
             http://localhost:8080/.well-known/jmap \
