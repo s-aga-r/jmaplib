@@ -28,6 +28,7 @@ from jmap.capabilities.spec import (
 )
 from jmap.core.errors import CapabilityNotSupportedError
 from jmap.core.ids import Id
+from jmap.core.limits import LimitKey
 from jmap.core.session import Session
 
 MAIL_URN = "urn:ietf:params:jmap:mail"
@@ -211,7 +212,32 @@ class TestResolution:
         opted_in = registry.resolve(session, experimental=True)
         assert opted_in.supports("Calendar/get")
 
-    def test_two_capabilities_claiming_one_method_is_a_registry_bug(self):
+    def test_two_capabilities_disagreeing_about_a_method_is_a_registry_bug(self):
+        # A genuine disagreement about what a method *is*: one chunks against
+        # maxObjectsInGet, the other does not. Resolution would have to pick, and
+        # either choice is wrong for the other capability's caller.
+        registry = Registry()
+        registry.register(CORE)
+        registry.register(MAIL)
+        registry.register(
+            CapabilitySpec(
+                urn="urn:vendor:mail",
+                methods=(
+                    MethodSpec(
+                        name="Email/get", kind=MethodKind.GET, chunk_by=LimitKey.GET_OBJECTS
+                    ),
+                ),
+            )
+        )
+        session = make_session({CORE_URN: {}, MAIL_URN: {}, "urn:vendor:mail": {}})
+        with pytest.raises(ConflictingMethodError, match="Email/get"):
+            registry.resolve(session)
+
+    def test_two_capabilities_declaring_one_method_identically_is_fine(self):
+        # Not an ambiguity: either resolution builds the same call, and both URNs
+        # are advertised and legal in `using`. The pre-RFC contacts model is the
+        # real case - Fastmail and Cyrus gate an identical inventory behind their
+        # own vendor URNs, and a server may advertise both.
         registry = Registry()
         registry.register(CORE)
         registry.register(MAIL)
@@ -222,8 +248,12 @@ class TestResolution:
             )
         )
         session = make_session({CORE_URN: {}, MAIL_URN: {}, "urn:vendor:mail": {}})
-        with pytest.raises(ConflictingMethodError, match="Email/get"):
-            registry.resolve(session)
+        active = registry.resolve(session)
+        assert active.supports("Email/get")
+        # The first URN in sorted order wins, deterministically.
+        owner = active.owner_of("Email/get")
+        assert owner is not None
+        assert owner.urn == MAIL_URN
 
     def test_repr_summarises(self, registry):
         active = registry.resolve(make_session({CORE_URN: {}, "urn:vendor:x": {}}))

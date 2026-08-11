@@ -5,6 +5,45 @@ with one deliberate exception: capabilities marked `experimental=True` track IET
 drafts and are excluded from the compatibility promise. See `jmap.SPEC_REVISIONS`
 for exactly which revision of each spec this build implements.
 
+## 1.0.0
+
+The capability surface is complete: every JMAP RFC published to date, plus the two
+Internet-Drafts, plus the vendor extensions two real servers ship. From here the
+names below are a promise — with one stated exception, which is that capabilities
+marked `experimental=True` track drafts and are excluded from it.
+
+### Added
+
+**MDN** (RFC 9007) — `MDN/send` and `MDN/parse`. This capability is unusual in
+that the *server* polices the *client's* bookkeeping: §2.1 requires a send to also
+set `$mdnsent` on the message being acknowledged, and requires the server to check
+`onSuccessUpdateEmail` and reject the call otherwise. So the patch is part of a
+well-formed request rather than optional garnish, and the builder supplies it by
+default. `$mdnsent` is lowercase — keywords are case-insensitive in IMAP and
+case-*sensitive* in JMAP, and §1.2 fixes the spelling.
+
+**A conformance matrix** (`jmap.testing.conformance`, and
+`python -m jmap.testing.conformance --markdown`). Built from the Session alone, so
+it costs no method calls, and it keeps three states apart that reports usually
+collapse: advertised-and-modelled, advertised-but-not-modelled (a vendor URN or a
+newer spec — still reachable through `batch.add`), and modelled-but-not-advertised,
+which is the line that answers "why is this feature missing".
+
+**A public-API snapshot** (`tests/unit/test_public_api.py`). At 1.0 a rename is a
+breaking change, so it is now a test failure rather than something noticed later.
+
+### Fixed
+
+- **The S/MIME filter conditions were wrong.** RFC 9219 §4.2 defines `hasSmime`,
+  `hasVerifiedSmime` and `hasVerifiedSmimeAtDelivery`; the library declared a
+  `smimeStatus` filter, which no server implements — so a query using it filtered
+  on nothing. The `smimeStatusAtDelivery` *property* was also missing, and it is
+  the one that does not change as trust anchors are removed, which is what makes
+  "was this trusted when it arrived?" answerable at all
+- The registry refused two capabilities declaring the same method even when they
+  declared it *identically*, which the two vendor contacts URNs legitimately do
+  and a server may advertise together. A genuine disagreement is still refused
+
 ## 0.7.0
 
 Four milestones in one release: OAuth acquisition, Contacts, Sharing, Calendars

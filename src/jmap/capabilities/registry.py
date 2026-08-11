@@ -127,9 +127,16 @@ class Registry:
         for spec in resolved.values():
             for method in spec.methods:
                 clash = methods.get(method.name)
-                if clash is not None:
+                # Two capabilities describing the *same* method identically is not
+                # an ambiguity: either resolution builds the same call, and either
+                # owner's URN is advertised and legal in `using`. The pre-RFC
+                # contacts model is the real case - Fastmail and Cyrus gate an
+                # identical Contact/ContactGroup inventory behind their own vendor
+                # URNs, and a server may advertise both. Only a genuine
+                # disagreement about what a method *is* has to be refused.
+                if clash is not None and clash[1] != method:
                     raise ConflictingMethodError(method.name, clash[0].urn, spec.urn)
-                methods[method.name] = (spec, method)
+                methods.setdefault(method.name, (spec, method))
 
         return ActiveCapabilities(
             session=session,

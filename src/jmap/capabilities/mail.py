@@ -63,12 +63,27 @@ EMAIL_DEFAULT_PROPERTIES: Final = (
     "attachments",
 )
 
-#: RFC 9219 §3. S/MIME verification adds properties to Email but no methods at
+#: RFC 9219 §4.1. S/MIME verification adds properties to Email but no methods at
 #: all, so it can only enter ``using`` by being named here.
+#:
+#: ``smimeStatusAtDelivery`` is the one worth knowing about: unlike
+#: ``smimeStatus`` it does not change as trust anchors are removed, so comparing
+#: the two answers "was this trusted when it arrived?" - which is a different
+#: question from "is it trusted now?", and the only one that is stable.
 _SMIME_PROPERTIES: Final = {
     "smimeStatus": SMIME_URN,
+    "smimeStatusAtDelivery": SMIME_URN,
     "smimeErrors": SMIME_URN,
     "smimeVerifiedAt": SMIME_URN,
+}
+
+#: RFC 9219 §4.2. The filter conditions, which are *not* named after the
+#: properties: there is no ``smimeStatus`` filter, and asking for one silently
+#: filters on nothing.
+_SMIME_FILTERS: Final = {
+    "hasSmime": SMIME_URN,
+    "hasVerifiedSmime": SMIME_URN,
+    "hasVerifiedSmimeAtDelivery": SMIME_URN,
 }
 
 EMAIL_TYPE: Final = DataTypeSpec(
@@ -76,7 +91,7 @@ EMAIL_TYPE: Final = DataTypeSpec(
     model=Email,
     default_get_properties=EMAIL_DEFAULT_PROPERTIES,
     adds_properties=_SMIME_PROPERTIES,
-    adds_filter_fields={"smimeStatus": SMIME_URN},
+    adds_filter_fields=_SMIME_FILTERS,
 )
 
 #: RFC 8621 §11. Arrives only over the push channel and has no methods, but must

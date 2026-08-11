@@ -23,6 +23,7 @@ from jmap.capabilities.mail import (
     SUBMISSION,
     VACATION,
 )
+from jmap.capabilities.mdn import MDN_CAPABILITY
 from jmap.capabilities.principals import PRINCIPALS, PRINCIPALS_OWNER
 from jmap.capabilities.push import VAPID, WEBSOCKET
 from jmap.capabilities.quota import QUOTA
@@ -53,6 +54,7 @@ def default_registry() -> Registry:
         CONTACTS,
         FASTMAIL_CONTACTS,
         CYRUS_CONTACTS,
+        MDN_CAPABILITY,
     ):
         registry.register(spec)
     return registry

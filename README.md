@@ -62,7 +62,7 @@ misbehaves without it:
 
 ## Status
 
-**0.7.0** — the whole ecosystem. See [CHANGELOG.md](CHANGELOG.md).
+**1.0.0** — the whole ecosystem. See [CHANGELOG.md](CHANGELOG.md).
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -76,7 +76,7 @@ misbehaves without it:
 | M8 | Contacts (RFC 9610 + vendor), Sharing (RFC 9670) | **done** |
 | M9 | Calendars (draft-27) — *experimental* | **done** |
 | M10 | FileNode (draft-14) — *experimental* → **0.7.0** | **done** |
-| M11 | MDN, S/MIME, conformance matrix, docs → 1.0 | planned |
+| M11 | MDN (RFC 9007), S/MIME, conformance matrix → **1.0.0** | **done** |
 
 > **Two caveats worth stating plainly.**
 >
@@ -93,7 +93,7 @@ misbehaves without it:
 > layer around them, which is where the traps live. Field-by-field models for
 > those two vocabularies are a codegen job and are not done.
 >
-> 2019 tests and 100% coverage all run
+> 2132 tests and 100% coverage all run
 > against the in-process fake server. The live integration suite is written and
 > ready in `tests/integration/`, but has not been run against a real server:
 > Stalwart's v0.16 headless bootstrap is unresolved (see
@@ -354,6 +354,29 @@ batch.fastmail_contacts.contact.query(filter={"text": "Alice"})  # pre-RFC
 Calling `Contact/get` with only the IETF URN in `using` earns `unknownMethod` from
 a server that fully implements it, and the error names the *method* — which reads
 as "this server has no contacts" rather than "you declared the wrong capability".
+
+### What does this server actually do?
+
+Capability presence does not imply method presence — the specs say so outright,
+and RFC 9404 §3.1 describes a server advertising `urn:ietf:params:jmap:blob` while
+implementing no `Blob/lookup` at all. So the honest answer is a matrix:
+
+```console
+python -m jmap.testing.conformance https://example.com/.well-known/jmap \
+    --user alice@example.com --password ... --markdown
+```
+
+It costs no method calls — everything comes from the Session — and it keeps three
+states apart that reports usually collapse into "supported":
+
+| | meaning |
+|---|---|
+| advertised, modelled | typed calls available |
+| advertised, **not** modelled | a vendor URN or a newer spec; still reachable via `batch.add` |
+| modelled, **not** advertised | this build speaks it; this server does not offer it |
+
+That last row is the one that answers "why is this feature missing", and it is
+absent from most conformance reports.
 
 ### `/get` chunks itself; `/set` refuses to
 

@@ -35,6 +35,7 @@ from jmap.capabilities.blob import (
 from jmap.capabilities.sieve import SIEVE_URN, SieveAccountCapability, check_script_name
 from jmap.core.narrow import as_list_of, as_object, is_object
 from jmap.models.base import UNSET, Unset, omit_unset
+from jmap.models.mdn import mdn_sent_patch
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -42,6 +43,7 @@ if TYPE_CHECKING:
     from jmap.core.ids import Id
     from jmap.core.invocation import Handle, ResultRef
     from jmap.models.blob import Blob, BlobCopyResponse, BlobLookupResponse, BlobUpload
+    from jmap.models.mdn import MDNParseResponse, MDNSendResponse
     from jmap.models.responses import GetResponse, SetResponse
     from jmap.models.sieve import SieveValidateResponse
 
@@ -252,6 +254,56 @@ class SieveValidatable(EntityBase[Any]):
         check_script_name(name, SieveAccountCapability.of(self._batch.capability_value(SIEVE_URN)))
 
 
+class MDNSendable(EntityBase[Any]):
+    """``MDN/send`` and ``MDN/parse`` (RFC 9007 §2.1, §2.2)."""
+
+    __slots__ = ()
+
+    def send(
+        self,
+        *,
+        identity_id: Id,
+        send: Mapping[str, Any],
+        on_success_update_email: Mapping[str, Any] | None = None,
+        **extra: Any,
+    ) -> Handle[MDNSendResponse]:
+        """Send read receipts, marking the acknowledged messages as done.
+
+        ``on_success_update_email`` defaults to the ``$mdnsent`` patch every send
+        needs, because RFC 9007 §2.1 makes the server *check* for it and reject
+        the call otherwise - so leaving it out is not "send without bookkeeping",
+        it is "send nothing". Pass an explicit mapping to add to it; pass one that
+        omits ``$mdnsent`` and the server will refuse, which is its job rather
+        than ours to enforce.
+
+        A message that already carries ``$mdnsent`` must not be acknowledged
+        again (§2.1); :func:`jmap.models.mdn.already_sent` is the check, and it
+        needs the message's keywords, which this call does not have.
+        """
+        updates = (
+            dict(on_success_update_email)
+            if on_success_update_email is not None
+            else {f"#{creation_id}": mdn_sent_patch() for creation_id in send}
+        )
+        return self._add(
+            "send",
+            {
+                "identityId": identity_id,
+                "send": {key: _to_wire(value) for key, value in send.items()},
+                "onSuccessUpdateEmail": updates,
+                **extra,
+            },
+        )
+
+    def parse(self, *, blob_ids: Sequence[Id], **extra: Any) -> Handle[MDNParseResponse]:
+        """Read blobs as MDN messages.
+
+        Pairs with ``EmailSubmission``'s ``mdnBlobIds``, which is where receipts
+        for messages *you* sent turn up.
+        """
+        return self._add("parse", {"blobIds": list(blob_ids), **extra})
+
+
 #: Method name -> the mixin that builds it. Consulted alongside the six standard
 #: shapes, so an irregular method still yields a typed builder and, like the
 #: standard ones, only appears when the server declares the method.
@@ -261,4 +313,6 @@ CUSTOM_BUILDERS: dict[str, type[EntityBase[Any]]] = {
     "Blob/lookup": BlobLookupable,
     "Blob/copy": BlobCopyable,
     "SieveScript/validate": SieveValidatable,
+    "MDN/send": MDNSendable,
+    "MDN/parse": MDNSendable,
 }
