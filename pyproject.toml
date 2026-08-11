@@ -1,0 +1,175 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jmaplib"
+dynamic = ["version"]
+description = "A complete, capability-driven JMAP client for Python"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Sagar Sharma", email = "sagarsharma.s312@gmail.com" }]
+keywords = ["jmap", "email", "calendar", "contacts", "rfc8620", "rfc8621"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Email",
+    "Topic :: Internet",
+    "Typing :: Typed",
+]
+dependencies = ["httpx>=0.28,<1", "pydantic>=2.11,<3"]
+
+[project.optional-dependencies]
+discovery = ["dnspython>=2.6"]
+ws = ["httpx-ws>=0.7"]
+push = ["cryptography>=43"]
+cli = ["typer>=0.15", "rich>=13"]
+
+[project.urls]
+Homepage = "https://github.com/s-aga-r/jmaplib"
+Issues = "https://github.com/s-aga-r/jmaplib/issues"
+
+# The fake JMAP server will ship as a pytest plugin so downstream users get
+# `jmap_fake_server` / `jmap_client` fixtures from `pip install jmaplib` alone.
+# Registered in M2, when the fixtures exist. Enabling it earlier only distorts
+# coverage: pytest loads entry-point plugins before coverage starts, so importing
+# `jmap.testing.plugin` executes `jmap/__init__.py` untraced.
+# [project.entry-points.pytest11]
+# jmaplib = "jmap.testing.plugin"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "anyio>=4.7",
+    "trio>=0.28",
+    "hypothesis>=6.120",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "pyright>=1.1.390",
+    "import-linter>=2.1",
+]
+
+[tool.hatch.version]
+path = "src/jmap/__about__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jmap"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/README.md", "/LICENSE"]
+
+# --------------------------------------------------------------------------- #
+# Lint / format
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",      # pycodestyle, pyflakes
+    "I",                # isort
+    "UP",               # pyupgrade
+    "B",                # bugbear
+    "C4",               # comprehensions
+    "SIM",              # simplify
+    "RUF",              # ruff-specific
+    "PT",               # pytest style
+    "TCH",              # type-checking imports
+    "ANN",              # annotations
+    "N",                # pep8-naming
+]
+ignore = [
+    "ANN401",  # Any is legitimate at the JMAPObject / raw-wire boundary
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "S101"]
+# Pydantic resolves annotations at runtime to build models, so hoisting the types
+# they reference into a TYPE_CHECKING block breaks model construction.
+"src/jmap/models/**" = ["TC001", "TC002", "TC003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["jmap"]
+
+# --------------------------------------------------------------------------- #
+# Type checking
+# --------------------------------------------------------------------------- #
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+disallow_any_explicit = false
+plugins = ["pydantic.mypy"]
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = true
+
+# --------------------------------------------------------------------------- #
+# Tests
+# --------------------------------------------------------------------------- #
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config -m 'not integration'"
+markers = [
+    "integration: requires a live JMAP server (set JMAP_TEST_URL); deselected by default",
+]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["src/jmap"]
+branch = true
+
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:", "@overload", "raise NotImplementedError"]
+
+# --------------------------------------------------------------------------- #
+# Layering contract — core must stay I/O-free, capabilities must not know the client
+# --------------------------------------------------------------------------- #
+[tool.importlinter]
+root_package = "jmap"
+# Required because the "core is I/O-free" contract forbids external packages.
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "core is I/O-free"
+type = "forbidden"
+source_modules = ["jmap.core"]
+forbidden_modules = ["httpx", "asyncio", "anyio", "socket", "ssl"]
+
+[[tool.importlinter.contracts]]
+name = "capabilities do not import the client"
+type = "forbidden"
+source_modules = ["jmap.capabilities"]
+forbidden_modules = ["jmap.transport"]
+
+[[tool.importlinter.contracts]]
+name = "layers"
+type = "layers"
+# Parenthesised layers are optional: client.py and aio.py arrive in M2, and the
+# contract must not fail the build before they exist.
+layers = [
+    "(jmap.client) | (jmap.aio)",
+    "jmap.api",
+    "jmap.capabilities",
+    "jmap.models",
+    "jmap.core",
+]
