@@ -41,6 +41,17 @@ def request_headers(*, accept_language: str | None = None) -> dict[str, str]:
     return headers
 
 
+#: Why a blob operation could not work out which account it belongs to. Its own
+#: constant because the reason differs from every other account resolution in the
+#: library: `primaryAccounts` cannot answer for blobs at all, so pointing at it
+#: would send the reader looking for a session field that is correctly absent.
+NO_BLOB_ACCOUNT: Final = (
+    "and blobs have no primaryAccounts entry to fall back on (RFC 8620 §2 keys "
+    "that map by capability, and blobs belong to none) - so pass account_id, or "
+    "set a default on the client"
+)
+
+
 def problem_of(status: int, headers: Mapping[str, str], body: bytes) -> RequestError | None:
     """Build a :class:`RequestError` if the response is an RFC 7807 problem.
 

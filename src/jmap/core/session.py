@@ -223,6 +223,25 @@ class Session:
         """
         return self.primary_accounts.get(urn)
 
+    def sole_account(self) -> Id | None:
+        """The account, when the session has exactly one.
+
+        Blob upload and download are account-scoped but belong to no capability,
+        so ``primaryAccounts`` has nothing to say about them: RFC 8620 §2 keys
+        that map by capability URN, and the core capability has no data to be
+        primary *for*. Real servers list nothing there for it - Stalwart does not
+        - which leaves an ordinary single-account session unable to name its own
+        account, and every blob upload failing on a session where no account was
+        ever ambiguous.
+
+        Answering here is not the guess :meth:`primary_account_for` refuses. That
+        one declines to pick a favourite among several; this one reports the only
+        candidate there is, and still answers ``None`` the moment there are two.
+        """
+        if len(self.accounts) != 1:
+            return None
+        return next(iter(self.accounts))
+
     def accounts_with(self, urn: str) -> tuple[Id, ...]:
         """Every account whose ``accountCapabilities`` includes ``urn``."""
         return tuple(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from jmap.capabilities.push import (
@@ -40,6 +41,7 @@ from jmap.push.eventsource import (
     resume_headers,
     stream_headers,
 )
+from jmap.push.listener import PING_TIMEOUT_SLACK, PushListener, stream_timeout
 from jmap.push.subscription import (
     InsecurePushUrlError,
     PendingVerification,
@@ -450,3 +452,41 @@ class TestVapid:
     def test_the_spec_adds_no_methods(self):
         assert VAPID.methods == ()
         assert VAPID.urn == VAPID_URN
+
+
+class TestTheEventSourceDeadline:
+    """An event source is idle by design, so the HTTP client's read timeout is
+    exactly the wrong deadline to inherit: it bounds how long a *healthy* stream
+    may wait for the next change. httpx defaults it to five seconds."""
+
+    def test_no_ping_means_no_deadline(self):
+        # Nothing was promised, so nothing can be concluded from silence.
+        listener = PushListener("https://x/es", close_after_state=False, ping=0)
+        assert listener.read_timeout is None
+
+    def test_a_ping_interval_becomes_the_deadline(self):
+        # §7.3: the server sends an empty event every `ping` seconds, so silence
+        # past that is evidence rather than patience.
+        listener = PushListener("https://x/es", close_after_state=False, ping=30)
+        assert listener.read_timeout == 30 + PING_TIMEOUT_SLACK
+
+    def test_the_deadline_leaves_room_for_a_late_ping(self):
+        listener = PushListener("https://x/es", close_after_state=False, ping=30)
+        assert listener.read_timeout is not None
+        assert listener.read_timeout > 30
+
+    def test_a_negative_ping_is_treated_as_none(self):
+        listener = PushListener("https://x/es", close_after_state=False, ping=-1)
+        assert listener.read_timeout is None
+
+    def test_only_the_read_leg_is_replaced(self):
+        # Connecting to an event source should fail as fast as connecting to
+        # anything else; it is the waiting that differs.
+        base = httpx.Timeout(7.0, connect=3.0)
+        timeout = stream_timeout(base, None)
+        assert (timeout.connect, timeout.write, timeout.pool) == (3.0, 7.0, 7.0)
+        assert timeout.read is None
+
+    def test_a_finite_read_deadline_is_carried_through(self):
+        timeout = stream_timeout(httpx.Timeout(5.0), 40.0)
+        assert timeout.read == 40.0

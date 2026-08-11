@@ -7,7 +7,14 @@ from typing import Any
 import pytest
 
 from jmap.core.errors import MethodError
-from jmap.core.invocation import Handle, MethodCall, ParsedInvocation, ResultRef
+from jmap.core.ids import CreationRef
+from jmap.core.invocation import (
+    Handle,
+    MethodCall,
+    NestedResultRefError,
+    ParsedInvocation,
+    ResultRef,
+)
 
 
 def call(name: str = "Email/get", **arguments: Any) -> MethodCall[dict[str, Any]]:
@@ -47,6 +54,62 @@ class TestMethodCall:
 
     def test_no_references_leaves_arguments_untouched(self):
         assert call(ids=["m1"]).to_wire_arguments() == {"ids": ["m1"]}
+
+
+class TestCreationReferences:
+    """RFC 8620 §5.3 - the ``#id`` form, and the only way to point at an object
+    created earlier in the same request from *inside* another object."""
+
+    def test_a_creation_ref_becomes_a_hash_string(self):
+        args = call(
+            "EmailSubmission/set", create={"s1": {"emailId": CreationRef("d1")}}
+        ).to_wire_arguments()
+        assert args["create"]["s1"]["emailId"] == "#d1"
+
+    def test_it_is_converted_at_any_depth(self):
+        method = call("Email/set", create={"e1": {"mailboxIds": [CreationRef("m1")]}})
+        args = method.to_wire_arguments()
+        assert args["create"]["e1"]["mailboxIds"] == ["#m1"]
+
+    def test_a_top_level_creation_ref_is_converted_too(self):
+        assert call("Email/set", destroy=CreationRef("d1")).to_wire_arguments() == {
+            "destroy": "#d1"
+        }
+
+    def test_the_result_is_json_serialisable(self):
+        # The regression this exists for: CreationRef documented itself as
+        # serialising to "#id" while nothing ever called __str__, so it reached
+        # json.dumps as an object and died there.
+        from jmap.core.ijson import dumps
+
+        wire = call("Email/set", create={"e1": {"x": CreationRef("d1")}}).to_wire_arguments()
+        assert "#d1" in dumps(wire)
+
+
+class TestNestedBackReferences:
+    """§3.7 renames the argument to carry a reference, so there is nowhere to put
+    one that is not a whole top-level argument."""
+
+    def test_a_nested_ref_is_refused_locally(self):
+        ref: ResultRef[Any] = ResultRef("c0", "Email/set", "/created/d1/id")
+        method = call("EmailSubmission/set", create={"s1": {"emailId": ref}})
+        with pytest.raises(NestedResultRefError) as excinfo:
+            method.to_wire_arguments()
+        assert excinfo.value.path == "/create/s1/emailId"
+
+    def test_the_error_names_the_alternative_that_works(self):
+        method = call("Email/set", create={"e1": {"x": ResultRef("c0", "Email/query", "/ids")}})
+        with pytest.raises(NestedResultRefError, match="CreationRef"):
+            method.to_wire_arguments()
+
+    def test_a_ref_inside_a_list_is_caught_with_its_index(self):
+        method = call("Email/set", update={"m1": {"tags": [ResultRef("c0", "X/get", "/a")]}})
+        with pytest.raises(NestedResultRefError) as excinfo:
+            method.to_wire_arguments()
+        assert excinfo.value.path == "/update/m1/tags/0"
+
+    def test_a_top_level_ref_is_still_perfectly_legal(self):
+        assert "#ids" in call(ids=ResultRef("c0", "Email/query", "/ids")).to_wire_arguments()
 
 
 class TestParsedInvocation:

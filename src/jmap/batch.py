@@ -52,12 +52,12 @@ class NoAccountError(JMAPError):
     at an account that has no mail and returns ``accountNotSupportedByMethod``.
     """
 
-    def __init__(self, method: str, urn: str) -> None:
+    def __init__(self, method: str, urn: str, *, reason: str = "") -> None:
         self.method = method
         self.urn = urn
         super().__init__(
             f"{method} needs an accountId: none was passed, no client default is set, "
-            f"and the session lists no primaryAccounts entry for {urn}"
+            + (reason or f"and the session lists no primaryAccounts entry for {urn}")
         )
 
 

@@ -271,6 +271,13 @@ Two rules here are silent when broken, so the library encodes both:
   otherwise hold a stream back indefinitely, so the server ending it after one
   event is what was asked for. `listen()` reconnects rather than backing off.
 
+`ping` also decides how long the client will wait on a silent stream. An event
+source is idle by design, so it does *not* inherit the HTTP client's read timeout
+— httpx defaults that to five seconds, which would hang up on every healthy
+connection. A requested ping is a promise of traffic on a schedule and becomes the
+deadline; with no ping requested there is no such promise and the client waits
+indefinitely, which is what "notify me when something changes" means.
+
 Registering a URL instead is a three-step dance, and the middle step is the
 security property: the server pushes a `PushVerification` and makes **no further
 request** to that URL until the code comes back — which is what stops a
@@ -499,6 +506,25 @@ with client.batch() as batch:
 print(emails.result["list"])  # readable once the block exits
 ```
 
+A back-reference replaces a whole argument, because that is all the wire format
+can express: `ids` becomes `#ids`. To point at an object being created in the
+*same* request — a draft you are submitting as you write it — the mechanism is a
+creation reference, which is an ordinary string and so works at any depth:
+
+```python
+from jmap import CreationRef
+
+with client.batch() as batch:
+    batch.mail.email.set(create={"draft": {...}})
+    batch.submission.email_submission.set(
+        create={"send": {"emailId": CreationRef("draft"), "identityId": identity}}
+    )
+```
+
+Putting a `ResultRef` inside a `create` object instead raises
+`NestedResultRefError` locally, naming the argument and pointing here — rather
+than failing as a `TypeError` from inside the JSON encoder.
+
 The async client is a mirror — same names, same behaviour, `await` in front:
 
 ```python
@@ -522,7 +548,8 @@ These all raise before anything reaches the wire:
 |---|---|
 | Method no advertised capability provides | `UnsupportedMethodError` |
 | Mutation aimed at a read-only account | `ReadOnlyAccountError` |
-| No `accountId`, and no `primaryAccounts` entry to resolve one | `NoAccountError` |
+| No `accountId`, and no single account to resolve one | `NoAccountError` |
+| Back-reference nested inside a `create` object | `NestedResultRefError` |
 | Requesting a property the server never returns | `CapabilityFieldError` |
 | `/set` larger than `maxObjectsInSet` | `CapabilityFieldError` |
 | Reference chain that cannot fit `maxCallsInRequest` | `BatchTooLargeError` |

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import pytest
@@ -39,6 +39,14 @@ def registry() -> Registry:
     for spec in (CORE, MAIL, SUBMISSION, VACATION):
         reg.register(spec)
     return reg
+
+
+#: Two accounts is what makes "which account?" a real question. One is not a
+#: guess, it is the answer.
+TWO_ACCOUNTS: Final = {
+    "a": {"name": "alice@example.com", "isPersonal": True, "isReadOnly": False},
+    "b": {"name": "shared", "isPersonal": False, "isReadOnly": False},
+}
 
 
 def server(**kwargs: Any) -> FakeJMAPServer:
@@ -117,15 +125,35 @@ class TestBlobTransfer:
         with connect(fake) as client, pytest.raises(RequestError):
             client.download("nope")
 
-    def test_upload_without_a_resolvable_account(self):
+    def test_a_single_account_session_needs_no_primary_accounts_entry(self):
+        # The regression this exists for. Blobs are account-scoped but belong to
+        # no capability, so RFC 8620 §2's primaryAccounts map - which is keyed by
+        # capability - can never name their account, and real servers list
+        # nothing there for core. Refusing to answer meant every upload against
+        # an ordinary one-account server failed, with nothing ambiguous about it.
         fake = server(primary_accounts={})
+        with connect(fake) as client:
+            uploaded = client.upload(b"x")
+            assert uploaded.account_id == "a"
+            assert client.download(str(uploaded.blob_id)) == b"x"
+
+    def test_upload_without_a_resolvable_account(self):
+        fake = server(primary_accounts={}, accounts=TWO_ACCOUNTS)
         with connect(fake) as client, pytest.raises(NoAccountError, match="upload"):
             client.upload(b"x")
 
     def test_download_without_a_resolvable_account(self):
-        fake = server(primary_accounts={})
+        fake = server(primary_accounts={}, accounts=TWO_ACCOUNTS)
         with connect(fake) as client, pytest.raises(NoAccountError, match="download"):
             client.download("B1")
+
+    def test_the_error_does_not_send_the_reader_to_primary_accounts(self):
+        # It has no entry to find there and never will; saying so is a wild goose
+        # chase through a session field that is correctly absent.
+        fake = server(primary_accounts={}, accounts=TWO_ACCOUNTS)
+        with connect(fake) as client, pytest.raises(NoAccountError) as excinfo:
+            client.upload(b"x")
+        assert "account_id" in str(excinfo.value)
 
     def test_an_explicit_account_overrides_the_default(self):
         fake = server()
@@ -165,7 +193,7 @@ class TestBlobTransfer:
 
     @pytest.mark.asyncio
     async def test_async_needs_an_account_too(self):
-        fake = server(primary_accounts={})
+        fake = server(primary_accounts={}, accounts=TWO_ACCOUNTS)
         http = httpx.AsyncClient(**fake.client_kwargs())
         async with await AsyncJMAPClient.connect(
             WELL_KNOWN, auth=BasicAuth("u", "p"), http=http, registry=registry()
@@ -174,6 +202,15 @@ class TestBlobTransfer:
                 await client.upload(b"x")
             with pytest.raises(NoAccountError):
                 await client.download("B1")
+
+    @pytest.mark.asyncio
+    async def test_async_resolves_a_single_account_too(self):
+        fake = server(primary_accounts={})
+        http = httpx.AsyncClient(**fake.client_kwargs())
+        async with await AsyncJMAPClient.connect(
+            WELL_KNOWN, auth=BasicAuth("u", "p"), http=http, registry=registry()
+        ) as client:
+            assert (await client.upload(b"x")).account_id == "a"
 
 
 class TestAttributeNames:

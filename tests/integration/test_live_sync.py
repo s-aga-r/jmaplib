@@ -27,7 +27,7 @@ import pytest
 
 from jmap.auth import BasicAuth
 from jmap.client import JMAPClient
-from jmap.core.errors import MethodError
+from jmap.core.errors import MethodError, RequestError
 from jmap.models.responses import QueryChangesResponse
 from jmap.sync import (
     ChangeStream,
@@ -189,13 +189,19 @@ class TestChangeStream:
         A server may answer a nonsense state with ``cannotCalculateChanges`` (the
         case this library translates) or with ``invalidArguments`` (also legal -
         the state string is opaque, so "unparseable" is a defensible reading).
-        Both are accepted; what is asserted is that neither is swallowed.
+
+        Stalwart 0.16 does neither: it rejects the *request*, so nothing in the
+        batch runs. That is a stretch - RFC 8620 §3.6.1's request-level errors are
+        about the request as a document, and an unparseable state is an argument
+        the method owns - but it is not silence, and silence is the failure this
+        test exists to catch. A dead cursor that reads as "nothing changed" is a
+        client that stops syncing and never says so.
         """
         requires_method(alice, "Email/changes")
         stream = ChangeStream(alice, "Email")
         stream.seed("jmaplib-definitely-not-a-real-state")
 
-        with pytest.raises((ResyncRequiredError, MethodError)) as excinfo:
+        with pytest.raises((ResyncRequiredError, MethodError, RequestError)) as excinfo:
             stream.catch_up()
         if isinstance(excinfo.value, ResyncRequiredError):
             assert "re-download" in str(excinfo.value)

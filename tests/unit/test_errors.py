@@ -97,12 +97,26 @@ class TestRequestError:
         # Stalwart returns bare `about:blank` problems for auth failures.
         error = RequestError.from_problem({"status": 401, "title": "Unauthorized"})
         assert error.type == "about:blank"
-        assert str(error) == "Unauthorized"
+        assert str(error) == "Unauthorized [about:blank; HTTP 401]"
 
     def test_message_prefers_detail_then_title_then_type(self):
-        assert str(RequestError("t", detail="d", title="ti")) == "d"
-        assert str(RequestError("t", title="ti")) == "ti"
+        assert str(RequestError("t", detail="d", title="ti")) == "d [t]"
+        assert str(RequestError("t", title="ti")) == "ti [t]"
         assert str(RequestError("t")) == "t"
+
+    def test_the_message_carries_the_type_and_status_whatever_the_detail_says(self):
+        # A server that fills `detail` with something unhelpful - one echoes the
+        # request back into it - must not be able to hide which error this was.
+        error = RequestError(
+            "urn:ietf:params:jmap:error:limit",
+            status=400,
+            detail='{"using":["urn:ietf:params:jmap:core"]}',
+        )
+        assert "urn:ietf:params:jmap:error:limit" in str(error)
+        assert "HTTP 400" in str(error)
+
+    def test_the_type_is_not_repeated_when_it_is_all_there_is(self):
+        assert str(RequestError("t", status=500)) == "t [HTTP 500]"
 
     def test_raw_body_is_retained(self):
         body = {"type": "about:blank", "custom": "vendor field"}

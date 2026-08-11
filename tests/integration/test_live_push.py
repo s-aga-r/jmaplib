@@ -18,6 +18,7 @@ saying so rather than blocking the suite.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 import uuid
@@ -53,6 +54,17 @@ requires_server = pytest.mark.skipif(
 #: How long to wait for a notification before calling it lost. Generous, because
 #: a server may coalesce changes before pushing them.
 PUSH_TIMEOUT = 15.0
+
+#: Every connection here asks for pings, and asks for them often. Two reasons,
+#: both structural rather than stylistic:
+#:
+#: * A ping is the only thing that bounds how long the client will wait on a
+#:   silent stream - with none requested the read blocks indefinitely, which is
+#:   correct for a push client and useless for a test suite.
+#: * Iteration only checks its own deadline *between* events, so the ping
+#:   interval is also the granularity of every timeout below. At the 30s these
+#:   tests used to ask for, a 15s budget could not be honoured at all.
+PING_SECONDS = 5
 
 
 def requires_method(client: JMAPClient, method: str) -> None:
@@ -108,16 +120,21 @@ def destroy(client: JMAPClient, email_id: str) -> None:
 @requires_server
 class TestEventSource:
     def test_the_connection_is_accepted(self, alice):
-        """``closeafter=state`` so the request terminates without a change.
+        """One event of any kind proves the connection, and bounds the test.
 
-        Asking for a persistent stream here would block until the timeout on a
-        perfectly healthy server, which tests patience rather than the protocol.
+        Deliberately not ``list(source.events())``: draining assumes the stream
+        ends, which is true only if the server honours ``closeafter=state``. A
+        server that ignores it is not wrong enough to fail this test - what is
+        being asserted is that the endpoint is reachable, answers
+        ``text/event-stream``, and frames events the parser accepts. The first
+        event settles all three, and the requested ping guarantees one arrives
+        even with nothing happening in the account.
         """
         requires_event_source(alice)
-        source = EventSourceClient(alice, close_after_state=True, ping=30)
-        # Draining is the assertion: a stream that is not text/event-stream, or
-        # that answers an error status, raises out of here.
-        list(source.events())
+        source = EventSourceClient(alice, close_after_state=True, ping=PING_SECONDS)
+        # An error status or a wrong content type raises out of the iterator.
+        with contextlib.closing(source.events()) as events:
+            assert next(events, None) is not None, "connection produced no events"
 
     def test_a_change_this_client_makes_is_pushed_back(self, alice, drafts):
         """The end-to-end proof, and the only one that needs a real server.
@@ -128,7 +145,7 @@ class TestEventSource:
         requires_event_source(alice)
         requires_method(alice, "Email/set")
         subject = f"jmaplib push {uuid.uuid4().hex[:8]}"
-        source = EventSourceClient(alice, close_after_state=True, ping=30)
+        source = EventSourceClient(alice, close_after_state=True, ping=PING_SECONDS)
 
         email_id = make_draft(alice, drafts, subject)
         try:
@@ -146,7 +163,7 @@ class TestEventSource:
         """
         requires_event_source(alice)
         subject = f"jmaplib resume {uuid.uuid4().hex[:8]}"
-        source = EventSourceClient(alice, close_after_state=True, ping=30)
+        source = EventSourceClient(alice, close_after_state=True, ping=PING_SECONDS)
 
         email_id = make_draft(alice, drafts, subject)
         try:
@@ -155,7 +172,8 @@ class TestEventSource:
                 pytest.skip("server sends no event ids, so there is nothing to resume from")
             # The second connection carries Last-Event-ID; that it is accepted at
             # all is the assertion, since a server rejecting it would raise.
-            list(source.events())
+            with contextlib.closing(source.events()) as events:
+                next(events, None)
         finally:
             destroy(alice, email_id)
 
@@ -166,16 +184,17 @@ class TestEventSource:
         no ping arrives in the window - a server may legally clamp the interval up.
         """
         requires_event_source(alice)
-        source = EventSourceClient(alice, ping=30)
+        source = EventSourceClient(alice, ping=PING_SECONDS)
         before = source.last_event_id
         saw_ping = False
         deadline = time.monotonic() + PUSH_TIMEOUT
-        for event in source.events():
-            if isinstance(event, Ping):
-                saw_ping = True
-                break
-            if time.monotonic() > deadline:
-                break
+        with contextlib.closing(source.events()) as events:
+            for event in events:
+                if isinstance(event, Ping):
+                    saw_ping = True
+                    break
+                if time.monotonic() > deadline:
+                    break
         if not saw_ping:
             pytest.skip("no ping arrived within the window")
         assert source.last_event_id == before
@@ -230,13 +249,25 @@ class TestPushSubscriptions:
 
 @requires_server
 class TestCapabilityObjects:
-    def test_the_websocket_endpoint_is_secure_when_advertised(self, alice):
-        # RFC 8887 §4.2 requires TLS. A ws:// endpoint is a server that cannot
-        # carry credentials safely, which is worth failing over rather than using.
+    def test_the_websocket_endpoint_is_no_less_secure_than_the_session(self, alice):
+        """RFC 8887 §4.2 requires TLS - of a deployment, which this is not.
+
+        A test server reached over plain HTTP will advertise a ``ws://`` endpoint,
+        and must: downgrading is the whole point of running it that way. What is
+        actually a defect is a *downgrade* - an ``https`` session handing out a
+        ``ws://`` URL, which moves credentials from a protected channel to an
+        unprotected one and is the case worth catching. So the assertion is
+        relative to how this session itself was reached.
+        """
         capability = WebSocketCapability.of(alice.session.capability_value(WEBSOCKET_URN))
         if capability.url is None:
             pytest.skip("server does not advertise urn:ietf:params:jmap:websocket")
-        assert capability.is_secure, f"insecure WebSocket endpoint {capability.url!r}"
+        if not alice.session.api_url.startswith("https:"):
+            pytest.skip("session is not itself over TLS, so there is no downgrade to detect")
+        assert capability.is_secure, (
+            f"TLS session {alice.session.api_url!r} advertises insecure "
+            f"WebSocket endpoint {capability.url!r}"
+        )
 
     def test_the_vapid_key_is_present_when_advertised(self, alice):
         capability = VapidCapability.of(alice.session.capability_value(VAPID_URN))

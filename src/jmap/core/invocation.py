@@ -16,11 +16,23 @@ Two details drive the design here:
   expects that call to have. If the target call errored, its response name is
   ``error``, the name check fails, and the referring call fails with
   ``invalidResultReference`` rather than silently reading from an error payload.
+
+The renaming rule has a consequence worth stating outright, because it is the
+thing callers get wrong: **a back-reference can only replace a whole top-level
+argument.** There is nowhere to put the ``#`` when the value sits inside a
+``create`` object, so ``create/s1/emailId`` cannot be a ``ResultRef`` at all. The
+draft ``refplus`` extension exists precisely to lift that restriction. What works
+today is a *creation reference* - :class:`~jmap.core.ids.CreationRef`, the ``#id``
+form of RFC 8620 §5.3 - which is an ordinary string value and may appear anywhere.
+:func:`to_wire_value` enforces the first rule and performs the second conversion.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
+
+from jmap.core.errors import JMAPError
+from jmap.core.ids import CreationRef
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -69,6 +81,64 @@ class ResultRef(Generic[T]):
         return hash((ResultRef, self.result_of, self.name, self.path))
 
 
+class NestedResultRefError(JMAPError):
+    """A back-reference was put somewhere the wire format cannot express it.
+
+    RFC 8620 §3.7 makes a back-reference a *renaming* of an argument - ``ids``
+    becomes ``"#ids"`` - so it can only ever replace a whole top-level argument.
+    A ``ResultRef`` nested inside a ``create`` object has no name to rename and
+    no legal encoding, so it is caught here rather than at serialisation, where
+    the only symptom is ``TypeError: Object of type ResultRef is not JSON
+    serializable`` naming neither the call nor the argument.
+
+    The fix is almost always a creation reference: to point at an object created
+    earlier in the same request, use :class:`~jmap.core.ids.CreationRef`, which
+    is a plain ``#id`` string and is legal at any depth.
+    """
+
+    def __init__(self, method: str, path: str, ref: ResultRef[Any]) -> None:
+        self.method = method
+        self.path = path
+        self.ref = ref
+        super().__init__(
+            f"{method} argument {path!r} holds a back-reference to {ref.name} "
+            f"{ref.path!r}, but RFC 8620 §3.7 allows one only in place of a whole "
+            f"top-level argument. To reference an object created earlier in this "
+            f"same request, use CreationRef('<creation id>') instead, which "
+            f"serialises as '#<creation id>' and is legal here."
+        )
+
+
+def to_wire_value(value: object, *, method: str, path: str) -> Any:
+    """Convert one argument value to its wire form.
+
+    Two JMAP-specific types can appear anywhere in an argument tree and neither
+    is JSON: :class:`~jmap.core.ids.CreationRef` becomes its ``#id`` string, and
+    a :class:`ResultRef` below the top level is refused outright.
+    """
+    if isinstance(value, CreationRef):
+        return str(value)
+    if isinstance(value, ResultRef):
+        raise NestedResultRefError(method, path, cast("ResultRef[object]", value))
+    # The casts are what stop an untyped argument tree leaking an
+    # unparameterised container outwards: `isinstance` alone narrows to a bare
+    # `dict`/`list`, which a strict checker reports as partially unknown for the
+    # rest of its life. Same idiom as `ijson._check_tree`, for the same reason.
+    if isinstance(value, dict):
+        items = cast("dict[str, object]", value)
+        return {
+            key: to_wire_value(item, method=method, path=f"{path}/{key}")
+            for key, item in items.items()
+        }
+    if isinstance(value, (list, tuple)):
+        elements = cast("list[object] | tuple[object, ...]", value)
+        return [
+            to_wire_value(element, method=method, path=f"{path}/{index}")
+            for index, element in enumerate(elements)
+        ]
+    return value
+
+
 class MethodCall(Generic[R]):
     """One invocation, plus how to parse its response.
 
@@ -111,9 +181,13 @@ class MethodCall(Generic[R]):
 
     def to_wire_arguments(self) -> dict[str, Any]:
         plain, refs = self.split_arguments()
+        converted = {
+            key: to_wire_value(value, method=self.name, path=f"/{key}")
+            for key, value in plain.items()
+        }
         for key, ref in refs.items():
-            plain[f"#{key}"] = ref.to_wire()
-        return plain
+            converted[f"#{key}"] = ref.to_wire()
+        return converted
 
     def __repr__(self) -> str:
         return f"MethodCall({self.name!r}, {sorted(self.arguments)})"

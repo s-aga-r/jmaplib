@@ -25,6 +25,7 @@ from jmap.auth import BasicAuth
 from jmap.capabilities.blob import BLOB_URN, BlobCapability
 from jmap.capabilities.sieve import SIEVE_URN, SieveAccountCapability
 from jmap.client import JMAPClient
+from jmap.core.errors import MethodError
 from jmap.models.blob import BlobUpload, DataSource
 
 if TYPE_CHECKING:
@@ -205,9 +206,21 @@ class TestQuota:
             state = batch.quota.quota.get(ids=[])
         with alice.batch() as batch:
             changed = batch.quota.quota.changes(since_state=str(state.result.state))
+        try:
+            narrowed = changed.result.fetch_all_properties
+        except MethodError as error:
+            # RFC 8620 §5.2 permits cannotCalculateChanges for any state the
+            # server cannot diff from, and puts no floor on how recent that state
+            # may be - so a server that advertises Quota/changes while tracking
+            # nothing is answering legally, if unhelpfully. Stalwart 0.16 does
+            # exactly this for a state it issued moments earlier. Skipping is
+            # honest; asserting would test the server's ambition, not the client.
+            if error.type != "cannotCalculateChanges":
+                raise
+            pytest.skip("server cannot calculate Quota changes even from a fresh state")
         # Either answer is conformant. What matters is that a null does not read
         # as "nothing changed" - §4.3 makes it "fetch everything".
-        assert changed.result.fetch_all_properties in {True, False}
+        assert narrowed in {True, False}
 
 
 @requires_server

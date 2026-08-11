@@ -24,6 +24,7 @@ import pytest
 
 from jmap.auth import BasicAuth
 from jmap.client import JMAPClient
+from jmap.core.ids import CreationRef
 from jmap.models.mail.headers import text
 
 if TYPE_CHECKING:
@@ -200,7 +201,14 @@ class TestDelivery:
         if identity_id is None:
             pytest.skip(f"no identity for {ALICE}")
 
-        # One request: create the draft, then submit it by back-reference.
+        # One request: create the draft, then submit it by creation reference.
+        #
+        # `CreationRef("d1")` and not `draft.ref_created("d1", "id")`. A §3.7
+        # back-reference is expressed by renaming the argument - `ids` becomes
+        # `#ids` - so it can only ever replace a whole top-level argument, and
+        # `emailId` here is buried inside a create object where there is no name
+        # to rename. §5.3's `#d1` is the mechanism that reaches inside one, and
+        # it is an ordinary string value.
         with alice.batch() as batch:
             draft = batch.mail.email.set(
                 create={
@@ -219,7 +227,7 @@ class TestDelivery:
                 create={
                     "s1": {
                         "identityId": identity_id,
-                        "emailId": draft.ref_created("d1", "id"),
+                        "emailId": CreationRef("d1"),
                     }
                 },
                 onSuccessUpdateEmail={"#s1": {"keywords/$draft": None}},

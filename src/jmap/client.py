@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Self
 import httpx
 
 from jmap._shell import (
+    NO_BLOB_ACCOUNT,
     as_json_object,
     failure_of,
     problem_of,
@@ -280,9 +281,9 @@ class JMAPClient:
         Blobs move over plain HTTP rather than as method calls, so this is not
         batchable and takes no ``using``.
         """
-        account = account_id or self.default_account
+        account = account_id or self.default_account or self.session.sole_account()
         if account is None:
-            raise NoAccountError("upload", CORE_URN)
+            raise NoAccountError("upload", CORE_URN, reason=NO_BLOB_ACCOUNT)
         check_upload_size(len(content), self.capabilities.limits)
         response = self._http.post(
             upload_url(self.session, account),
@@ -307,9 +308,9 @@ class JMAPClient:
         ``name`` and ``content_type`` only shape the response headers; the blob
         is addressed by ``blob_id`` alone.
         """
-        account = account_id or self.default_account
+        account = account_id or self.default_account or self.session.sole_account()
         if account is None:
-            raise NoAccountError("download", CORE_URN)
+            raise NoAccountError("download", CORE_URN, reason=NO_BLOB_ACCOUNT)
         response = self._http.get(
             download_url(self.session, account, blob_id, name=name, content_type=content_type)
         )

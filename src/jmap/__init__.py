@@ -20,6 +20,7 @@ from jmap.core.errors import (
     TransportError,
 )
 from jmap.core.ids import CreationRef, Id, InvalidIdError, is_valid_id, parse_id
+from jmap.core.invocation import NestedResultRefError
 
 __all__ = [
     "SPEC_REVISIONS",
@@ -32,6 +33,7 @@ __all__ = [
     "InvalidIdError",
     "JMAPError",
     "MethodError",
+    "NestedResultRefError",
     "RequestError",
     "ServerPartialFailError",
     "SetError",

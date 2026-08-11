@@ -51,6 +51,22 @@ URN_NOT_REQUEST: Final = "urn:ietf:params:jmap:error:notRequest"
 URN_LIMIT: Final = "urn:ietf:params:jmap:error:limit"
 
 
+def _request_message(type_: str, status: int | None, title: str | None, detail: str | None) -> str:
+    """Phrase a problem document as one line without discarding its identity.
+
+    ``detail`` is the most specific field and so leads, but it is free prose
+    chosen by the server and some servers fill it with something useless - one
+    echoes the request back verbatim. Reporting it alone leaves a reader holding
+    an unattributed blob of text with no status and no problem type, unable to
+    tell a 400 from a 503. The type and status therefore always follow.
+    """
+    head = detail or title or type_
+    context = [part for part in (None if head == type_ else type_,) if part]
+    if status is not None:
+        context.append(f"HTTP {status}")
+    return f"{head} [{'; '.join(context)}]" if context else head
+
+
 class RequestError(JMAPError):
     """An RFC 7807 problem response. No method in the request executed.
 
@@ -74,7 +90,7 @@ class RequestError(JMAPError):
         self.detail: str | None = detail
         self.limit: str | None = limit
         self.raw: dict[str, Any] = raw or {}
-        super().__init__(detail or title or type_)
+        super().__init__(_request_message(type_, status, title, detail))
 
     @classmethod
     def from_problem(cls, body: dict[str, Any], status: int | None = None) -> RequestError:

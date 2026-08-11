@@ -1,7 +1,7 @@
 """Holding an event source connection open, and reconnecting when it drops.
 
 Twin shells over :mod:`jmap.push.eventsource`, which does the parsing. What lives
-here is the connection lifecycle and three decisions inside it:
+here is the connection lifecycle and four decisions inside it:
 
 **Reconnection resumes, it does not restart.** ``Last-Event-ID`` goes back on
 every reconnect so the server can replay what was missed (RFC 8620 §7.3). Drop it
@@ -16,6 +16,11 @@ a server under load being hammered.
 state event because that is what was asked for - some proxies buffer a stream
 until it completes, and would otherwise hold every notification back indefinitely.
 The loop reconnects rather than treating it as a failure.
+
+**The read timeout comes from ``ping``, not from the HTTP client.** Every other
+request in this library wants a read deadline; an event source is idle by design,
+so inheriting one caps how long a *healthy* stream may wait. See
+:attr:`PushListener.read_timeout`.
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ from jmap.push.eventsource import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
+    from collections.abc import AsyncGenerator, Generator
 
     from jmap.aio import AsyncJMAPClient
     from jmap.client import JMAPClient
@@ -51,6 +56,11 @@ MIN_RECONNECT_SECONDS = 0.1
 #: Used when the server has never sent a ``retry:``.
 DEFAULT_RECONNECT_SECONDS = 3.0
 
+#: Added to the ping interval before a silent connection is declared dead. A
+#: server promising a ping "every n seconds" is not promising a stopwatch, and
+#: hanging up on it one second late costs a reconnect for nothing.
+PING_TIMEOUT_SLACK = 10.0
+
 
 class PushListener:
     """I/O-free connection state, shared by both shells.
@@ -59,17 +69,41 @@ class PushListener:
     here rather than inside any one connection.
     """
 
-    __slots__ = ("_close_after_state", "_last_event_id", "_retry", "_url")
+    __slots__ = ("_close_after_state", "_last_event_id", "_ping", "_retry", "_url")
 
-    def __init__(self, url: str, *, close_after_state: bool) -> None:
+    def __init__(self, url: str, *, close_after_state: bool, ping: int = 0) -> None:
         self._url = url
         self._close_after_state = close_after_state
+        self._ping = ping
         self._last_event_id = ""
         self._retry: int | None = None
 
     @property
     def url(self) -> str:
         return self._url
+
+    @property
+    def read_timeout(self) -> float | None:
+        """How long this connection may stay silent before it is called dead.
+
+        The HTTP client's own read timeout is exactly wrong for an event source
+        and dangerously plausible-looking: it caps how long a *perfectly healthy*
+        connection may wait for the next change. httpx defaults it to five
+        seconds, so an unconfigured client cannot hold a stream open past five
+        idle seconds - which is not a push client at all, and fails as
+        ``TransportError: timed out`` that reads like a server fault.
+
+        ``ping`` is what makes any finite answer defensible. RFC 8620 §7.3 has
+        the client name an interval and the server send an empty event on it, so
+        silence beyond that interval really is evidence of a dead connection.
+        Without a ping there is no such promise and no sound basis for a
+        deadline, so there is none: waiting indefinitely is what "tell me when
+        something changes" means. A caller who wants to bound that instead should
+        ask for pings, which is the mechanism the protocol provides for it.
+        """
+        if self._ping <= 0:
+            return None
+        return self._ping + PING_TIMEOUT_SLACK
 
     @property
     def last_event_id(self) -> str:
@@ -115,7 +149,18 @@ def _listener(
         ping=ping,
         push_types=client.capabilities.push_types(),
     )
-    return PushListener(url, close_after_state=close_after_state)
+    return PushListener(url, close_after_state=close_after_state, ping=ping)
+
+
+def stream_timeout(base: httpx.Timeout, read: float | None) -> httpx.Timeout:
+    """The client's timeout with its read deadline replaced.
+
+    Only the read leg changes: connecting to the event source should fail as
+    quickly as connecting to anything else, and it is the *waiting* that an
+    event source does differently. ``httpx.Timeout`` refuses to take an existing
+    instance alongside overrides, so the legs are copied across by hand.
+    """
+    return httpx.Timeout(connect=base.connect, read=read, write=base.write, pool=base.pool)
 
 
 def _check(response: httpx.Response, body: bytes) -> None:
@@ -158,15 +203,24 @@ class EventSourceClient:
         """The resume cursor. Survives reconnects; unmoved by pings."""
         return self._listener.last_event_id
 
-    def events(self) -> Iterator[StateChange | Ping]:
+    def events(self) -> Generator[StateChange | Ping, None, None]:
         """Yield events from a *single* connection, ending when it does.
 
         Use :meth:`listen` unless you want to handle reconnection yourself.
+
+        Typed as a generator rather than an iterator for the same reason
+        :meth:`listen` is: a caller who stops early - after the first event, or
+        on a match - needs ``close()`` to hang up. Without it the connection
+        stays open until the object is collected, which on a long-lived stream
+        means holding a socket for no reason.
         """
         stream = self._listener.new_stream()
         try:
             with self._client.http.stream(
-                "GET", self._listener.url, headers=self._listener.headers
+                "GET",
+                self._listener.url,
+                headers=self._listener.headers,
+                timeout=stream_timeout(self._client.http.timeout, self._listener.read_timeout),
             ) as response:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
                     _check(response, response.read())
@@ -214,12 +268,19 @@ class AsyncEventSourceClient:
     def last_event_id(self) -> str:
         return self._listener.last_event_id
 
-    async def events(self) -> AsyncIterator[StateChange | Ping]:
-        """Yield events from a single connection, ending when it does."""
+    async def events(self) -> AsyncGenerator[StateChange | Ping, None]:
+        """Yield events from a single connection, ending when it does.
+
+        A generator rather than an iterator so a caller who stops early can
+        ``aclose()`` the connection; see :meth:`EventSourceClient.events`.
+        """
         stream = self._listener.new_stream()
         try:
             async with self._client.http.stream(
-                "GET", self._listener.url, headers=self._listener.headers
+                "GET",
+                self._listener.url,
+                headers=self._listener.headers,
+                timeout=stream_timeout(self._client.http.timeout, self._listener.read_timeout),
             ) as response:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
                     _check(response, await response.aread())

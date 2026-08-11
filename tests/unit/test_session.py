@@ -151,6 +151,25 @@ class TestCapabilityResolution:
     def test_accounts_with_capability(self, session):
         assert session.accounts_with("urn:x:calendars") == (Id("b"),)
 
+    def test_two_accounts_have_no_sole_account(self, session):
+        assert session.sole_account() is None
+
+    def test_one_account_is_its_own_answer(self):
+        # Blobs are account-scoped but capability-less, so primaryAccounts can
+        # never name their account - which left every upload against a perfectly
+        # ordinary single-account server failing with "no accountId".
+        session = Session.from_wire(
+            {
+                "accounts": {"a": {"name": "alice@example.com"}},
+                "username": "alice@example.com",
+                "state": "s1",
+            }
+        )
+        assert session.sole_account() == Id("a")
+
+    def test_no_accounts_at_all_answers_none(self):
+        assert Session.from_wire({"accounts": {}}).sole_account() is None
+
     def test_read_only_flag(self, session):
         assert session.is_read_only(Id("b"))
         assert not session.is_read_only(Id("a"))
