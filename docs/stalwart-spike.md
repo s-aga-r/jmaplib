@@ -61,6 +61,46 @@ Point `--config` at a path that does **not** exist and the server announces:
   `STALWART_RECOVERY_MODE_LOG_LEVEL`, `STALWART_RECOVERY_ADMIN`, `STALWART_ROLE`,
   `STALWART_PUSH_SHARD`, `STALWART_HTTPS_PORT`.
 
+### Provisioning an account [verified]
+
+Read off a real account rather than guessed, because a wrong key here earns a bare
+`invalidPatch: "Invalid key for object"` whose `properties` list is empty — an
+error that names nothing. Two fields are not what JMAP habits suggest:
+
+* **`credentials` is a map**, keyed by an index string, each value a tagged
+  object. There is no `secrets` array.
+* **The address is a single `emailAddress`**, derived by the server from `name`
+  plus the domain. There is no `emails` array, and `name` is the local part
+  alone — passing `alice@example.com` earns `"Invalid email local part"`.
+
+`domainId` points at an `x:Domain`, so read it off the administrator that
+bootstrap just created rather than assuming a value:
+
+```json
+["x:Account/set", {"accountId": "<admin account>", "create": {"alice": {
+  "@type": "User", "name": "alice", "domainId": "<from the admin>",
+  "credentials": {"0": {"@type": "Password", "secret": "<password>"}}}}}, "c0"]
+```
+
+The administrator itself is an `x:Account`, so `x:Account/get` on it is the
+fastest way to see the exact shape the server expects — more direct than the
+schema, and one call away.
+
+### The event source [verified, from the v0.16.17 source]
+
+`crates/jmap/src/api/event_source.rs`, and both facts bite a client:
+
+* **`ping` is clamped up to a 30s minimum** — `std::cmp::max(ping, 30)`. RFC 8620
+  §7.3 permits this (a server's minimum may be no higher than 30), so a client
+  that asks for 5s and enforces a 5s deadline hangs up on a healthy connection.
+* **Nothing is sent on connect.** No greeting, no initial state event. On an idle
+  account the first traffic is the first ping, 30 seconds in — which also means
+  `closeafter=state` cannot terminate a stream on a quiet account.
+* A subscriber is registered when the stream opens and **missed changes are not
+  replayed**, so a test that writes before connecting waits forever.
+* State events carry no event id, so there is nothing to resume from —
+  §7.3 only *SHOULD*s them.
+
 ### Real advertised values worth keeping [verified]
 
 From an authenticated session on a freshly bootstrapped v0.16.14:

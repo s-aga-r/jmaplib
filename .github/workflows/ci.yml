@@ -78,11 +78,12 @@ jobs:
   integration:
     name: live Stalwart
     runs-on: ubuntu-latest
-    # Still non-gating while the end-to-end run is being proven in CI - the
-    # bootstrap chain is solved and verified locally, but "verified locally"
-    # is exactly the claim that hid a Python 3.11 failure here for months.
-    # Flip to false once this job has been green for a few consecutive runs.
-    continue-on-error: true
+    # Gating. It earned it: the first end-to-end run found five real defects,
+    # four of them in the library rather than the harness, and none of them
+    # reachable from the fake server. Every wait in the suite is bounded and
+    # every server-shortfall skip is method-granular, so a red here is a
+    # regression rather than weather.
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

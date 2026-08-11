@@ -93,13 +93,16 @@ misbehaves without it:
 > layer around them, which is where the traps live. Field-by-field models for
 > those two vocabularies are a codegen job and are not done.
 >
-> 2132 tests and 100% coverage all run
-> against the in-process fake server. The live integration suite is written and
-> ready in `tests/integration/`, but has not been run against a real server:
-> Stalwart's v0.16 headless bootstrap is unresolved (see
-> [`docs/stalwart-spike.md`](docs/stalwart-spike.md), which includes an upstream
-> documentation bug found along the way). Point it at any bootstrapped server with
-> `JMAP_TEST_URL`, `JMAP_TEST_USER` and `JMAP_TEST_PASS` to verify for yourself.
+> **The live suite gates CI.** Every push bootstraps a real Stalwart v0.16
+> headlessly and runs `tests/integration/` against it; see
+> [`docs/stalwart-spike.md`](docs/stalwart-spike.md) for the procedure and what
+> had to be discovered to make it work. Its first green run was worth the trouble
+> — it found five defects no fake server could have, four of them in the library:
+> a creation reference that never serialised, a back-reference nested where the
+> wire format cannot express one, blob upload unable to resolve an account on any
+> real server, and an event source that could not stay open past five seconds.
+> Point it at your own server with `JMAP_TEST_URL`, `JMAP_TEST_USER` and
+> `JMAP_TEST_PASS`.
 
 ### Capability namespaces
 
