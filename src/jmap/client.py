@@ -27,7 +27,17 @@ from jmap._shell import (
     retry_delay,
     session_is_stale,
 )
-from jmap.batch import Batch, all_mutations_guarded, is_mutating
+from jmap.api.namespace import Namespaces
+from jmap.batch import Batch, NoAccountError, all_mutations_guarded, is_mutating
+from jmap.blobs import (
+    UploadResult,
+    check_upload_size,
+    download_url,
+    parse_upload,
+    upload_headers,
+    upload_url,
+)
+from jmap.capabilities.core import CORE_URN
 from jmap.core.errors import AuthenticationError, TransportError
 from jmap.core.ijson import dumps, loads
 from jmap.core.response import Response
@@ -53,12 +63,17 @@ class BatchContext:
     one request, so a later call can point at an earlier one's results.
     """
 
-    __slots__ = ("_batch", "_client", "_extra_using")
+    __slots__ = ("_batch", "_client", "_extra_using", "_namespaces")
 
     def __init__(self, client: JMAPClient, batch: Batch, extra_using: frozenset[str]) -> None:
         self._client = client
         self._batch = batch
         self._extra_using = extra_using
+        self._namespaces = Namespaces(batch, client.capabilities)
+
+    def __getattr__(self, name: str) -> Any:
+        """Capability namespaces: ``batch.mail.email.get(...)``."""
+        return getattr(self._namespaces, name)
 
     def add(
         self,
@@ -207,6 +222,57 @@ class JMAPClient:
             batch.absorb(response)
             if session_is_stale(self.session, response.session_state):
                 self.session_stale = True
+
+    # -- blobs -------------------------------------------------------------- #
+    def upload(
+        self,
+        content: bytes,
+        *,
+        content_type: str | None = None,
+        account_id: Id | None = None,
+    ) -> UploadResult:
+        """Upload a blob and return its id (RFC 8620 §6.1).
+
+        Blobs move over plain HTTP rather than as method calls, so this is not
+        batchable and takes no ``using``.
+        """
+        account = account_id or self.default_account
+        if account is None:
+            raise NoAccountError("upload", CORE_URN)
+        check_upload_size(len(content), self.capabilities.limits)
+        response = self._http.post(
+            upload_url(self.session, account),
+            content=content,
+            headers=upload_headers(content_type),
+        )
+        problem = problem_of(response.status_code, response.headers, response.content)
+        if problem is not None:
+            raise problem
+        return parse_upload(as_json_object(loads(response.content), "the upload endpoint"))
+
+    def download(
+        self,
+        blob_id: str,
+        *,
+        name: str = "download",
+        content_type: str = "application/octet-stream",
+        account_id: Id | None = None,
+    ) -> bytes:
+        """Fetch a blob's bytes (RFC 8620 §6.2).
+
+        ``name`` and ``content_type`` only shape the response headers; the blob
+        is addressed by ``blob_id`` alone.
+        """
+        account = account_id or self.default_account
+        if account is None:
+            raise NoAccountError("download", CORE_URN)
+        response = self._http.get(
+            download_url(self.session, account, blob_id, name=name, content_type=content_type)
+        )
+        problem = problem_of(response.status_code, response.headers, response.content)
+        if problem is not None:
+            raise problem
+        return response.content
 
     # -- transport ---------------------------------------------------------- #
     def _post(self, request: Request, batch: Batch) -> Response:

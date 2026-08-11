@@ -44,14 +44,15 @@ done
 
 # --- 2. authenticate against bootstrap mode --------------------------------- #
 # UNSOLVED. Passing STALWART_RECOVERY_ADMIN=admin:<pw> as a process env var is
-# silently ignored — the server's own banner says it must go "in the env file".
-# The randomly generated temporary password it prints instead is rejected by both
-# Basic auth and the OAuth device flow (/api/auth returns {"type":"failure"}).
-# `stalwart-cli` v1.0.12 hits the same wall, which suggests the bootstrap admin
-# genuinely does not accept Basic auth rather than a mistake in presentation.
+# silently ignored — the server's own banner says it must go "in the env file",
+# which is neither documented nor found. The randomly generated temporary password
+# it prints instead is rejected by every documented path.
 #
-# Most promising route: complete the wizard once in a browser against a throwaway
-# instance, capture the x:Bootstrap/set payload from devtools, and replay it here.
+# The WebUI flow is now known (see docs/stalwart-spike.md): OAuth authorization
+# code + PKCE, client_id=stalwart-webui, POST /api/auth with type "authCode", then
+# exchange client_code at /auth/token. Replaying that headlessly with the printed
+# password still returns {"type":"failure"}, as do Basic auth, the device flow and
+# stalwart-cli. The credential and the flow do not meet.
 echo "ERROR: bootstrap authentication is unsolved; see docs/stalwart-spike.md" >&2
 exit 1
 

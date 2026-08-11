@@ -147,19 +147,57 @@ through it.
 Useful side effects of running it: it revealed the `GET /api/schema` endpoint, and its
 on-disk schema cache is what resolved both disputed items above.
 
-## Recommended next step
+## The auth flow, from the WebUI itself
 
-Two candidate routes, neither yet proven:
+Opening `/admin` in a browser resolved *how* the login works, though not the blocker.
 
-1. **Find the env file.** The startup banner says to set `STALWART_RECOVERY_ADMIN` *"in the
-   env file"*. Locating that file's expected path is the smallest change that makes the
-   documented flow work.
-2. **Browser-driven bootstrap, once.** Complete the wizard at `/admin` in a real browser
-   against a throwaway instance, capture the resulting `x:Bootstrap/set` payload from devtools,
-   then replay it headlessly. The permanent admin it creates *does* accept Basic auth (that is
-   how `stalwart-cli` is meant to be used), so everything downstream unblocks.
+`/admin/login` asks for an account name, then redirects to the OAuth authorization
+endpoint. The full parameter set, captured from the address bar:
 
-Route 2 is the more certain of the two and yields a verbatim, replayable payload.
+```
+/login?response_type=code
+      &client_id=stalwart-webui
+      &redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fadmin%2Foauth%2Fcallback
+      &code_challenge=<S256>&code_challenge_method=S256
+      &state=<hex>&login_hint=admin&prompt=login
+      &scope=openid+offline_access
+```
+
+So the whole thing is **authorization-code + PKCE**, and the client id is
+`stalwart-webui`. That page then POSTs to `/api/auth` with:
+
+```json
+{"type": "authCode", "accountName": "...", "accountSecret": "...",
+ "clientId": "stalwart-webui", "redirectUri": "...", "codeChallenge": "...",
+ "codeChallengeMethod": "S256", "state": "...", "scope": "openid offline_access"}
+```
+
+A successful response is `{"type": "authenticated", "client_code": "..."}`, which is
+exchanged at `/auth/token` with `grant_type=authorization_code` plus the `code_verifier`.
+
+That explained why the earlier attempts failed — they used an unregistered client id. But
+replaying the corrected flow headlessly, with `client_id=stalwart-webui`, real PKCE and the
+password from the startup banner, **still returns `{"type": "failure"}`**.
+
+## Status: still blocked
+
+Everything tried, all with the credential the server itself printed:
+
+| Route | Result |
+|---|---|
+| Basic auth on `/jmap/session`, `/jmap`, `/api/schema`, `/api/account` | 401 |
+| `/api/auth` `authDevice` (device flow) | `{"type": "failure"}` |
+| `/api/auth` `authCode` with correct client id + PKCE | `{"type": "failure"}` |
+| `stalwart-cli` v1.0.12 | 401 |
+| `STALWART_RECOVERY_ADMIN` as a process env var | silently ignored |
+
+The temporary bootstrap admin appears not to authenticate through any documented path. The
+remaining lead is the startup banner's own wording — *"set `STALWART_RECOVERY_ADMIN` in the
+env file"* — which implies a file the server reads that is neither documented nor discovered.
+Finding it is probably a five-minute fix; guessing at it has not been.
+
+Worth asking upstream rather than guessing further: the flow is documented, the credential is
+printed, and the two do not meet.
 
 ## Reproduction
 

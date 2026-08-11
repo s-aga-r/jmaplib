@@ -69,10 +69,42 @@ Pre-alpha, under active development. Nothing is released yet.
 | M2 | Capability registry, auth, transports, sync + async shells | **done** |
 | M3 | Mail (RFC 8621), blobs → **0.1.0** | in progress |
 
-M3 progress: RFC 8621 data models, the three mail capabilities (30 methods),
-typed response shapes, composed entity builders, header queries, `Email/set`
-creation constraints and `/get` auto-chunking are in; blob upload/download and
-the client-level namespaces are next.
+M3's code is complete: RFC 8621 models, the three mail capabilities (30 methods),
+typed responses, composed entity builders, header queries, `Email/set` creation
+constraints, `/get` auto-chunking, blob transfer and the capability namespaces.
+
+**0.1.0 is not tagged yet**, deliberately. The integration suite is written but
+has never run: Stalwart's v0.16 headless bootstrap is unsolved (see
+[`docs/stalwart-spike.md`](docs/stalwart-spike.md)), so every claim below is
+verified against the in-process fake server and not yet against a real one. That
+is the one thing a release needs, so it comes first.
+
+### Capability namespaces
+
+```python
+with client.batch() as batch:
+    query = batch.mail.email.query(filter={"inMailbox": inbox})
+    emails = batch.mail.email.get(ids=query.ref_ids(), properties=["subject"])
+
+emails.result.items[0].subject  # typed Email, one request
+```
+
+Namespaces come from the same resolution the raw path uses, so a mail-only server
+has no `client.calendars` at all — an `AttributeError` at your call site rather
+than a namespace that exists and fails on every call.
+
+### Blobs
+
+Blobs are not JMAP: they move over plain HTTP to URLs the Session advertises as
+templates, so they are not batchable.
+
+```python
+uploaded = client.upload(pdf_bytes, content_type="application/pdf")
+client.download(uploaded.blob_id, name="invoice.pdf")
+```
+
+`maxSizeUpload` is checked *before* sending — a 60 MB attachment against a 50 MB
+limit fails in microseconds rather than after streaming 60 MB.
 
 ### `/get` chunks itself; `/set` refuses to
 

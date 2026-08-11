@@ -92,6 +92,9 @@ class FakeJMAPServer:
         #: Every request body received, for assertions about what went on the wire.
         self.requests: list[dict[str, Any]] = []
         self.created_ids: dict[str, str] = {}
+        #: Blob id -> (bytes, content type), populated by uploads.
+        self.blobs: dict[str, tuple[bytes, str]] = {}
+        self._blob_counter = 0
 
     # -- configuration ------------------------------------------------------ #
     def handle(self, method: str, handler: Handler) -> None:
@@ -139,9 +142,40 @@ class FakeJMAPServer:
             return httpx.Response(307, headers={"Location": f"{self.base_url}/jmap/session"})
         if path.endswith("/jmap/session"):
             return httpx.Response(200, json=self.session_document)
+        if "/jmap/upload/" in path:
+            return self._upload(request)
+        if "/jmap/download/" in path:
+            return self._download(path)
         if path.rstrip("/").endswith("/jmap"):
             return self._api(request)
         return httpx.Response(404, json={"type": "about:blank", "status": 404})
+
+    def _upload(self, request: httpx.Request) -> httpx.Response:
+        """RFC 8620 §6.1. Blobs move over plain HTTP, not as method calls."""
+        self._blob_counter += 1
+        blob_id = f"B{self._blob_counter}"
+        content_type = request.headers.get("Content-Type", "application/octet-stream")
+        self.blobs[blob_id] = (request.content, content_type)
+        account_id = request.url.path.rstrip("/").rsplit("/", 1)[-1]
+        return httpx.Response(
+            201,
+            json={
+                "accountId": account_id,
+                "blobId": blob_id,
+                "type": content_type,
+                "size": len(request.content),
+            },
+        )
+
+    def _download(self, path: str) -> httpx.Response:
+        # downloadUrl is {accountId}/{blobId}/{name}, so the id is the middle part.
+        parts = path.split("/jmap/download/", 1)[1].split("/")
+        blob_id = parts[1] if len(parts) > 1 else ""
+        found = self.blobs.get(blob_id)
+        if found is None:
+            return httpx.Response(404, json={"type": "about:blank", "status": 404})
+        content, content_type = found
+        return httpx.Response(200, content=content, headers={"Content-Type": content_type})
 
     def _api(self, request: httpx.Request) -> httpx.Response:
         if self.quirks.scripted_failures:
