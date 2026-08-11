@@ -156,6 +156,28 @@ PY
 )
 CREATE_RESPONSE=$(jmap "${ADMIN_USER}:${ADMIN_PASS}" "$CREATE_BODY")
 echo "$CREATE_RESPONSE" | head -c 600; echo
+
+# On failure, ask the server what a user account actually looks like rather than
+# guessing again. /api/schema is the same machine-readable description the
+# official CLI caches, and it is the authority on these field names.
+if echo "$CREATE_RESPONSE" | grep -q notCreated; then
+  echo "--- account creation failed; dumping the schema for x:Account" >&2
+  curl -sS -m 20 -u "${ADMIN_USER}:${ADMIN_PASS}" "${URL}/api/schema" \
+    | python3 -c '
+import json, sys
+schema = json.load(sys.stdin)
+types = schema if isinstance(schema, list) else schema.get("types", schema)
+if isinstance(types, dict):
+    types = [dict(v, name=k) for k, v in types.items()]
+for entry in types:
+    name = entry.get("name") or entry.get("id") or ""
+    if "Account" not in str(name):
+        continue
+    print("==", name)
+    print(json.dumps(entry, indent=2)[:2500])
+' >&2 || echo "(schema fetch failed)" >&2
+fi
+
 python3 - <<PY
 import json
 response = json.loads('''$CREATE_RESPONSE''')
