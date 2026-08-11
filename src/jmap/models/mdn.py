@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from typing import Any, Final
 
+from pydantic import Field
+
 from jmap.models.base import JMAPModel
 
 #: RFC 9007 §1.2. The keyword marking a message as acknowledged. Lowercase, and
@@ -86,7 +88,11 @@ class MDN(JMAPModel):
     include_original_message: bool | None = None
     #: The client's own name. ``None`` has better privacy properties, which the
     #: RFC says outright.
-    reporting_ua: str | None = None
+    #:
+    #: Aliased explicitly: RFC 9007 §2 spells it ``reportingUA`` (from RFC 8098's
+    #: ``Reporting-UA``), and the camelCase generator produces ``reportingUa`` -
+    #: a name no server recognises, in both directions and silently.
+    reporting_ua: str | None = Field(default=None, alias="reportingUA")
     disposition: Disposition | None = None
     #: Server-set: the gateway that translated a foreign notification into this.
     mdn_gateway: str | None = None

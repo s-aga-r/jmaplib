@@ -102,7 +102,10 @@ class CalendarRights(JMAPModel):
     may_write_all: bool = False
     may_write_own: bool = False
     may_update_private: bool = False
-    may_rsvp: bool = False
+    #: Aliased explicitly: the draft spells it ``mayRSVP``, and the camelCase
+    #: generator produces ``mayRsvp`` - which reads as "the user may not RSVP" to
+    #: every server, since the real key is simply absent.
+    may_rsvp: bool = Field(default=False, alias="mayRSVP")
     may_share: bool = False
     may_delete: bool = False
 

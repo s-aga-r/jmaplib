@@ -40,6 +40,13 @@ breaking change, so it is now a test failure rather than something noticed later
   on nothing. The `smimeStatusAtDelivery` *property* was also missing, and it is
   the one that does not change as trust anchors are removed, which is what makes
   "was this trusted when it arrived?" answerable at all
+- **Two properties were serialised under names no server reads.** RFC 9007's
+  `reportingUA` and the calendars draft's `mayRSVP` both carry an acronym, and
+  pydantic's camelCase generator lowercases all but its first letter — producing
+  `reportingUa` and `mayRsvp`. Silent in both directions: the value is written
+  under a key the server ignores, and a correctly-spelled value read back lands in
+  `extra` rather than on the field. Both now carry explicit aliases, and
+  `tests/unit/test_public_api.py` guards the class
 - The registry refused two capabilities declaring the same method even when they
   declared it *identically*, which the two vendor contacts URNs legitimately do
   and a server may advertise together. A genuine disagreement is still refused

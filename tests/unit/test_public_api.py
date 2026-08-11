@@ -181,3 +181,55 @@ class TestSpecRevisions:
         for urn in stable:
             revision = jmap.SPEC_REVISIONS[urn]
             assert not revision.startswith("draft-"), f"{urn} is not marked experimental"
+
+
+#: Wire names carrying two consecutive capitals. These are the ones pydantic's
+#: camelCase generator gets wrong - it lowercases all but the first letter of an
+#: acronym - and the failure is silent in *both* directions: the value is written
+#: under a key no server reads, and a value read back lands in `extra` rather than
+#: on the field.
+#:
+#: To find more, grep the spec texts for a property-shaped token with an internal
+#: run of capitals:
+#:
+#:     grep -ohE '\b[a-z][a-zA-Z0-9]*[A-Z]{2,}[a-zA-Z0-9]*\b' rfc*.txt | sort -u
+#:
+#: Model field -> the wire name it must serialise to.
+ACRONYM_ALIASES = {
+    ("jmap.models.mdn", "MDN", "reporting_ua"): "reportingUA",
+    ("jmap.models.calendars", "CalendarRights", "may_rsvp"): "mayRSVP",
+}
+
+
+class TestAcronymAliases:
+    """Wire names the camelCase generator cannot derive.
+
+    Two of these shipped wrong in 1.0 before being caught. The class of bug is
+    worth a standing guard because nothing else detects it: the model validates,
+    the request sends, the server accepts it, and the property is simply absent.
+    """
+
+    def test_each_acronym_property_keeps_its_spelling(self):
+        for (module_name, class_name, field_name), wire in ACRONYM_ALIASES.items():
+            model = getattr(importlib.import_module(module_name), class_name)
+            alias = model.model_fields[field_name].alias
+            assert alias == wire, f"{class_name}.{field_name} serialises as {alias!r}"
+
+    def test_a_value_survives_a_round_trip(self):
+        # The half a generated alias breaks silently: reading a correctly-spelled
+        # payload leaves the field unset and the value stranded in `extra`.
+        from jmap.models.calendars import CalendarRights
+        from jmap.models.mdn import MDN
+
+        assert MDN.from_wire({"reportingUA": "joes-pc"}).reporting_ua == "joes-pc"
+        assert MDN(reportingUA="joes-pc").to_wire() == {"reportingUA": "joes-pc"}
+        assert CalendarRights.from_wire({"mayRSVP": True}).may_rsvp is True
+        assert CalendarRights(mayRSVP=True).to_wire() == {"mayRSVP": True}
+
+    def test_the_generator_really_would_get_them_wrong(self):
+        # Pins *why* the explicit aliases are needed, so removing one is not
+        # mistaken for tidying up a redundant declaration.
+        from pydantic.alias_generators import to_camel
+
+        assert to_camel("reporting_ua") == "reportingUa"
+        assert to_camel("may_rsvp") == "mayRsvp"
