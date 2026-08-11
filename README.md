@@ -54,15 +54,15 @@ misbehaves without it:
 - **`using` is derived, then hard-intersected.** Under-declaring degrades
   silently (RFC 8620 §1.8); over-declaring makes Stalwart reject the *entire*
   request with `notRequest`, killing every unrelated call batched alongside it.
-- **Capability presence ≠ method presence.** Stalwart advertises
-  `urn:ietf:params:jmap:sieve` but implements no `SieveScript/changes`.
+- **Capability presence ≠ method presence.** The specs say so outright: RFC 9404
+  §3.1 has a server advertise `urn:ietf:params:jmap:blob` with an empty
+  `supportedTypeNames` when it implements no `Blob/lookup` at all.
 - **Properties can pull in a capability too.** `urn:ietf:params:jmap:smimeverify`
   adds properties but no methods, so derivation cannot look at method names alone.
 
 ## Status
 
-**0.1.0** released; the sync engine is on `main`, unreleased. See
-[CHANGELOG.md](CHANGELOG.md).
+**0.2.0** — Core, Mail, Blob, Quota and Sieve. See [CHANGELOG.md](CHANGELOG.md).
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -70,9 +70,10 @@ misbehaves without it:
 | M2 | Capability registry, auth, transports, sync + async shells | **done** |
 | M3 | Mail (RFC 8621), blobs → **0.1.0** | **done** |
 | M4 | Sync engine: change following, query views, state cursors | **done** |
-| M5+ | Push, Contacts, Calendars, FileNode, Sieve, Quota | planned |
+| M5 | Blob (RFC 9404), Quota (RFC 9425), Sieve (RFC 9661) → **0.2.0** | **done** |
+| M6+ | Push, Contacts, Calendars, FileNode, OAuth acquisition | planned |
 
-> **One caveat worth stating plainly.** 1224 tests and 100% coverage all run
+> **One caveat worth stating plainly.** 1361 tests and 100% coverage all run
 > against the in-process fake server. The live integration suite is written and
 > ready in `tests/integration/`, but has not been run against a real server:
 > Stalwart's v0.16 headless bootstrap is unresolved (see
@@ -94,10 +95,10 @@ Namespaces come from the same resolution the raw path uses, so a mail-only serve
 has no `client.calendars` at all — an `AttributeError` at your call site rather
 than a namespace that exists and fails on every call.
 
-### Blobs
+### Blobs, two ways
 
-Blobs are not JMAP: they move over plain HTTP to URLs the Session advertises as
-templates, so they are not batchable.
+The RFC 8620 way is not JMAP at all: blobs move over plain HTTP to URLs the
+Session advertises as templates, so they are not batchable.
 
 ```python
 uploaded = client.upload(pdf_bytes, content_type="application/pdf")
@@ -106,6 +107,78 @@ client.download(uploaded.blob_id, name="invoice.pdf")
 
 `maxSizeUpload` is checked *before* sending — a 60 MB attachment against a 50 MB
 limit fails in microseconds rather than after streaming 60 MB.
+
+Where the server offers `urn:ietf:params:jmap:blob` (RFC 9404) there is a second
+way, and it *is* batchable — which matters whenever something else in the same
+request needs the new blobId:
+
+```python
+from jmap.models.blob import BlobUpload, DataSource
+
+with client.batch() as batch:
+    batch.blob.blob.upload(
+        create={"s": BlobUpload(data=[DataSource.text(script)], type="application/sieve")}
+    )
+    batch.sieve.sieve_script.set(create={"A": {"name": "filters", "blobId": "#s"}})
+```
+
+`"#s"` is a *creation* reference, resolved by the server against `createdIds`. It
+is a different mechanism from the `#argument` result references used elsewhere,
+and it is the only one legal inside a `/set` object — RFC 8620 §3.7 result
+references are top-level arguments only.
+
+Sources concatenate, and a `blobId` source with `offset` and `length` splices an
+existing blob without the octets ever leaving the server:
+
+```python
+DataSource.blob("#whole", offset=2, length=3)
+```
+
+Two things about reading blobs back are easy to get wrong, so the models handle
+them: `size` is the size of the **whole** blob even under a range request (so
+comparing it against `len(data)` is not how you detect a short read — `isTruncated`
+is), and `data:asText` comes back **null with `isEncodingProblem`** when the
+selected octets are not valid UTF-8, which is indistinguishable from an empty blob
+unless you look at the flag. `Blob.data` reads whichever representation arrived.
+
+Content moves inside the JSON request here, so it counts against `maxSizeRequest`;
+RFC 9404 §4.1 recommends the upload endpoint past a megabyte. `Blob/copy` stays
+with `:core` because RFC 8620 owns it, so the same type has different methods in
+`client.core.blob` and `client.blob.blob` — the split is the spec's, not ours.
+
+### Quotas and Sieve scripts
+
+```python
+with client.batch() as batch:
+    quotas = batch.quota.quota.get(ids=None)
+
+quotas.result.items[0].remaining  # headroom, floored at zero
+```
+
+There is no `Quota/set` — usage is server-computed — so `client.quota.quota` has
+no `.set` attribute at all. `Quota/changes` carries `updatedProperties`, and its
+`null` reads backwards from the obvious: RFC 9425 §4.3 requires it whenever the
+server *cannot* tell what changed, so it means "fetch everything", not "nothing
+changed". `fetch_all_properties` says which you have.
+
+Sieve scripts are metadata plus a `blobId`. Activation is a side effect of `/set`
+rather than a property, because `isActive` is server-set and at most one script may
+hold it:
+
+```python
+with client.batch() as batch:
+    batch.sieve.sieve_script.activate(script_id)
+```
+
+Destroying the active script needs *two* `/set` calls — RFC 9661 §2.4 requires the
+deactivation to be separate — which is a batch, not a combined call. And
+`maxSizeScriptName` counts **octets**, not characters: `check_name()` measures the
+UTF-8 encoding, so a four-character CJK name is twelve.
+
+RFC 9661 defines no `SieveScript/changes` at all, even though the type is
+registered as usable for state change. Push can tell you scripts changed while
+giving you no way to ask what — re-running `/get` is the answer, which is fine for
+a handful of scripts.
 
 ### Staying in sync
 

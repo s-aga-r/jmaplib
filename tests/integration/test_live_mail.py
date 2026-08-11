@@ -7,10 +7,12 @@ These exist because everything else in the suite proves the library agrees with
 *our* model of a server. Only this proves it agrees with a real one - and the
 Stalwart spike already turned up several places where the two differ.
 
-Skips are **method-granular**, not capability-granular: Stalwart advertises
-``urn:ietf:params:jmap:sieve`` while implementing no ``SieveScript/changes``, so
-asking "does this server support the capability?" would produce spurious
-failures and a conformance matrix that overstates what works.
+Skips are **method-granular**, not capability-granular. The specs make that
+necessary rather than merely prudent: RFC 9404 §3.1 has a server advertise
+``urn:ietf:params:jmap:blob`` with an empty ``supportedTypeNames`` when it
+implements no ``Blob/lookup`` at all. Asking "does this server support the
+capability?" would produce spurious failures and a conformance matrix that
+overstates what works.
 """
 
 from __future__ import annotations

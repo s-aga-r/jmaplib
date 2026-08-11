@@ -12,6 +12,7 @@ changing what every other client in the process can speak.
 
 from __future__ import annotations
 
+from jmap.capabilities.blob import BLOB
 from jmap.capabilities.core import CORE
 from jmap.capabilities.mail import (
     MAIL,
@@ -19,12 +20,14 @@ from jmap.capabilities.mail import (
     SUBMISSION,
     VACATION,
 )
+from jmap.capabilities.quota import QUOTA
 from jmap.capabilities.registry import Registry
+from jmap.capabilities.sieve import SIEVE
 
 
 def default_registry() -> Registry:
     """Every capability this build of the library knows about."""
     registry = Registry()
-    for spec in (CORE, MAIL, SUBMISSION, VACATION, SMIME_VERIFY):
+    for spec in (CORE, MAIL, SUBMISSION, VACATION, SMIME_VERIFY, BLOB, QUOTA, SIEVE):
         registry.register(spec)
     return registry

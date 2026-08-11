@@ -5,11 +5,43 @@ with one deliberate exception: capabilities marked `experimental=True` track IET
 drafts and are excluded from the compatibility promise. See `jmap.SPEC_REVISIONS`
 for exactly which revision of each spec this build implements.
 
-## Unreleased
+## 0.2.0
+
+Blob management, Quota and Sieve - the three standalone RFCs that turn a mail
+client into one that can also store filters and read its own limits.
 
 ### Added
 
-**Sync engine** (`jmap.sync`) — the library stays stateless; it computes deltas and
+**Blob management** (RFC 9404) - `urn:ietf:params:jmap:blob`.
+
+- `Blob/upload` creates blobs *inside* a batch, so a script or a small attachment
+  can be uploaded and referenced by the call that consumes it in one round trip.
+  Sources concatenate, and a `blobId` source with `offset`/`length` splices an
+  existing blob server-side without downloading it
+- `Blob/get` with the range arguments, the `data`/`data:asText`/`data:asBase64`
+  property family, and `digest:<algorithm>`. `Blob.data` reads whichever
+  representation arrived; `size` remains the whole blob under a range request, so
+  `isTruncated` rather than a length comparison is what reports a short read
+- `Blob/lookup` for the reverse direction: which objects reference this blob
+- `DataSource` enforces RFC 9404 §4.1's "exactly one of" rule locally, because the
+  server is required to refuse to guess
+- Capability fields gate the calls: `supportedDigestAlgorithms` before a digest,
+  `supportedTypeNames` before a lookup, `maxDataSources` and `maxSizeBlobSet`
+  before an upload
+
+**Quota** (RFC 9425) - `urn:ietf:params:jmap:quota`. Read-only by construction:
+there is no `Quota/set`, so `client.quota.quota` has no `.set` attribute at all.
+`Quota/changes` carries `updatedProperties`, whose `null` means *fetch everything*
+rather than *nothing changed*.
+
+**Sieve** (RFC 9661) - `urn:ietf:params:jmap:sieve`. `SieveScript/get|query|set`
+plus `/validate`, which checks a script without storing it and reports invalid
+content as a value rather than a method error. `activate()` and `deactivate()`
+wrap `/set`'s activation arguments, since `isActive` is server-set and cannot be
+patched. Script names are checked locally against the forbidden character set and
+against `maxSizeScriptName`, which counts **octets** rather than characters.
+
+**Sync engine** (`jmap.sync`) (`jmap.sync`) — the library stays stateless; it computes deltas and
 the application decides what to persist.
 
 - `StateStore` protocol plus an in-memory implementation, with structured keys
@@ -25,8 +57,30 @@ the application decides what to persist.
 
 ### Changed
 
+- `FakeJMAPServer` now *implements* `Blob/upload` and `Blob/get` rather than
+  stubbing them - it concatenates sources, resolves `#creationId` blob references,
+  slices ranges and computes digests - so RFC 9404's worked examples run against
+  it directly. `store_blob()`, `concatenate()` and `resolve_blob_id()` are public
 - `FakeJMAPServer.fail()` makes a method answer with an `error` invocation, so
   downstream tests can drive error-recovery paths
+- `MethodSpec` gained `response_model` (a typed response for a method whose shape
+  is irregular, or standard-with-one-extra-argument) and `type_names_argument` (an
+  argument naming data types whose capabilities must reach `using`)
+
+### Fixed
+
+- **`Blob/copy` was modelled as a standard `/copy` and is not one.** RFC 8620 §6.3
+  takes `blobIds` rather than a `create` map and answers `copied`/`notCopied`
+  rather than `created`/`notCreated`, so the generic builder sent arguments the
+  server rejects, and the reply parsed into an object whose `created` was silently
+  always empty. It is now a bespoke builder with its own response model
+- **A back-reference passed as `properties` crashed the batch.** Both the
+  `using`-derivation scan and the forbidden-property check iterated the argument,
+  which a `ResultRef` is not - and feeding `/updatedProperties` straight into a
+  following `/get` is exactly what RFC 9425 §4.3 and RFC 8621 §2.2 recommend
+- The `Blob` data type was described twice, once per capability, which left
+  `data_type("Blob")` depending on which resolved first. It is now one shared
+  definition
 
 ## 0.1.0
 

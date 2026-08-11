@@ -18,13 +18,16 @@ some capabilities only in ``accountCapabilities``; both are reproducible here.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+import base64
+import hashlib
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
 import httpx
 
 from jmap.core.ijson import dumps, loads
+from jmap.core.narrow import as_object, is_object
 from jmap.core.pointer import PointerError, resolve
 
 #: A handler answers one method call. It receives the resolved arguments and the
@@ -32,6 +35,21 @@ from jmap.core.pointer import PointerError, resolve
 Handler = Callable[[dict[str, Any], "FakeJMAPServer"], Mapping[str, Any]]
 
 DEFAULT_SESSION_STATE = "session-0"
+
+#: RFC 8620 §6.1's honest default when nothing better is known.
+DEFAULT_BLOB_TYPE = "application/octet-stream"
+
+#: RFC 9404 §4.2. What ``Blob/get`` returns when ``properties`` is null.
+DEFAULT_BLOB_PROPERTIES = ("data", "size")
+
+#: JMAP spells RFC 3230's algorithm names in lower case, so the mapping to
+#: :mod:`hashlib` is explicit rather than a ``lower()`` away.
+DIGEST_ALGORITHMS: Mapping[str, str] = {
+    "md5": "md5",
+    "sha": "sha1",
+    "sha-256": "sha256",
+    "sha-512": "sha512",
+}
 
 
 @dataclass(slots=True)
@@ -84,7 +102,15 @@ class FakeJMAPServer:
         )
         self.session_state = DEFAULT_SESSION_STATE
         self.quirks = quirks or ServerQuirks()
-        self.handlers: dict[str, Handler] = {"Core/echo": _echo}
+        # Blob/upload and Blob/get are implemented rather than stubbed because
+        # they *compute*: concatenating sources, slicing ranges and digesting the
+        # result is where a client's assumptions get tested, and a canned response
+        # would test nothing. Override either with `respond()` as usual.
+        self.handlers: dict[str, Handler] = {
+            "Core/echo": _echo,
+            "Blob/upload": _blob_upload,
+            "Blob/get": _blob_get,
+        }
         #: Method name -> the `error` invocation arguments to answer with.
         self.errors: dict[str, dict[str, Any]] = {}
         #: Called before normal routing. Return a response to take the request
@@ -161,12 +187,72 @@ class FakeJMAPServer:
             return self._api(request)
         return httpx.Response(404, json={"type": "about:blank", "status": 404})
 
-    def _upload(self, request: httpx.Request) -> httpx.Response:
-        """RFC 8620 §6.1. Blobs move over plain HTTP, not as method calls."""
+    def store_blob(self, content: bytes, content_type: str = DEFAULT_BLOB_TYPE) -> str:
+        """Add a blob and return its id, as either upload path would."""
         self._blob_counter += 1
         blob_id = f"B{self._blob_counter}"
-        content_type = request.headers.get("Content-Type", "application/octet-stream")
-        self.blobs[blob_id] = (request.content, content_type)
+        self.blobs[blob_id] = (content, content_type)
+        return blob_id
+
+    def concatenate(self, sources: Sequence[Any]) -> bytes:
+        """Resolve one ``Blob/upload`` ``data`` array into octets (RFC 9404 §4.1).
+
+        A ``blobId`` may be a ``#creationId`` naming a blob created earlier in the
+        same request, which is the mechanism that makes server-side splicing
+        possible - so it is resolved against ``created_ids`` here rather than
+        treated as a literal id.
+
+        Raises :class:`ValueError` for anything the RFC requires the server to
+        refuse: an unresolvable id, a range past the end, or a source that names
+        no data at all.
+        """
+        out = bytearray()
+        for source in sources:
+            if not isinstance(source, Mapping):
+                raise ValueError("a data source must be an object")
+            entry = cast("Mapping[str, Any]", source)
+            if "data:asText" in entry:
+                out += str(entry["data:asText"]).encode()
+            elif "data:asBase64" in entry:
+                out += base64.b64decode(str(entry["data:asBase64"]), validate=True)
+            elif "blobId" in entry:
+                out += self._slice(entry)
+            else:
+                raise ValueError("a data source must name exactly one octet source")
+        return bytes(out)
+
+    def resolve_blob_id(self, reference: str) -> str:
+        """Turn a ``#creationId`` into the blob it named, or pass an id through.
+
+        A ``#`` prefix inside an argument *value* is a creation reference resolved
+        against ``createdIds`` (RFC 8620 §5.3), which is a different mechanism from
+        the ``#argument`` result references handled in :meth:`_resolve_references`.
+        Blobs lean on it, because RFC 9404 §4.1 has every upload populate
+        ``createdIds`` whether the client asked for one or not.
+        """
+        if not reference.startswith("#"):
+            return reference
+        return self.created_ids.get(reference[1:], "")
+
+    def _slice(self, source: Mapping[str, Any]) -> bytes:
+        reference = str(source["blobId"])
+        found = self.blobs.get(self.resolve_blob_id(reference))
+        if found is None:
+            raise ValueError(f"no such blob {reference!r}")
+        data = found[0]
+        offset = int(source.get("offset") or 0)
+        length = source.get("length")
+        end = len(data) if length is None else offset + int(length)
+        # RFC 9404 §4.1: a range that begins or extends past the end makes the
+        # whole creation invalid, rather than being silently clamped.
+        if offset > len(data) or end > len(data):
+            raise ValueError(f"range {offset}:{end} is past the end of blob {reference!r}")
+        return data[offset:end]
+
+    def _upload(self, request: httpx.Request) -> httpx.Response:
+        """RFC 8620 §6.1. Blobs move over plain HTTP, not as method calls."""
+        content_type = request.headers.get("Content-Type", DEFAULT_BLOB_TYPE)
+        blob_id = self.store_blob(request.content, content_type)
         account_id = request.url.path.rstrip("/").rsplit("/", 1)[-1]
         return httpx.Response(
             201,
@@ -273,6 +359,118 @@ class FakeJMAPServer:
 
 def _echo(arguments: dict[str, Any], _server: FakeJMAPServer) -> dict[str, Any]:
     return arguments
+
+
+def _blob_upload(arguments: dict[str, Any], server: FakeJMAPServer) -> dict[str, Any]:
+    """``Blob/upload`` (RFC 9404 §4.1).
+
+    Each created blobId goes into ``createdIds`` whether or not the client asked
+    for one, which the RFC requires: it is what lets a later call in the same
+    request reference the blob by ``#creationId``.
+    """
+    created: dict[str, Any] = {}
+    not_created: dict[str, Any] = {}
+    creations = cast("Mapping[str, Any]", arguments.get("create") or {})
+    for creation_id, upload in creations.items():
+        # A real server answers a malformed creation with notCreated rather than
+        # falling over, and a fake that crashes instead teaches nothing.
+        if not is_object(upload):
+            not_created[creation_id] = {
+                "type": "invalidProperties",
+                "description": "an UploadObject must be an object",
+            }
+            continue
+        try:
+            content = server.concatenate(as_object(upload).get("data") or [])
+        except ValueError as exc:
+            # The RFC forbids guessing: an unusable source fails the creation.
+            not_created[creation_id] = {"type": "invalidProperties", "description": str(exc)}
+            continue
+        content_type = upload.get("type") or DEFAULT_BLOB_TYPE
+        blob_id = server.store_blob(content, content_type)
+        server.created_ids[creation_id] = blob_id
+        created[creation_id] = {"id": blob_id, "type": content_type, "size": len(content)}
+    return {
+        "accountId": arguments.get("accountId"),
+        "created": created,
+        "notCreated": not_created,
+    }
+
+
+def _blob_get(arguments: dict[str, Any], server: FakeJMAPServer) -> dict[str, Any]:
+    """``Blob/get`` (RFC 9404 §4.2), including the range and encoding rules."""
+    properties = arguments.get("properties") or list(DEFAULT_BLOB_PROPERTIES)
+    offset = int(arguments.get("offset") or 0)
+    raw_length = arguments.get("length")
+    length = None if raw_length is None else int(raw_length)
+
+    items: list[dict[str, Any]] = []
+    not_found: list[str] = []
+    for identifier in cast("Sequence[Any]", arguments.get("ids") or []):
+        # `["#cat"]` is how RFC 9404 §4.1.2 reads a blob created earlier in the
+        # same request: a creation reference in the value, not a result reference.
+        blob_id = server.resolve_blob_id(str(identifier))
+        found = server.blobs.get(blob_id)
+        if found is None:
+            not_found.append(str(identifier))
+            continue
+        items.append(_blob_properties(blob_id, found[0], properties, offset, length))
+    return {"accountId": arguments.get("accountId"), "list": items, "notFound": not_found}
+
+
+def _blob_properties(
+    blob_id: str, data: bytes, properties: Sequence[Any], offset: int, length: int | None
+) -> dict[str, Any]:
+    end = len(data) if length is None else offset + length
+    selected = data[offset:end]
+    # A null length is "the rest of the blob", so it can only truncate by starting
+    # past the end; an explicit length truncates whenever it overshoots.
+    truncated = offset > len(data) if length is None else end > len(data)
+
+    try:
+        text: str | None = selected.decode()
+    except UnicodeDecodeError:
+        text = None
+    encoded = base64.b64encode(selected).decode("ascii")
+
+    item: dict[str, Any] = {"id": blob_id}
+    for name in map(str, properties):
+        if name == "size":
+            # Always the whole blob, never the selected range.
+            item["size"] = len(data)
+        elif name == "data":
+            # The adaptive form: text when it decodes, base64 when it does not.
+            if text is None:
+                item["data:asBase64"] = encoded
+                item["isEncodingProblem"] = True
+            else:
+                item["data:asText"] = text
+        elif name == "data:asText":
+            if text is None:
+                item["isEncodingProblem"] = True
+            else:
+                item["data:asText"] = text
+        elif name == "data:asBase64":
+            item["data:asBase64"] = encoded
+        elif name.startswith("digest:"):
+            digest = _digest(name.removeprefix("digest:"), selected)
+            if digest is not None:
+                item[name] = digest
+    if truncated:
+        item["isTruncated"] = True
+    return item
+
+
+def _digest(algorithm: str, data: bytes) -> str | None:
+    """Base64 of ``data``'s digest, or ``None`` for an algorithm we do not offer.
+
+    Names are the lowercased RFC 3230 registry spellings, which is how JMAP writes
+    them - ``sha-256``, not ``SHA-256``.
+    """
+    name = DIGEST_ALGORITHMS.get(algorithm)
+    if name is None:
+        return None
+    return base64.b64encode(hashlib.new(name, data).digest()).decode("ascii")
 
 
 def _problem(problem_type: str, status: int, **extra: Any) -> httpx.Response:

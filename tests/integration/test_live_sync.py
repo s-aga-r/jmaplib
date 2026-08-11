@@ -13,8 +13,8 @@ inputs that reading assumes - specifically the three things a fake cannot fake:
 - how the server answers a cursor it cannot honour, which is the one branch where
   the recovery differs from every other method error
 
-Skips stay method-granular - Stalwart advertises ``:calendars`` while implementing
-no ``Calendar/queryChanges``, so a capability-level skip would overstate coverage.
+Skips stay method-granular, because a capability-level skip overstates coverage:
+a server can advertise a capability and implement only part of it.
 """
 
 from __future__ import annotations

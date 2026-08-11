@@ -211,9 +211,12 @@ class ActiveCapabilities:
     def supports(self, method_name: str) -> bool:
         """Whether this account can call ``method_name`` at all.
 
-        Capability presence does not imply method presence: Stalwart advertises
-        ``urn:ietf:params:jmap:sieve`` but implements no ``SieveScript/changes``.
-        Skips and feature checks must be method-granular for that reason.
+        Capability presence does not imply method presence, and the specs say so
+        outright: RFC 9404 §3.1 has a server advertise ``urn:ietf:params:jmap:blob``
+        with an empty ``supportedTypeNames`` when it implements no ``Blob/lookup``
+        at all. Feature checks and test skips have to be method-granular for that
+        reason - asking "does this server have the capability?" overstates what
+        works.
         """
         return method_name in self._methods
 
@@ -230,6 +233,18 @@ class ActiveCapabilities:
         if urn not in self.specs:
             raise CapabilityNotSupportedError(urn, advertised=self.advertised)
 
+    def urn_owning(self, type_name: str) -> str | None:
+        """The URN of the capability that defines data type ``type_name``.
+
+        ``None`` for a type this build does not model, which is not an error: a
+        server may offer private types, and RFC 9404 §4.3 tells clients to ignore
+        names they do not recognise rather than refuse the call.
+        """
+        for urn, spec in self.specs.items():
+            if spec.data_type(type_name) is not None:
+                return urn
+        return None
+
     def using_for(
         self,
         method_names: Sequence[str],
@@ -237,6 +252,7 @@ class ActiveCapabilities:
         properties: Iterable[tuple[str, str]] = (),
         filter_fields: Iterable[tuple[str, str]] = (),
         sort_options: Iterable[tuple[str, str]] = (),
+        type_names: Iterable[str] = (),
         extra: frozenset[str] = frozenset(),
     ) -> frozenset[str]:
         """The ``using`` set for a batch, or a local error naming what is missing.
@@ -246,6 +262,11 @@ class ActiveCapabilities:
         without adding any methods - ``urn:ietf:params:jmap:smimeverify`` is the
         case that forces this, and leaving it out of ``using`` costs you the
         properties with no error at all.
+
+        ``type_names`` covers the other direction: a method *argument* that names
+        data types needs each type's own capability in ``using`` too.
+        ``Blob/lookup`` is the case, and RFC 9404 §4.3 makes the omission fail as
+        ``unknownDataType`` - an error that says nothing about ``using``.
         """
         needed: set[str] = {CORE_URN}
 
@@ -257,6 +278,11 @@ class ActiveCapabilities:
             needed.add(owner.urn)
             needed |= owner.requires
             needed |= method.also_requires
+
+        for type_name in type_names:
+            owning = self.urn_owning(type_name)
+            if owning is not None:
+                needed.add(owning)
 
         for type_name, prop in properties:
             needed |= self._urns_adding(type_name, prop, "adds_properties")

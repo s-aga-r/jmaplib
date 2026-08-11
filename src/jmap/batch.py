@@ -80,6 +80,7 @@ class Batch:
         "_default_account",
         "_handles",
         "_properties",
+        "_type_names",
     )
 
     def __init__(
@@ -94,6 +95,9 @@ class Batch:
         self._handles: list[Handle[Any]] = []
         #: (type, property) pairs seen so far, for `using` derivation.
         self._properties: list[tuple[str, str]] = []
+        #: Data type names named as *arguments*, which pull their owning
+        #: capabilities into `using` too - see ``MethodSpec.type_names_argument``.
+        self._type_names: list[str] = []
         self._counter = 0
         #: Threaded across requests so ``#`` creation references survive a split
         #: batch (RFC 8620 §3.3).
@@ -109,6 +113,19 @@ class Batch:
     @property
     def created_ids(self) -> Mapping[str, Id]:
         return dict(self._created_ids)
+
+    def capability_value(self, urn: str) -> Mapping[str, Any]:
+        """The advertised capability object for ``urn``, scoped to this account.
+
+        Exposed because a bespoke builder may need to check a capability field
+        before queueing its call - an unsupported digest algorithm or an illegal
+        Sieve script name is far cheaper to reject here than to diagnose from the
+        response.
+
+        Empty when the capability is unadvertised or carries no fields, so a caller
+        parsing it gets the conservative defaults rather than an error.
+        """
+        return self._capabilities.session.capability_value(urn, self._default_account)
 
     def add(
         self,
@@ -133,8 +150,20 @@ class Batch:
         self._check_read_only(name, spec, args)
         self._check_properties(name, spec, args)
 
-        for prop in args.get("properties") or ():
-            self._properties.append((spec.type_name, str(prop)))
+        # Only a literal list can be inspected. Both of these arguments are
+        # routinely back-references - RFC 9425 §4.3 feeds `/updatedProperties`
+        # straight into a Quota/get - and a ResultRef names values that do not
+        # exist yet, so there is nothing here to derive `using` from. The server
+        # resolves it against a response that has already declared what it needs.
+        properties = args.get("properties")
+        if is_list(properties):
+            for prop in as_list(properties):
+                self._properties.append((spec.type_name, str(prop)))
+        if spec.type_names_argument is not None:
+            type_names = args.get(spec.type_names_argument)
+            if is_list(type_names):
+                for type_name in as_list(type_names):
+                    self._type_names.append(str(type_name))
 
         self._counter += 1
         call_id = f"c{self._counter}"
@@ -216,12 +245,15 @@ class Batch:
         whole call, which is a confusing way to learn about a typo.
         """
         requested = args.get("properties")
-        if not requested:
+        # A back-reference names properties that do not exist yet, so there is
+        # nothing to check against; the earlier call it points at was gated when
+        # it was queued.
+        if not is_list(requested):
             return
         data_type = self._capabilities.data_type(spec.type_name)
         if data_type is None:
             return
-        forbidden = sorted(data_type.never_request_properties.intersection(requested))
+        forbidden = sorted(data_type.never_request_properties.intersection(as_list(requested)))
         if forbidden:
             raise CapabilityFieldError(
                 spec.type_name, "properties", "never returned by the server", forbidden
@@ -233,6 +265,7 @@ class Batch:
         return self._capabilities.using_for(
             [handle.call.name for handle in self._handles],
             properties=self._properties,
+            type_names=self._type_names,
             extra=extra,
         )
 

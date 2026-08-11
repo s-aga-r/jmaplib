@@ -196,7 +196,11 @@ class Handle(Generic[R]):
         return ResultRef(self.call_id, self.call.name, "/updated")
 
     def ref_updated_properties(self) -> ResultRef[list[str] | None]:
-        """``/updatedProperties`` - RFC 8621 §2.2's fast path for Mailbox counts."""
+        """``/updatedProperties`` - the fast path for cheap, frequently-moving
+        properties (RFC 8621 §2.2 for Mailbox counts, RFC 9425 §4.3 for Quota
+        usage). A ``null`` there means the server could not narrow it down and
+        every property must be fetched, which is the opposite of what the empty
+        reading suggests."""
         return ResultRef(self.call_id, self.call.name, "/updatedProperties")
 
     # -- reading results ---------------------------------------------------- #

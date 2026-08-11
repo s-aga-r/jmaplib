@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from typing import Final
 
+from jmap.capabilities.blob import BLOB_TYPE
 from jmap.capabilities.spec import CapabilitySpec, DataTypeSpec, MethodKind, MethodSpec
 from jmap.core.limits import LimitKey
+from jmap.models.blob import BlobCopyResponse
 
 CORE_URN: Final = "urn:ietf:params:jmap:core"
 
@@ -23,9 +25,10 @@ PUSH_SUBSCRIPTION: Final = DataTypeSpec(
     never_request_properties=frozenset({"url", "keys"}),
 )
 
-#: RFC 8620 §6.3. Blobs are the one core type with a method but no object model:
-#: they are addressed by id and moved with ``Blob/copy``, never fetched as JSON.
-BLOB: Final = DataTypeSpec(name="Blob")
+#: RFC 8620 §6.3 owns ``Blob/copy``; RFC 9404 owns everything else about blobs.
+#: The type itself is described once, in :mod:`jmap.capabilities.blob`, so that
+#: ``data_type("Blob")`` cannot depend on which capability resolved first.
+BLOB: Final = BLOB_TYPE
 
 CORE: Final = CapabilitySpec(
     urn=CORE_URN,
@@ -41,10 +44,14 @@ CORE: Final = CapabilitySpec(
         ),
         MethodSpec(
             name="Blob/copy",
-            kind=MethodKind.COPY,
+            # Not MethodKind.COPY, despite the name. RFC 8620 §6.3 takes `blobIds`
+            # rather than the `create` map every other /copy uses, and answers
+            # `copied`/`notCopied` rather than `created`/`notCreated`. Riding the
+            # generic shape would send arguments the server rejects and then parse
+            # the reply into an object whose `created` is always empty.
+            kind=MethodKind.CUSTOM,
             mutating=True,
-            # RFC 8620 §6.3 takes `blobIds`, not the `create` map every other
-            # /copy uses, so it cannot ride the generic copy builder.
+            response_model=BlobCopyResponse,
             extra_args={"blobIds": "ids of the blobs to copy from fromAccountId"},
         ),
         MethodSpec(

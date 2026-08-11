@@ -262,17 +262,22 @@ _MIXINS: dict[MethodKind, type[EntityBase[Any]]] = {
 _composed: dict[tuple[str, ...], type[EntityBase[Any]]] = {}
 
 
-def entity_class(kinds: frozenset[MethodKind]) -> type[EntityBase[Any]]:
-    """Build (and cache) a façade class exposing exactly ``kinds``.
+def entity_class(
+    kinds: frozenset[MethodKind], custom: tuple[type[EntityBase[Any]], ...] = ()
+) -> type[EntityBase[Any]]:
+    """Build (and cache) a façade class exposing exactly ``kinds`` plus ``custom``.
 
     Composing rather than exposing all six keeps the object's surface honest:
     ``Thread`` really has no ``.query``, so misuse is an ``AttributeError`` at the
     call site instead of an ``unknownMethod`` from the server.
+
+    Bespoke builders come *first* in the base list, so a method that shares a name
+    with a standard shape overrides it - ``Blob/get`` takes range arguments the
+    generic ``/get`` knows nothing about.
     """
-    bases = tuple(dict.fromkeys(_MIXINS[kind] for kind in _MIXINS if kind in kinds)) or (
-        EntityBase,
-    )
-    key = tuple(sorted(base.__name__ for base in bases))
+    standard = tuple(dict.fromkeys(_MIXINS[kind] for kind in _MIXINS if kind in kinds))
+    bases = (*custom, *standard) or (EntityBase,)
+    key = tuple(base.__name__ for base in bases)
     cached = _composed.get(key)
     if cached is None:
         cached = type("Entity" + "".join(key), bases, {"__slots__": ()})
@@ -282,9 +287,17 @@ def entity_class(kinds: frozenset[MethodKind]) -> type[EntityBase[Any]]:
 
 def entity_for(batch: Batch, spec: CapabilitySpec, data_type: DataTypeSpec) -> EntityBase[Any]:
     """The façade for one data type, exposing only the methods it supports."""
-    kinds = frozenset(
-        method.kind
-        for method in spec.methods
-        if method.type_name == data_type.name and method.kind in _MIXINS
+    # Local import: `irregular` builds on this module, so importing it at module
+    # scope would close a cycle.
+    from jmap.api.irregular import CUSTOM_BUILDERS
+
+    methods = [method for method in spec.methods if method.type_name == data_type.name]
+    kinds = frozenset(method.kind for method in methods if method.kind in _MIXINS)
+    custom = tuple(
+        dict.fromkeys(
+            builder
+            for method in methods
+            if (builder := CUSTOM_BUILDERS.get(method.name)) is not None
+        )
     )
-    return entity_class(kinds)(batch, data_type.name, data_type.model)
+    return entity_class(kinds, custom)(batch, data_type.name, data_type.model)

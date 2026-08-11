@@ -65,6 +65,12 @@ class MethodSpec:
     #: Turns the response arguments into a typed result. Travels with the method
     #: so an irregular response shape needs no lookup table at demux time.
     parse: Callable[[Mapping[str, Any]], Any] = dict
+    #: Response model to use instead of the one implied by ``kind``. Two cases need
+    #: it: a standard shape carrying an extra argument (``Quota/changes`` adds
+    #: ``updatedProperties``), and a ``CUSTOM`` method whose response is still a
+    #: declared model (``Blob/lookup``). Without it the first silently loses the
+    #: extra field to ``extra`` and the second falls back to a raw mapping.
+    response_model: type[Any] | None = None
     #: ``False`` for ``PushSubscription/*``, which take no ``accountId``.
     account_scoped: bool = True
     #: ``False`` for ``PushSubscription/*``, which have no state string and so no
@@ -85,6 +91,12 @@ class MethodSpec:
     #: description used in error messages: ``collapseThreads``,
     #: ``expandRecurrences``, ``onDestroyRemoveEmails`` and the rest.
     extra_args: Mapping[str, str] = _NO_STRINGS
+    #: Name of an argument that lists JMAP *data type names* whose owning
+    #: capabilities must therefore appear in ``using``. ``Blob/lookup`` is the
+    #: motivating case: RFC 9404 §4.3 requires the capability defining each
+    #: requested type to be in the request, and answers ``unknownDataType``
+    #: otherwise - a failure with no hint that ``using`` was the problem.
+    type_names_argument: str | None = None
 
     @property
     def type_name(self) -> str:
