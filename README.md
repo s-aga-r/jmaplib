@@ -69,9 +69,37 @@ Pre-alpha, under active development. Nothing is released yet.
 | M2 | Capability registry, auth, transports, sync + async shells | **done** |
 | M3 | Mail (RFC 8621), blobs → **0.1.0** | in progress |
 
-M3 progress: all RFC 8621 data models and the three mail capabilities (30 methods)
-are registered; typed entity facades, header queries, `Email/set` creation
-constraints, `/get` auto-chunking and blob upload/download are next.
+M3 progress: RFC 8621 data models, the three mail capabilities (30 methods),
+typed response shapes and the composed entity builders are in; header queries,
+`Email/set` creation constraints, `/get` auto-chunking and blob upload/download
+are next.
+
+### The method surface matches the server
+
+Six method shapes cover almost all of JMAP, so they are written once and
+parameterised by the object model. But a type does not get all six — and rather
+than expose them everywhere and fail at run time, each façade is *composed from
+the capability spec*:
+
+| Type | Surface |
+|---|---|
+| `Email` | `get` `changes` `query` `query_changes` `set` `copy` |
+| `Mailbox` | `get` `changes` `query` `query_changes` `set` |
+| `Thread` | `get` `changes` — threads are derived, not stored |
+| `VacationResponse` | `get` `set` — a singleton |
+
+So `thread.query(...)` is an `AttributeError` at your call site rather than an
+`unknownMethod` from the server. Responses are typed to match: `Email/get`
+returns a `GetResponse[Email]`, `Email/set` a `SetResponse[Email]`.
+
+A `/set` half-succeeds by design, so its per-object failures are values rather
+than exceptions — raising would discard the objects that *did* change:
+
+```python
+result = emails.set(create={"d1": {...}}).result
+result.created_id("d1")          # server-assigned id, or None
+result.creation_errors           # {"d2": SetError(type="overQuota")}
+```
 
 ### Mail is three capabilities, not one
 
