@@ -5,6 +5,29 @@ with one deliberate exception: capabilities marked `experimental=True` track IET
 drafts and are excluded from the compatibility promise. See `jmap.SPEC_REVISIONS`
 for exactly which revision of each spec this build implements.
 
+## Unreleased
+
+### Added
+
+**Sync engine** (`jmap.sync`) — the library stays stateless; it computes deltas and
+the application decides what to persist.
+
+- `StateStore` protocol plus an in-memory implementation, with structured keys
+  (`<accountId>/<TypeName>`) so an account's cursors can be removed together
+- `ChangeStream` follows `Foo/changes` across pages until `hasMoreChanges` is
+  false, and raises `ResyncRequiredError` on `cannotCalculateChanges` rather than
+  passing it through as a generic method error. Delivery is at-least-once: the
+  cursor advances only once the consumer requests the next page
+- `QueryView` and `splice()` apply `Foo/queryChanges` deltas to a sparse cached
+  id list, reproducing RFC 8620 §5.6's worked example
+- `QuerySpec` as a stable cache key: filter key order is normalised, sort order is
+  significant, and `collapseThreads` distinguishes two otherwise identical views
+
+### Changed
+
+- `FakeJMAPServer.fail()` makes a method answer with an `error` invocation, so
+  downstream tests can drive error-recovery paths
+
 ## 0.1.0
 
 First release. Core protocol and RFC 8621 Mail.

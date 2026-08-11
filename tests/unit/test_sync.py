@@ -1,0 +1,344 @@
+"""The sync engine: cursors, change following, and query splicing."""
+
+from __future__ import annotations
+
+from typing import ClassVar
+
+import pytest
+
+from jmap.models.responses import AddedItem, ChangesResponse, QueryChangesResponse, QueryResponse
+from jmap.sync import (
+    ChangeSet,
+    InMemoryStateStore,
+    QuerySpec,
+    QueryView,
+    StaleQueryViewError,
+    StateStore,
+    UncacheableQueryError,
+    query_key,
+    splice,
+    type_key,
+)
+
+
+def added(*pairs: tuple[str, int]) -> list[AddedItem]:
+    return [AddedItem.model_validate({"id": name, "index": index}) for name, index in pairs]
+
+
+class TestSpliceRfcExample:
+    """RFC 8620 §5.6 works the algorithm through by hand; this is that example."""
+
+    CACHED: ClassVar[list[str | None]] = [
+        "id1",
+        "id2",
+        None,
+        None,
+        "id3",
+        "id4",
+        None,
+        None,
+        None,
+    ]
+
+    def test_splicing_out_removed_ids(self):
+        # "id31" is not in the cache and is simply ignored - the RFC's own
+        # example includes such an id.
+        result = splice(self.CACHED, removed=["id2", "id31"])
+        assert result == ["id1", None, None, "id3", "id4", None, None, None]
+
+    def test_splicing_in_added_ids(self):
+        after_removal = ["id1", None, None, "id3", "id4", None, None, None]
+        result = splice(after_removal, added=added(("id5", 0)))
+        assert result == ["id5", "id1", None, None, "id3", "id4", None, None, None]
+
+    def test_the_whole_worked_example_in_one_pass(self):
+        result = splice(self.CACHED, removed=["id2", "id31"], added=added(("id5", 0)))
+        assert result == ["id5", "id1", None, None, "id3", "id4", None, None, None]
+
+
+class TestSpliceOrdering:
+    def test_removals_are_applied_before_insertions(self):
+        # The indices in `added` describe the list *after* the removals, so doing
+        # it the other way round puts the item in the wrong place.
+        result = splice(["a", "b", "c"], removed=["a"], added=added(("x", 1)))
+        assert result == ["b", "x", "c"]
+
+    def test_insertions_are_applied_lowest_index_first(self):
+        result = splice(["a"], added=added(("x", 0), ("y", 1)))
+        assert result == ["x", "y", "a"]
+
+    def test_unsorted_added_is_sorted_defensively(self):
+        # The server MUST send these index-ascending; a client that trusts it
+        # blindly corrupts the list if one does not.
+        result = splice(["a"], added=added(("y", 1), ("x", 0)))
+        assert result == ["x", "y", "a"]
+
+    def test_an_id_in_both_arrays_is_moved_not_dropped(self):
+        # A mutable sort or filter property makes the server report a moved item
+        # as removed *and* re-added (§5.6). Treating removed as a delete-set and
+        # skipping the re-add loses it.
+        result = splice(["a", "b", "c"], removed=["a"], added=added(("a", 2)))
+        assert result == ["b", "c", "a"]
+
+
+class TestSpliceSparseness:
+    def test_gaps_are_preserved(self):
+        # The nulls are what keep the indices meaningful.
+        assert splice([None, "a", None], removed=["a"]) == [None, None]
+
+    def test_inserting_past_the_end_pads_rather_than_appends(self):
+        # A sparse cache may not reach that far yet; the id must land at the
+        # index the server gave.
+        result = splice(["a"], added=added(("z", 4)))
+        assert result == ["a", None, None, None, "z"]
+
+    def test_total_truncates(self):
+        assert splice(["a", "b", "c"], total=2) == ["a", "b"]
+
+    def test_total_extends_with_gaps(self):
+        assert splice(["a"], total=3) == ["a", None, None]
+
+    def test_total_of_zero_empties_the_list(self):
+        assert splice(["a", "b"], total=0) == []
+
+    def test_no_delta_is_a_no_op(self):
+        assert splice(["a", None, "b"]) == ["a", None, "b"]
+
+    def test_the_input_is_not_mutated(self):
+        original = ["a", "b"]
+        splice(original, removed=["a"])
+        assert original == ["a", "b"]
+
+
+class TestQuerySpec:
+    def test_filter_key_ignores_dict_ordering(self):
+        # {"a": 1, "b": 2} and {"b": 2, "a": 1} are the same filter.
+        first = QuerySpec.build("Email", "a", filter={"a": 1, "b": 2})
+        second = QuerySpec.build("Email", "a", filter={"b": 2, "a": 1})
+        assert first == second
+        assert hash(first) == hash(second)
+
+    def test_a_different_filter_is_a_different_query(self):
+        assert QuerySpec.build("Email", "a", filter={"x": 1}) != QuerySpec.build(
+            "Email", "a", filter={"x": 2}
+        )
+
+    def test_sort_order_is_significant(self):
+        # Unlike a filter's keys, a sort is a sequence and its order matters.
+        first = QuerySpec.build("Email", "a", sort=[{"property": "x"}, {"property": "y"}])
+        second = QuerySpec.build("Email", "a", sort=[{"property": "y"}, {"property": "x"}])
+        assert first != second
+
+    def test_collapse_threads_distinguishes_two_views(self):
+        # It changes which emails appear at all (RFC 8621 §4.4).
+        assert QuerySpec.build("Email", "a", collapse_threads=True) != QuerySpec.build(
+            "Email", "a", collapse_threads=False
+        )
+
+    def test_nested_filters_are_handled(self):
+        spec = QuerySpec.build(
+            "Email", "a", filter={"operator": "AND", "conditions": [{"x": 1}, {"y": [1, 2]}]}
+        )
+        assert spec.filter_key
+
+    def test_no_filter_or_sort(self):
+        spec = QuerySpec.build("Email", "a")
+        assert spec.filter_key == ""
+        assert spec.sort_key == ""
+
+
+class TestQueryViewSeeding:
+    def test_from_a_simple_query(self):
+        view = QueryView.from_query(
+            QuerySpec.build("Email", "a"),
+            QueryResponse.model_validate(
+                {"queryState": "q1", "canCalculateChanges": True, "ids": ["m1", "m2"]}
+            ),
+        )
+        assert view.ids == ["m1", "m2"]
+        assert view.query_state == "q1"
+        assert view.can_calculate_changes
+
+    def test_a_query_answered_part_way_down_records_the_gap(self):
+        # The client has not seen positions 0-4, and pretending the results start
+        # at zero would make every later index wrong.
+        view = QueryView.from_query(
+            QuerySpec.build("Email", "a"),
+            QueryResponse.model_validate({"position": 5, "ids": ["m6"], "queryState": "q"}),
+        )
+        assert view.ids == [None, None, None, None, None, "m6"]
+
+    def test_total_extends_the_view_beyond_what_was_fetched(self):
+        view = QueryView.from_query(
+            QuerySpec.build("Email", "a"),
+            QueryResponse.model_validate({"ids": ["m1"], "total": 4, "queryState": "q"}),
+        )
+        assert view.ids == ["m1", None, None, None]
+        assert view.total == 4
+
+    def test_known_ids_drops_the_gaps(self):
+        view = QueryView(QuerySpec.build("Email", "a"), ids=["m1", None, "m2"])
+        assert view.known_ids == ["m1", "m2"]
+        assert len(view) == 3
+
+    def test_up_to_id_is_the_highest_cached_id(self):
+        view = QueryView(QuerySpec.build("Email", "a"), ids=["m1", "m2", None, None])
+        assert view.up_to_id == "m2"
+
+    def test_up_to_id_of_an_empty_view(self):
+        assert QueryView(QuerySpec.build("Email", "a")).up_to_id is None
+
+    def test_repr_shows_how_much_is_cached(self):
+        view = QueryView(QuerySpec.build("Email", "a"), ids=["m1", None])
+        assert "1/2" in repr(view)
+
+
+class TestQueryViewApply:
+    def _view(self) -> QueryView:
+        return QueryView(
+            QuerySpec.build("Email", "a"),
+            ids=["m1", "m2", "m3"],
+            query_state="q1",
+            can_calculate_changes=True,
+        )
+
+    def test_a_delta_is_spliced_in(self):
+        view = self._view()
+        view.apply(
+            QueryChangesResponse.model_validate(
+                {
+                    "oldQueryState": "q1",
+                    "newQueryState": "q2",
+                    "removed": ["m2"],
+                    "added": [{"id": "m0", "index": 0}],
+                }
+            )
+        )
+        assert view.ids == ["m0", "m1", "m3"]
+        assert view.query_state == "q2"
+
+    def test_total_is_updated_when_reported(self):
+        view = self._view()
+        view.apply(
+            QueryChangesResponse.model_validate(
+                {"oldQueryState": "q1", "newQueryState": "q2", "total": 2}
+            )
+        )
+        assert view.total == 2
+        assert len(view.ids) == 2
+
+    def test_a_delta_from_another_state_is_refused(self):
+        # Applying out of order corrupts the list undetectably.
+        view = self._view()
+        with pytest.raises(StaleQueryViewError, match="re-run the query"):
+            view.apply(
+                QueryChangesResponse.model_validate({"oldQueryState": "q9", "newQueryState": "q10"})
+            )
+
+    def test_a_query_that_cannot_be_deltaed_refuses_up_front(self):
+        view = self._view()
+        view.can_calculate_changes = False
+        with pytest.raises(UncacheableQueryError, match="cannot calculate changes"):
+            view.apply(
+                QueryChangesResponse.model_validate({"oldQueryState": "q1", "newQueryState": "q2"})
+            )
+
+    def test_reset_reseeds_from_a_fresh_query(self):
+        # The recovery path for a stale view or cannotCalculateChanges.
+        view = self._view()
+        view.reset(
+            QueryResponse.model_validate(
+                {"ids": ["z1"], "queryState": "q9", "canCalculateChanges": True, "total": 1}
+            )
+        )
+        assert view.ids == ["z1"]
+        assert view.query_state == "q9"
+        assert view.total == 1
+
+
+class TestStateStore:
+    def test_in_memory_round_trip(self):
+        store = InMemoryStateStore()
+        assert store.get("k") is None
+        store.set("k", "s1")
+        assert store.get("k") == "s1"
+        store.delete("k")
+        assert store.get("k") is None
+
+    def test_deleting_an_unknown_key_is_not_an_error(self):
+        InMemoryStateStore().delete("nope")
+
+    def test_seeding_and_snapshotting(self):
+        store = InMemoryStateStore({"a/Email": "s1"})
+        assert "a/Email" in store
+        assert len(store) == 1
+        assert store.snapshot() == {"a/Email": "s1"}
+
+    def test_the_snapshot_is_a_copy(self):
+        store = InMemoryStateStore({"k": "v"})
+        store.snapshot()["k"] = "tampered"
+        assert store.get("k") == "v"
+
+    def test_it_satisfies_the_protocol(self):
+        assert isinstance(InMemoryStateStore(), StateStore)
+
+    def test_repr(self):
+        assert "1 keys" in repr(InMemoryStateStore({"k": "v"}))
+
+
+class TestStateKeys:
+    def test_type_key(self):
+        assert type_key("a", "Email") == "a/Email"
+
+    def test_query_keys_differ_by_filter(self):
+        first = query_key(QuerySpec.build("Email", "a", filter={"x": 1}))
+        second = query_key(QuerySpec.build("Email", "a", filter={"x": 2}))
+        assert first != second
+
+    def test_query_keys_are_stable_for_the_same_query(self):
+        spec = QuerySpec.build("Email", "a", filter={"x": 1})
+        assert query_key(spec) == query_key(spec)
+
+    def test_query_keys_are_scoped_by_account_and_type(self):
+        key = query_key(QuerySpec.build("Email", "acct1"))
+        assert key.startswith("acct1/Email/query/")
+
+
+class TestChangeSet:
+    def test_absorbing_pages_accumulates(self):
+        changes = ChangeSet("Email")
+        changes.absorb(
+            ChangesResponse.model_validate(
+                {"newState": "s1", "created": ["m1"], "hasMoreChanges": True}
+            )
+        )
+        changes.absorb(
+            ChangesResponse.model_validate(
+                {"newState": "s2", "updated": ["m1"], "destroyed": ["m0"]}
+            )
+        )
+        assert changes.created == ["m1"]
+        assert changes.updated == ["m1"]
+        assert changes.destroyed == ["m0"]
+        assert changes.new_state == "s2"
+        assert changes.pages == 2
+        assert len(changes) == 3
+
+    def test_touched_deduplicates_across_created_and_updated(self):
+        # A record created and then updated in one window needs fetching once.
+        changes = ChangeSet("Email", created=["m1"], updated=["m1", "m2"])
+        assert changes.touched == ["m1", "m2"]
+
+    def test_the_categories_are_not_merged(self):
+        # The server reported both, and a caller reconciling a cache needs to see
+        # both.
+        changes = ChangeSet("Email", created=["m1"], updated=["m1"])
+        assert changes.created == ["m1"]
+        assert changes.updated == ["m1"]
+
+    def test_emptiness(self):
+        assert ChangeSet("Email").is_empty
+        assert not ChangeSet("Email", created=["m1"]).is_empty
+
+    def test_repr(self):
+        assert "created=1" in repr(ChangeSet("Email", created=["m1"]))

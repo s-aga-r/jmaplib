@@ -85,6 +85,8 @@ class FakeJMAPServer:
         self.session_state = DEFAULT_SESSION_STATE
         self.quirks = quirks or ServerQuirks()
         self.handlers: dict[str, Handler] = {"Core/echo": _echo}
+        #: Method name -> the `error` invocation arguments to answer with.
+        self.errors: dict[str, dict[str, Any]] = {}
         #: Called before normal routing. Return a response to take the request
         #: over, or None to fall through. The seam for driving transport-level
         #: failures without monkeypatching the router.
@@ -104,6 +106,15 @@ class FakeJMAPServer:
     def respond(self, method: str, arguments: Mapping[str, Any]) -> None:
         """Register a fixed response for ``method``."""
         self.handlers[method] = lambda _args, _server: arguments
+
+    def fail(self, method: str, error_type: str, **extra: Any) -> None:
+        """Make ``method`` answer with a method error (RFC 8620 §3.6.2).
+
+        A failed call is *renamed* to ``error`` rather than annotated, which is
+        what the client's demultiplexer keys off, so the fake has to reproduce
+        that shape rather than return an error-looking payload.
+        """
+        self.errors[method] = {"type": error_type, **extra}
 
     @property
     def session_document(self) -> dict[str, Any]:
@@ -212,6 +223,10 @@ class FakeJMAPServer:
                 resolved = self._resolve_references(arguments, answered)
             except PointerError:
                 responses.append(["error", {"type": "invalidResultReference"}, call_id])
+                continue
+            failure = self.errors.get(name)
+            if failure is not None:
+                responses.append(["error", dict(failure), call_id])
                 continue
             handler = self.handlers.get(name)
             if handler is None:

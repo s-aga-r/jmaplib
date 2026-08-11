@@ -68,7 +68,8 @@ misbehaves without it:
 | M1 | I/O-free protocol kernel | **done** |
 | M2 | Capability registry, auth, transports, sync + async shells | **done** |
 | M3 | Mail (RFC 8621), blobs → **0.1.0** | **done** |
-| M4+ | Sync engine, push, Contacts, Calendars, FileNode, Sieve, Quota | planned |
+| M4 | Sync engine: change following, query views, state cursors | **done** |
+| M5+ | Push, Contacts, Calendars, FileNode, Sieve, Quota | planned |
 
 > **One caveat worth stating plainly.** 1161 tests and 100% coverage all run
 > against the in-process fake server. The live integration suite is written and
@@ -104,6 +105,47 @@ client.download(uploaded.blob_id, name="invoice.pdf")
 
 `maxSizeUpload` is checked *before* sending — a 60 MB attachment against a 50 MB
 limit fails in microseconds rather than after streaming 60 MB.
+
+### Staying in sync
+
+The library holds no cache of its own. It computes deltas and hands them over;
+what to persist is the application's decision, so the only seam is a `StateStore`.
+
+```python
+from jmap.sync import ChangeStream, InMemoryStateStore
+
+stream = ChangeStream(client, "Email", store=my_store)
+changes = stream.catch_up()  # follows hasMoreChanges to the end
+changes.touched  # created + updated, deduplicated
+```
+
+Two things this gets right that are easy to get wrong:
+
+- **`hasMoreChanges` means there is more.** Reading one page and stopping loses
+  the tail *silently*, because the state string still advances. `catch_up()`
+  follows it to the end; `pages()` yields them one at a time for large mailboxes.
+- **`cannotCalculateChanges` is not retryable.** RFC 8620 §5.2 requires the cache
+  to be invalidated and re-downloaded, so it raises `ResyncRequiredError` rather
+  than passing through as a generic method error — the recovery is different.
+
+Delivery is **at least once**: the cursor advances only when you come back for the
+next page, so a page being processed when the process dies arrives again. A caller
+can absorb duplicates; it cannot recover changes it never saw.
+
+`QueryView` keeps a cached result list current via `Foo/queryChanges`:
+
+```python
+view = QueryView.from_query(spec, query_response)
+view.apply(query_changes_response)  # splices the delta in
+view.known_ids  # what you actually hold
+```
+
+The cached list is **sparse** — RFC 8620 §5.6 models it as `["id1", null, "id3"]`,
+where the nulls are positions you know exist but never fetched, and they are what
+keep the indices meaningful. Removals are applied before insertions because the
+`added` indices describe the list *after* removals, and an id appearing in *both*
+arrays is a move, not a delete. The implementation reproduces the RFC's worked
+example exactly, and that example is a test.
 
 ### `/get` chunks itself; `/set` refuses to
 
