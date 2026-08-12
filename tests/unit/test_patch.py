@@ -220,6 +220,31 @@ class TestPatchBuilder:
         # The rejected edit did not land.
         assert builder.build() == {"a/b": 1}
 
+    def test_two_spellings_of_one_pointer_collide(self):
+        # "~" and "~0" are different keys that decode to the same single token,
+        # so the server would see one property addressed twice.
+        builder = PatchBuilder().set("~", 1)
+        with pytest.raises(InvalidPatchError, match="same property"):
+            builder.set("~0", 2)
+        assert builder.build() == {"~": 1}
+
+    def test_overlap_is_caught_when_the_new_key_is_the_shorter_one(self):
+        # The mirror of the case above it: here the arriving key sits *above* one
+        # already held, which no amount of looking at the new key alone reveals.
+        builder = PatchBuilder().set("a/b", 1)
+        with pytest.raises(InvalidPatchError, match="prefix"):
+            builder.set("a", 2)
+        assert builder.build() == {"a/b": 1}
+
+    def test_overlap_is_caught_across_many_keys(self):
+        # Guards the bookkeeping that replaced the per-insert sweep: the conflict
+        # is with the first key added, long after it stopped being the latest.
+        builder = PatchBuilder().set("a/b", 1)
+        for index in range(20):
+            builder.set(f"x{index}", index)
+        with pytest.raises(InvalidPatchError, match="prefix"):
+            builder.set("a", 2)
+
     def test_merge_folds_in_a_helper_patch(self):
         patch = (
             PatchBuilder()

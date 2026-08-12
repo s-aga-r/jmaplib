@@ -205,7 +205,7 @@ class PatchBuilder:
     which is what catches an overlap created by :meth:`merge`.
     """
 
-    __slots__ = ("_dialect", "_edits", "_map_properties", "_tokens")
+    __slots__ = ("_ancestors", "_dialect", "_edits", "_map_properties", "_owners", "_tokens")
 
     def __init__(
         self,
@@ -219,6 +219,14 @@ class PatchBuilder:
         self._map_properties = frozenset(map_properties)
         self._edits: dict[str, Any] = {}
         self._tokens: dict[str, tuple[str, ...]] = {}
+        #: Decoded pointer -> the key that owns it. Answers "does an existing key
+        #: address this property, or an ancestor of it?" in one lookup each.
+        self._owners: dict[tuple[str, ...], str] = {}
+        #: Every *proper prefix* of every key added so far -> the first key added
+        #: beneath it. This is the other direction, and the one a per-insert scan
+        #: cannot do cheaply: without it, finding out whether a new short key sits
+        #: above an existing long one means re-reading every key already held.
+        self._ancestors: dict[tuple[str, ...], str] = {}
 
     def set(self, path: str, value: Any) -> Self:
         """Set the property at ``path`` to ``value``.
@@ -246,16 +254,47 @@ class PatchBuilder:
         A copy, so that continuing to use the builder cannot mutate a patch that
         has already been handed to a request.
         """
-        validate_patch(self._edits, self._dialect, map_properties=self._map_properties)
+        # Over the cached tokens rather than via `validate_patch`, which would
+        # decode every key a second time. Each was already checked as it arrived;
+        # this re-check is the cheap guarantee that the incremental bookkeeping
+        # below and a full sweep agree.
+        _check_overlap(self._tokens)
         return dict(self._edits)
 
     def _add(self, path: str, value: Any) -> None:
         tokens = _key_tokens(path, self._dialect, self._map_properties)
-        # Re-keying an existing path is an overwrite, not an overlap, so the
-        # candidate map must replace that entry rather than add a second one.
-        _check_overlap({**self._tokens, path: tokens})
-        self._tokens[path] = tokens
+        # Re-keying an existing path is an overwrite, not an overlap. The decoding
+        # above is a pure function of the key, so the tokens are necessarily the
+        # ones already recorded and the shape of the patch has not changed - only
+        # the value has.
+        if path not in self._tokens:
+            self._check_addition(path, tokens)
+            self._tokens[path] = tokens
+            self._owners[tokens] = path
+            for length in range(len(tokens)):
+                self._ancestors.setdefault(tokens[:length], path)
         self._edits[path] = value
+
+    def _check_addition(self, path: str, tokens: tuple[str, ...]) -> None:
+        """Reject ``tokens`` if it overlaps a key already held.
+
+        Three lookups against the maps built in :meth:`_add`, in place of a sweep
+        over every key held so far. The pairs are ordered to match what a full
+        sweep in insertion order would report, since that ordering is what the
+        error message reads as: the *shorter* key is named first.
+        """
+        owner = self._owners.get(tokens)
+        if owner is not None:
+            raise InvalidPatchError((owner, path), "both keys address the same property")
+        # The new key sits above one already held.
+        descendant = self._ancestors.get(tokens)
+        if descendant is not None:
+            raise InvalidPatchError((path, descendant), "one key is a prefix of the other")
+        # Or below one. Shortest first, so the outermost overlap is the one named.
+        for length in range(len(tokens)):
+            shorter = self._owners.get(tokens[:length])
+            if shorter is not None:
+                raise InvalidPatchError((shorter, path), "one key is a prefix of the other")
 
     def __len__(self) -> int:
         # Also gives truthiness: `if builder:` is how a caller skips sending an

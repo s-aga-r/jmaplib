@@ -748,6 +748,31 @@ thought through — both worth failing the build over. `lint-imports` enforces t
 layering: `core` may not import httpx, asyncio or anyio, and `capabilities` may
 not import the client.
 
+### Benchmarks
+
+```console
+uv run python -m benchmarks.run                        # all cases
+uv run python -m benchmarks.run --profile "e2e query"  # cProfile one of them
+```
+
+Payloads are shaped like what a real server returns — a Stalwart-shaped session,
+an `Email/get` of a hundred messages with the full RFC 8621 §4.1 property set —
+because a benchmark over `{"id": …, "subject": …}` measures nothing that happens
+in production. `--save` records a baseline and `--compare` diffs against it,
+exiting non-zero past a 5% regression. See [benchmarks/README.md](benchmarks/README.md).
+
+Two things worth knowing before reading a number. The statistic is the **minimum**
+of N repeats, not the mean: timing noise is one-sided, so the minimum is both the
+truest estimate and the stable one. And the `json.loads (floor)` / `json.dumps
+(floor)` cases are the stdlib doing the same work without I-JSON enforcement —
+the gap to them *is* the cost of conformance, currently about 1.8× on parse.
+
+Performance claims in this project are expected to come with a measurement. The
+one time that rule was skipped, `dumps` got 8% slower while every test still
+passed, because `True` fell through the fast scan's type ladder and sent every
+payload down the precise-but-slow path. Tests cannot see that — both paths give
+the same answer — so `TestTheFastPathIsActuallyTaken` asserts the path directly.
+
 ## License
 
 MIT

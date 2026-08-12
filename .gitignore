@@ -13,3 +13,5 @@ build/
 coverage.xml
 htmlcov/
 .env
+# Benchmark results are machine-specific; each run records its own baseline.
+benchmarks/*.json

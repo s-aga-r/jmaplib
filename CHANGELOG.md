@@ -5,6 +5,50 @@ with one deliberate exception: capabilities marked `experimental=True` track IET
 drafts and are excluded from the compatibility promise. See `jmap.SPEC_REVISIONS`
 for exactly which revision of each spec this build implements.
 
+## Unreleased
+
+### Changed
+
+**I-JSON enforcement no longer costs a second pass over every payload.** RFC 8620
+§1.1 constraints were checked by walking the decoded tree in Python, which for a
+`Email/get` of a hundred messages meant re-visiting some twenty thousand nodes and
+building a JSON Pointer string at each one — for an error message that is almost
+never emitted. Parsing a response cost **6.2× what the stdlib charges for the same
+document**; it now costs 1.8×, and serialising a request is about half what it was.
+
+Each constraint is now settled where it is cheapest, and none of it changes what
+is accepted or what an error says:
+
+- **integer range** moves into `json`'s own `parse_int` hook, so the cost is
+  proportional to the numbers in a document rather than to every node in it;
+- **unpaired surrogates** are ruled out for a whole document at once — a strict
+  UTF-8 decode cannot produce one, so a `bytes` body only has to be checked for
+  `\uD800`-style escapes, by substring rather than by regex;
+- **duplicate keys** build their dict in C and compare lengths, scanning for the
+  offending key only once one is known to be there.
+
+What remains is a fast scan that answers only yes/no. Anything it cannot cheaply
+prove clean — an unfamiliar type most of all — still goes to the original walk,
+which stays the authority on both the verdict and the message. Error text,
+including the JSON Pointer naming the member at fault, is unchanged.
+
+**`PatchBuilder` no longer re-checks every key on every edit.** Each `set` copied
+the whole key map and re-compared all of it, so building a patch was quadratic in
+its own size — 50 keywords cost 205 µs. Overlap is now tracked incrementally
+against two indexes, one per direction of the prefix relation, and the same patch
+costs 45 µs. Verified equivalent to the previous implementation, error strings
+included, over ~59,000 generated key sequences.
+
+### Added
+
+**A benchmark harness** (`benchmarks/`, `uv run python -m benchmarks.run`) over
+payloads shaped like a real server's, with `--save`/`--compare` for regression
+checks and `--profile` for cProfile. Everything above was found with it, including
+one bug it alone could see: a boolean fell through the new fast scan's type ladder,
+so every payload containing one silently took the slow path while every test
+passed. `TestTheFastPathIsActuallyTaken` now asserts the path rather than the
+answer, which is the only kind of test that can catch that class of regression.
+
 ## 1.0.0
 
 The capability surface is complete: every JMAP RFC published to date, plus the two

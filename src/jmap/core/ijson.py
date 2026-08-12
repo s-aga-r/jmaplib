@@ -32,9 +32,12 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from jmap.core.pointer import escape_token
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 #: RFC 8620 §1.3: the largest integer that survives an IEEE-754 double intact.
 MAX_SAFE_INT: Final = 2**53 - 1
@@ -119,6 +122,10 @@ def check_string(value: str, *, field: str | None = None) -> str:
     The only way a Python ``str`` can fail to encode as UTF-8 is an unpaired
     surrogate, so that is exactly what this rejects.
     """
+    if value.isascii():
+        # A cached flag on the string object, and a surrogate is far above
+        # U+007F, so this settles the overwhelming majority without a scan.
+        return value
     match = _SURROGATE_RE.search(value)
     if match is not None:
         raise InvalidStringError(
@@ -134,6 +141,13 @@ def _check_tree(value: object, path: str) -> None:
     ``path`` accumulates a JSON Pointer (RFC 6901) so the error names the exact
     member at fault; a bare "integer out of range" is close to useless against a
     response holding thousands of them.
+
+    Building that path costs a string concatenation and an :func:`escape_token`
+    call for every member of every object, which is why this is not the function
+    the success path runs. It is the *authority*: :func:`_scan` decides whether
+    anything is wrong, and this decides what to say about it. Keeping the two
+    apart is what lets the fast check be approximate without any loss of
+    diagnostic quality.
     """
     # bool first: it is an int subclass, and true/false is not a number.
     if isinstance(value, bool):
@@ -159,18 +173,125 @@ def _check_tree(value: object, path: str) -> None:
             _check_tree(element, f"{path}/{index}")
 
 
+#: :func:`type` itself, retyped to say what it returns for a decoded JSON value.
+#:
+#: ``type(x)`` where ``x`` is ``Any`` is *partially unknown* to pyright, and a
+#: bare annotation on the result does not settle it. The alternatives all cost
+#: something in the loop below - a ``cast`` per node, or several ``type()`` calls
+#: per node to get inline narrowing - whereas this is the same builtin under a
+#: different name, resolved once at import. Same problem :mod:`jmap.core.narrow`
+#: exists for, and the same answer: separate the check from the cast.
+_type_of = cast("Callable[[Any], type[object]]", type)
+
+
+def _scan(value: object) -> bool:
+    """Whether ``value`` is *provably* free of I-JSON violations.
+
+    A fast, allocation-free traversal that answers only yes/no. ``False`` means
+    "look closer", not "invalid" - anything it cannot cheaply prove clean, an
+    unfamiliar type most of all, is handed to :func:`_check_tree`, which decides
+    for real and produces the message. So the only way to be wrong here is to
+    return ``True`` for a tree that is actually bad; returning ``False`` too
+    often costs one extra traversal and nothing else.
+
+    Iterative rather than recursive, and matching on ``type(...) is`` rather than
+    :func:`isinstance`, because both show up directly in the profile: a JMAP
+    response of a hundred messages is some twenty thousand nodes, and at that
+    size a Python frame per node is the dominant cost of parsing it.
+    """
+    stack: list[Any] = [value]
+    push = stack.append
+    extend = stack.extend
+    search = _SURROGATE_RE.search
+    type_of = _type_of
+    while stack:
+        node = stack.pop()
+        kind = type_of(node)
+        # `type(...) is` keeps bool out of the int branch for free: bool is a
+        # subclass of int, so isinstance would need the usual explicit guard.
+        if kind is str:
+            # `isascii` reads a flag set when the string was built, so it costs a
+            # fraction of entering the regex engine, and a surrogate is far above
+            # U+007F - an ASCII string cannot contain one.
+            if not node.isascii() and search(node) is not None:
+                return False
+        elif kind is int:
+            if node > MAX_SAFE_INT or node < MIN_SAFE_INT:
+                return False
+        elif kind is dict:
+            for key, item in node.items():
+                if type(key) is not str or (not key.isascii() and search(key) is not None):
+                    return False
+                push(item)
+        elif kind is list or kind is tuple:
+            extend(node)
+        elif not (kind is bool or kind is float or node is None):
+            # A subclass of one of the above, or something json will reject on
+            # its own. Either way, not this function's call to make.
+            return False
+    return True
+
+
+def _validate(value: object) -> None:
+    """Raise if ``value`` violates I-JSON, naming the exact member."""
+    if not _scan(value):
+        _check_tree(value, "")
+
+
 # --------------------------------------------------------------------------- #
 # Documents
 # --------------------------------------------------------------------------- #
 def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        # Comparing len(pairs) to len(result) would be faster but could not name
-        # the key, and the key is the only actionable part of the report.
-        if key in result:
+    # Building the dict in C and comparing lengths is markedly faster than
+    # testing membership per key in Python, and this runs once per object in
+    # every response. The slow scan happens only when a duplicate is known to be
+    # present, because naming the key is the only actionable part of the report.
+    result: dict[str, Any] = dict(pairs)
+    if len(result) == len(pairs):
+        return result
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
             raise DuplicateKeyError(key)
-        result[key] = value
-    return result
+        seen.add(key)
+    # Unreachable: the lengths differ only because some key appears twice, and
+    # the loop above raises on the second sighting of it.
+    raise AssertionError(pairs)  # pragma: no cover
+
+
+def _safe_int(text: str) -> int:
+    """``json``'s integer hook, rejecting anything outside ``Int`` range.
+
+    Checking here rather than in a traversal is what keeps a clean document from
+    being walked at all: the parser calls this only for integer literals, so the
+    cost is proportional to the numbers in the document instead of to every node
+    in it. The hook is handed a value with no idea where it sits, so the error it
+    raises is deliberately path-less - :func:`loads` catches it and re-walks to
+    produce the located one.
+    """
+    value = int(text)
+    if value > MAX_SAFE_INT or value < MIN_SAFE_INT:
+        raise IntegerRangeError(value)
+    return value
+
+
+def _may_hold_surrogate(source: str, *, literal_possible: bool) -> bool:
+    """Whether any string in ``source`` could decode to an unpaired surrogate.
+
+    Two routes in, and both are cheap to rule out across a whole document:
+
+    * a **literal** surrogate code point in the source text, which is possible
+      only when the caller handed us a ``str`` - a strict UTF-8 decode cannot
+      produce one, so the bytes path skips this half entirely. ``isascii`` is a
+      cached flag on the string object, so the common case costs nothing;
+    * a ``\\uD800``-style **escape**. Matched by substring rather than regex
+      because ``str.find`` is several times faster over a large body, and the
+      over-match (a legal *paired* escape, or a literal backslash before a ``u``)
+      only sends us down the precise path, which then finds nothing wrong.
+    """
+    if literal_possible and not source.isascii() and _SURROGATE_RE.search(source) is not None:
+        return True
+    return "\\u" in source and ("\\ud" in source or "\\uD" in source)
 
 
 def loads(text: str | bytes) -> Any:
@@ -179,16 +300,35 @@ def loads(text: str | bytes) -> Any:
     Unlike :func:`json.loads` this rejects duplicate object members, out-of-range
     integers and unpaired surrogates. Malformed JSON still raises
     :class:`json.JSONDecodeError`, which is also a :class:`ValueError`.
+
+    Each of the three constraints is enforced during the parse or ruled out from
+    the source text, so a well-formed document is never traversed a second time.
+    That matters at the sizes JMAP actually returns: a ``/get`` of a hundred
+    messages decodes to tens of thousands of nodes, and re-walking them in Python
+    cost several times the parse itself.
     """
     if isinstance(text, bytes):
         # Decoded here rather than by json.loads, which sniffs for UTF-16/32 via
         # detect_encoding(); RFC 7493 §2.1 allows UTF-8 only.
         try:
-            text = text.decode("utf-8")
+            source = text.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise InvalidStringError(f"body is not valid UTF-8: {exc}") from exc
-    parsed: Any = json.loads(text, object_pairs_hook=_reject_duplicates)
-    _check_tree(parsed, "")
+        literal_possible = False
+    else:
+        source = text
+        literal_possible = True
+
+    try:
+        parsed: Any = json.loads(source, object_pairs_hook=_reject_duplicates, parse_int=_safe_int)
+    except IntegerRangeError:
+        # The hook cannot know where the number was. Re-parse without it and walk
+        # the tree so the report names the member, which is the half worth having.
+        _check_tree(json.loads(source, object_pairs_hook=_reject_duplicates), "")
+        raise  # pragma: no cover - the walk above always finds the same integer
+
+    if _may_hold_surrogate(source, literal_possible=literal_possible):
+        _validate(parsed)
     return parsed
 
 
@@ -199,7 +339,7 @@ def dumps(value: Any) -> str:
     conforming parser accepts, and ``ensure_ascii=False`` because JMAP bodies are
     UTF-8 - which is only safe once :func:`check_string` has ruled out surrogates.
     """
-    _check_tree(value, "")
+    _validate(value)
     return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
 
 

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
+import jmap.core.ijson as ijson_module
 from jmap.core.ijson import (
     MAX_SAFE_INT,
     MIN_SAFE_INT,
@@ -189,6 +190,13 @@ class TestLoadsStrings:
     def test_null_and_nested_containers_survive(self):
         assert loads('{"a": null, "b": [[]], "c": {}}') == {"a": None, "b": [[]], "c": {}}
 
+    def test_literal_surrogate_in_a_str_source_is_rejected(self):
+        # Not an escape: the caller handed us a str that already holds a lone
+        # surrogate. A bytes body cannot carry one - a strict UTF-8 decode would
+        # have failed first - so this is the case only the str path has to catch.
+        with pytest.raises(InvalidStringError, match="unpaired surrogate"):
+            loads('{"name": "\ud800"}')
+
 
 class TestLoadsEncoding:
     def test_accepts_utf8_bytes(self):
@@ -253,6 +261,96 @@ class TestDumps:
             "methodCalls": [["Email/query", {"accountId": "u1", "limit": 50}, "c0"]],
         }
         assert loads(dumps(request)) == request
+
+
+class TestTheFastPathIsActuallyTaken:
+    """The two paths agree, which is exactly what makes this worth asserting.
+
+    Every other test here would still pass if the cheap scan gave up on all input
+    and left the precise walk to do the work: same answers, same messages,
+    several times the cost. That is not hypothetical - ``True`` once fell through
+    the scan's type ladder into the "unfamiliar type" case, so every payload
+    containing a boolean, which is to say all of them, took the slow path and no
+    test noticed. These two assert the path, not the answer.
+    """
+
+    def test_every_json_type_is_provably_clean(self):
+        value = {
+            "string": "plain",
+            "unicode": "héllo 😀",
+            "int": 42,
+            "negative": -1,
+            "float": 1.5,
+            "true": True,
+            "false": False,
+            "null": None,
+            "array": [1, "two", None, True, {"nested": []}],
+            "object": {"deep": {"deeper": ["x"]}},
+            "tuple": ("a", "b"),
+        }
+        assert ijson_module._scan(value) is True
+
+    def test_a_clean_document_is_never_walked(self, monkeypatch):
+        def explode(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("a clean document was traversed a second time")
+
+        monkeypatch.setattr(ijson_module, "_check_tree", explode)
+        body = json.dumps(
+            {
+                "methodResponses": [
+                    ["Email/get", {"list": [{"id": "M1", "size": 12, "seen": True}]}, "c0"]
+                ],
+                "sessionState": "abc",
+            }
+        ).encode()
+        assert loads(body)["sessionState"] == "abc"
+
+
+class TestUnfamiliarTypesFallBackToTheSlowWalk:
+    """A type the fast scan does not recognise must not become a rejection.
+
+    The scan matches on exact type so that it can stay cheap, which means a
+    subclass of ``str`` or ``int`` - and anything else it has no case for - fails
+    to be *proved* clean. That has to hand over to the precise walk, which asks
+    ``isinstance`` and so accepts it, rather than raising on the spot.
+    """
+
+    def test_str_and_int_subclasses_are_accepted(self):
+        class Tag(str):
+            pass
+
+        class Count(int):
+            pass
+
+        # Every kind of leaf is here on purpose. The precise walk has a branch per
+        # type and only a clean fallback runs them to completion, so a thinner
+        # value would leave most of that walk unexercised.
+        value = {
+            "tag": Tag("inbox"),
+            "n": Count(3),
+            "ok": True,
+            "ids": ["a"],
+            "sub": {"x": 1},
+            "nothing": None,
+            "ratio": 0.5,
+        }
+        assert loads(dumps(value)) == {
+            "tag": "inbox",
+            "n": 3,
+            "ok": True,
+            "ids": ["a"],
+            "sub": {"x": 1},
+            "nothing": None,
+            "ratio": 0.5,
+        }
+
+    def test_a_subclass_still_has_its_value_checked(self):
+        class Count(int):
+            pass
+
+        with pytest.raises(IntegerRangeError) as excinfo:
+            dumps({"size": Count(2**53)})
+        assert excinfo.value.field == "/size"
 
 
 class TestParseUTCDate:
