@@ -216,7 +216,9 @@ class ParsedInvocation:
         # dict() far from the malformed response that caused it.
         if not isinstance(triple, list):
             raise ValueError(f"an invocation must be an array of 3 elements, got {triple!r:.100}")
-        items: list[Any] = triple
+        # mypy narrows the Any to list[Any] and calls the cast redundant;
+        # pyright narrows to list[Unknown] and requires it.
+        items = cast("list[Any]", triple)  # type: ignore[redundant-cast]
         if len(items) != 3:
             raise ValueError(f"an invocation must be an array of 3 elements, got {triple!r:.100}")
         name, arguments, call_id = items
