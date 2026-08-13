@@ -152,6 +152,7 @@ class ActiveCapabilities:
     """What one server and one account support. Every gate consults this."""
 
     __slots__ = (
+        "_limits",
         "_methods",
         "account_id",
         "advertised",
@@ -186,6 +187,7 @@ class ActiveCapabilities:
         self.specs = specs
         self.unknown_urns = unknown_urns
         self._methods = methods
+        self._limits: Limits | None = None
 
     # -- lookups ------------------------------------------------------------ #
     def __contains__(self, urn: object) -> bool:
@@ -193,7 +195,14 @@ class ActiveCapabilities:
 
     @property
     def limits(self) -> Limits:
-        return Limits.from_capability(self.session.capability_value(CORE_URN, self.account_id))
+        # Cached: this is consulted on every add() and plan(), the parse walks
+        # the session's account maps each time, and the answer cannot change
+        # within one resolution - a new session means a new resolve.
+        if self._limits is None:
+            self._limits = Limits.from_capability(
+                self.session.capability_value(CORE_URN, self.account_id)
+            )
+        return self._limits
 
     @property
     def attrs(self) -> Mapping[str, CapabilitySpec]:

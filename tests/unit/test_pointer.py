@@ -146,3 +146,18 @@ class TestSplitPointer:
     def test_trailing_slash_yields_empty_final_token(self):
         # "/foo/" addresses the "" property of foo, which is legal in RFC 6901.
         assert split_pointer("/foo/") == ["foo", ""]
+
+
+class TestHostileTokens:
+    def test_a_unicode_digit_is_not_an_index(self):
+        # '²'.isdigit() is true but int('²') raises a raw ValueError, and
+        # RFC 6901 indices are ASCII digits only - '٣' must not read index 3.
+        for token in ("²", "٣"):
+            with pytest.raises(PointerError):
+                resolve(["a", "b", "c", "d"], f"/{token}")
+
+    def test_an_absurdly_long_index_is_a_pointer_error(self):
+        # A 5000-digit token would otherwise trip CPython's int-conversion
+        # limit with a stdlib ValueError instead of a PointerError.
+        with pytest.raises(PointerError):
+            resolve(["a"], "/" + "9" * 5000)

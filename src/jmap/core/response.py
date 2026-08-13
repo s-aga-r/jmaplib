@@ -81,9 +81,19 @@ class Response:
             raise MalformedResponseError("createdIds must be an object")
         triples = as_list(raw_responses)
         pairs = as_object(created)
+        created_ids: dict[str, Id] = {}
+        for key, value in pairs.items():
+            # Strings only: these values are echoed into the *next* request's
+            # createdIds and handed to application code as Ids, so reifying a
+            # non-string via str() would put a Python repr on the wire.
+            if not isinstance(value, str):
+                raise MalformedResponseError(
+                    f"createdIds[{key!r}] must be a string id, got {type(value).__name__}"
+                )
+            created_ids[str(key)] = Id(value)
         return cls(
             [ParsedInvocation.from_wire(triple) for triple in triples],
-            created_ids={str(key): Id(str(value)) for key, value in pairs.items()},
+            created_ids=created_ids,
             session_state=str(data.get("sessionState", "")),
         )
 
@@ -123,7 +133,22 @@ def dispatch(response: Response, handles: Sequence[Handle[Any]]) -> None:
         if primary.name == ERROR_RESPONSE_NAME:
             handle.fail(_to_method_error(primary))
         else:
-            handle.fulfil(handle.call.parse(primary.arguments), tuple(extra))
+            # Parse failures are contained per handle, like method errors: one
+            # malformed response must not abort dispatch mid-loop and leave the
+            # sibling handles unresolved. The whole point of Handle is that a
+            # call's failure surfaces when *its* result is read.
+            try:
+                parsed = handle.call.parse(primary.arguments)
+            except (ValueError, TypeError, KeyError) as exc:
+                handle.fail(
+                    MethodError(
+                        "malformedResult",
+                        handle.call_id,
+                        {"description": f"the {primary.name} response did not parse: {exc}"},
+                    )
+                )
+            else:
+                handle.fulfil(parsed, tuple(extra))
 
 
 def _partition(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 
@@ -16,6 +17,8 @@ from jmap.core.ijson import (
     IntegerRangeError,
     InvalidDateError,
     InvalidStringError,
+    NestingLimitError,
+    NonFiniteNumberError,
     check_int,
     check_string,
     dumps,
@@ -525,3 +528,47 @@ class TestLocalDate:
         # Comparing naive to aware raises rather than lying, which is the point.
         with pytest.raises(TypeError):
             _ = parse_local_date("2014-10-30T06:12:00") < parse_utc_date("2014-10-30T06:12:00Z")
+
+
+class TestHostileDocuments:
+    def test_deep_nesting_is_a_value_error_not_a_recursion_error(self):
+        # A 100k-deep array is a crafted document; it must fail as the
+        # documented ValueError, not escape as RecursionError past every
+        # `except ValueError` wrapped around a parse.
+        crafted = "[" * 100_000 + "]" * 100_000
+        with pytest.raises(NestingLimitError):
+            loads(crafted)
+
+    def test_deep_nesting_around_a_bad_scalar_stays_typed(self):
+        # The locating re-walk is recursive and dies far shallower than the C
+        # parser; the typed (if unlocated) error must survive that.
+        crafted = "[" * 20_000 + str(2**60) + "]" * 20_000
+        with pytest.raises(IntegerRangeError):
+            loads(crafted)
+
+    def test_nan_and_infinity_literals_are_rejected(self):
+        # Python's json accepts them as an extension; I-JSON has no
+        # representation, and letting one in surfaces later as a path-less
+        # ValueError from dumps, far from the field at fault.
+        for literal in ('{"x": NaN}', '{"x": Infinity}', '{"x": -Infinity}'):
+            with pytest.raises(NonFiniteNumberError):
+                loads(literal)
+
+    def test_a_float_that_overflows_to_infinity_is_rejected(self):
+        with pytest.raises(NonFiniteNumberError):
+            loads('{"x": 1e400}')
+
+    def test_a_thousand_digit_integer_is_a_range_error(self):
+        # Longer than CPython's int-conversion limit allows; without the length
+        # guard this raised the stdlib's own digit-limit ValueError instead.
+        with pytest.raises(IntegerRangeError):
+            loads('{"x": ' + "9" * 5000 + "}")
+
+    def test_dumping_a_self_deep_structure_is_a_value_error(self):
+        nested: list[Any] = []
+        tip = nested
+        for _ in range(100_000):
+            tip.append([])
+            tip = tip[0]
+        with pytest.raises(NestingLimitError):
+            dumps(nested)

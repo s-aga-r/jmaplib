@@ -192,3 +192,44 @@ class TestImplicitResponses:
         dispatch(response, [target])
         assert target.result == {"a": 1}
         assert len(target.extra) == 1
+
+
+class TestHostileResponses:
+    def test_a_non_string_created_id_is_malformed(self):
+        # These values are echoed into the next request's createdIds and handed
+        # to application code as Ids; reifying {'nested': 'obj'} via str() would
+        # put a Python repr on the wire.
+        for hostile in (123, {"nested": "obj"}, None, ["x"]):
+            with pytest.raises(MalformedResponseError, match="createdIds"):
+                Response.from_wire({"methodResponses": [], "createdIds": {"d": hostile}})
+
+    def test_a_non_object_arguments_slot_is_rejected(self):
+        with pytest.raises(ValueError, match="arguments"):
+            Response.from_wire({"methodResponses": [["Email/get", "not-an-object", "c0"]]})
+
+    def test_a_three_key_dict_is_not_an_invocation(self):
+        # Any length-3 Sized unpacks by iteration - a 3-key dict yields its
+        # keys - and the failure then surfaced far from the malformed response.
+        with pytest.raises(ValueError, match="3 elements"):
+            Response.from_wire({"methodResponses": [{"a": 1, "b": 2, "c": 3}]})
+
+    def test_a_parse_failure_is_contained_to_its_own_handle(self):
+        # One malformed method response must not abort dispatch mid-loop and
+        # leave the sibling handles unresolved.
+        def explode(_arguments):
+            raise ValueError("garbage shape")
+
+        broken = Handle("c0", MethodCall("Email/get", {}, parse=explode))
+        sibling = handle("c1")
+        response = Response.from_wire(
+            {
+                "methodResponses": [
+                    ["Email/get", {"bad": True}, "c0"],
+                    ["Email/get", {"list": []}, "c1"],
+                ]
+            }
+        )
+        dispatch(response, [broken, sibling])
+        assert broken.error is not None
+        assert broken.error.type == "malformedResult"
+        assert sibling.result == {"list": []}

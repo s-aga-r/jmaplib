@@ -299,7 +299,14 @@ class Batch:
             if spec is None or spec.kind is not MethodKind.SET:
                 continue
             args = handle.call.arguments
-            total = sum(len(args.get(key) or ()) for key in ("create", "update", "destroy"))
+            # Only literal containers can be counted: a ResultRef in `destroy`
+            # (the query-then-destroy pattern) names ids that do not exist yet,
+            # and calling len() on it crashed plan() on a legitimate batch.
+            total = sum(
+                len(value)
+                for key in ("create", "update", "destroy")
+                if isinstance(value := args.get(key), (dict, list))
+            )
             if total > limit:
                 raise CapabilityFieldError(handle.call.name, "maxObjectsInSet", limit, total)
 

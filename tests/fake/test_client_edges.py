@@ -660,3 +660,22 @@ class TestOwnedHttpClients:
             await AsyncJMAPClient.connect(
                 "http://127.0.0.1:1/.well-known/jmap", auth=BasicAuth("u", "p")
             )
+
+
+class TestSetSizeGate:
+    def test_a_result_ref_destroy_does_not_crash_planning(self):
+        # The canonical query-then-destroy pattern: `destroy` is a ResultRef
+        # naming ids that do not exist yet, so it cannot be counted - and
+        # len() on it used to crash plan() on a legitimate batch.
+        active = capabilities()
+        batch = Batch(active)
+        found = batch.add("Email/query", {"filter": {"inMailbox": "m1"}})
+        batch.add("Email/set", {"destroy": found.ref_ids()})
+        assert len(batch.plan()) == 1
+
+    def test_literal_containers_are_still_counted(self):
+        active = capabilities()
+        batch = Batch(active)
+        batch.add("Email/set", {"update": {f"e{i}": {} for i in range(501)}})
+        with pytest.raises(CapabilityFieldError):
+            batch.plan()

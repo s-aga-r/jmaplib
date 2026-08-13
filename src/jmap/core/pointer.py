@@ -71,7 +71,15 @@ def _index_array(items: list[Any], token: str, pointer: str) -> Any:
         # RFC 6901 defines "-" as the nonexistent element after the last one. It
         # is meaningful when adding to an array, never when reading one.
         raise PointerError(pointer, "'-' does not reference an existing element")
-    if not token.isdigit() or (len(token) > 1 and token[0] == "0"):
+    # isascii() first: '²'.isdigit() is true but int('²') raises a raw
+    # ValueError, and RFC 6901 array indices are ASCII digits only. The length
+    # bound keeps a crafted 5000-digit token from tripping CPython's own
+    # int-conversion limit - no real array has an index that long.
+    if (
+        not (token.isascii() and token.isdigit())
+        or (len(token) > 1 and token[0] == "0")
+        or len(token) > 15
+    ):
         raise PointerError(pointer, f"{token!r} is not a valid array index")
     index = int(token)
     if index >= len(items):

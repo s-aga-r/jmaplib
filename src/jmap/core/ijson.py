@@ -30,6 +30,7 @@ so the type system alone prevents it being mistaken for an instant.
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -79,6 +80,33 @@ class InvalidStringError(IJSONError):
         self.reason = reason
         self.field = field
         super().__init__(f"{_where(field)}{reason}")
+
+
+class NonFiniteNumberError(IJSONError):
+    """``NaN``/``Infinity``, or a float literal that overflows to one.
+
+    Python's ``json`` accepts all of them as an extension, but RFC 7493 has no
+    representation for a non-finite number - and letting one in poisons the
+    document: it surfaces later as a path-less ``ValueError`` from ``dumps``,
+    far from the field at fault.
+    """
+
+    def __init__(self, literal: str) -> None:
+        self.literal = literal
+        super().__init__(f"{literal!r} is not a finite JSON number; I-JSON has none")
+
+
+class NestingLimitError(IJSONError):
+    """The document nests deeper than this process can traverse.
+
+    No JMAP payload is shaped like this; a hundred-thousand-deep array is a
+    crafted document, and it must fail as the documented :class:`ValueError`
+    rather than escape as ``RecursionError`` past every ``except`` around a
+    parse.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("the document nests deeper than this process can parse")
 
 
 class InvalidDateError(IJSONError):
@@ -259,6 +287,12 @@ def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     raise AssertionError(pairs)  # pragma: no cover
 
 
+#: One more digit than 2**53-1 has, so any longer literal is out of range by
+#: inspection - which matters because a multi-thousand-digit literal would trip
+#: CPython's own int-conversion limit with a path-less stdlib ValueError.
+_MAX_INT_LITERAL_LENGTH: Final = 18
+
+
 def _safe_int(text: str) -> int:
     """``json``'s integer hook, rejecting anything outside ``Int`` range.
 
@@ -269,10 +303,27 @@ def _safe_int(text: str) -> int:
     raises is deliberately path-less - :func:`loads` catches it and re-walks to
     produce the located one.
     """
+    if len(text) > _MAX_INT_LITERAL_LENGTH:
+        # Convert only a prefix: enough to preserve the sign and prove the
+        # magnitude, without paying (or crashing) int() for thousands of digits.
+        raise IntegerRangeError(int(text[:_MAX_INT_LITERAL_LENGTH]) * 10)
     value = int(text)
     if value > MAX_SAFE_INT or value < MIN_SAFE_INT:
         raise IntegerRangeError(value)
     return value
+
+
+def _safe_float(text: str) -> float:
+    """``json``'s float hook: a literal that overflows to inf is rejected."""
+    value = float(text)
+    if math.isinf(value):
+        raise NonFiniteNumberError(text)
+    return value
+
+
+def _reject_constant(name: str) -> Any:
+    """``json``'s hook for ``NaN``/``Infinity``/``-Infinity`` literals."""
+    raise NonFiniteNumberError(name)
 
 
 def _may_hold_surrogate(source: str, *, literal_possible: bool) -> bool:
@@ -320,15 +371,37 @@ def loads(text: str | bytes) -> Any:
         literal_possible = True
 
     try:
-        parsed: Any = json.loads(source, object_pairs_hook=_reject_duplicates, parse_int=_safe_int)
-    except IntegerRangeError:
+        parsed: Any = json.loads(
+            source,
+            object_pairs_hook=_reject_duplicates,
+            parse_int=_safe_int,
+            parse_float=_safe_float,
+            parse_constant=_reject_constant,
+        )
+    except IntegerRangeError as range_error:
         # The hook cannot know where the number was. Re-parse without it and walk
         # the tree so the report names the member, which is the half worth having.
-        _check_tree(json.loads(source, object_pairs_hook=_reject_duplicates), "")
+        # The locating pass is best-effort: a literal so large it trips CPython's
+        # digit limit, or nesting the walk cannot descend, keeps the typed but
+        # unlocated error rather than escaping as something else.
+        try:
+            reparsed = json.loads(source, object_pairs_hook=_reject_duplicates)
+            _check_tree(reparsed, "")
+        except IJSONError:
+            raise  # the located version of the same defect
+        except (RecursionError, ValueError):
+            raise range_error from None
         raise  # pragma: no cover - the walk above always finds the same integer
+    except RecursionError as exc:
+        # The C parser's own depth limit. Catchable here (the stack has
+        # unwound), and the caller was promised a ValueError.
+        raise NestingLimitError() from exc
 
     if _may_hold_surrogate(source, literal_possible=literal_possible):
-        _validate(parsed)
+        try:
+            _validate(parsed)
+        except RecursionError as exc:
+            raise NestingLimitError() from exc
     return parsed
 
 
@@ -339,8 +412,11 @@ def dumps(value: Any) -> str:
     conforming parser accepts, and ``ensure_ascii=False`` because JMAP bodies are
     UTF-8 - which is only safe once :func:`check_string` has ruled out surrogates.
     """
-    _validate(value)
-    return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    try:
+        _validate(value)
+        return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    except RecursionError as exc:
+        raise NestingLimitError() from exc
 
 
 # --------------------------------------------------------------------------- #

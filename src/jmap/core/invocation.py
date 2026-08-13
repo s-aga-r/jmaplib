@@ -29,13 +29,14 @@ form of RFC 8620 §5.3 - which is an ordinary string value and may appear anywhe
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from jmap.core.errors import JMAPError
 from jmap.core.ids import CreationRef
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable
 
     from jmap.core.errors import MethodError
     from jmap.core.ids import Id
@@ -209,9 +210,17 @@ class ParsedInvocation:
 
     @classmethod
     def from_wire(cls, triple: list[Any]) -> ParsedInvocation:
-        if len(triple) != 3:
-            raise ValueError(f"invocation must have 3 elements, got {len(triple)}")
+        # The explicit isinstance matters: any length-3 Sized iterates and
+        # unpacks - a 3-key dict yields its keys, a 3-char string its
+        # characters - and the failure then surfaces as a baffling error from
+        # dict() far from the malformed response that caused it.
+        if not isinstance(triple, list) or len(triple) != 3:
+            raise ValueError(f"an invocation must be an array of 3 elements, got {triple!r:.100}")
         name, arguments, call_id = triple
+        if not isinstance(arguments, Mapping):
+            raise ValueError(
+                f"invocation arguments must be an object, got {type(arguments).__name__}"
+            )
         return cls(str(name), arguments, str(call_id))
 
     def __repr__(self) -> str:
