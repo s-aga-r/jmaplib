@@ -379,7 +379,12 @@ class TestSpliceMergeEquivalence:
     """The single merge pass must reproduce the spec's insert-per-item algorithm."""
 
     @staticmethod
-    def _reference(ids, removed=(), added=(), total=None):
+    def _reference(
+        ids: list[str | None],
+        removed: list[str] | tuple[str, ...] = (),
+        added: list[AddedItem] | tuple[AddedItem, ...] = (),
+        total: int | None = None,
+    ) -> list[str | None]:
         # RFC 8620 §5.6's own algorithm, executed literally.
         doomed = set(removed)
         result = [item for item in ids if item is None or item not in doomed]
