@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from jmap.capabilities.contacts import (
     CONTACTS,
+    CONTACTS_PARSE,
+    CONTACTS_PARSE_URN,
     CONTACTS_URN,
     CYRUS_CONTACTS,
     CYRUS_CONTACTS_URN,
@@ -22,6 +24,7 @@ from jmap.capabilities.contacts import (
     ContactsCapability,
     looks_like_rfc9610,
 )
+from jmap.capabilities.spec import MethodKind
 from jmap.core.limits import LimitKey
 from jmap.models.base import JMAPObject
 from jmap.models.contacts import (
@@ -38,6 +41,7 @@ from jmap.models.contacts import (
     AddressBookRights,
     ContactCard,
     Media,
+    ParsedCards,
 )
 
 
@@ -426,6 +430,64 @@ class TestContactsSpec:
             method = CONTACTS.method(name)
             assert method is not None
             assert method.chunk_by is key
+
+
+class TestParsedCards:
+    def test_one_blob_yields_one_card(self):
+        # The opposite trap from calendars: `parsed[blobId]` is a single Card,
+        # not an array. Stalwart runs each blob through a single-card vCard
+        # parse, so indexing into a list here would be indexing into a dict.
+        parsed = ParsedCards.from_wire(
+            {"accountId": "a1", "parsed": {"G1": {"uid": "u1", "kind": "individual"}}}
+        )
+        card = parsed.card_of("G1")
+        assert card is not None
+        assert card.uid == "u1"
+
+    def test_an_unknown_blob_reads_as_absent(self):
+        parsed = ParsedCards.from_wire({"parsed": {"G1": {"uid": "u1"}}})
+        assert parsed.card_of("G2") is None
+
+    def test_card_of_survives_a_response_with_no_parsed_map(self):
+        # Stalwart skips empty maps entirely rather than sending `"parsed": {}`.
+        response = ParsedCards.from_wire({"notFound": ["G9"], "notParsable": ["G8"]})
+        assert response.card_of("G1") is None
+        assert response.not_found == ["G9"]
+        assert response.not_parsable == ["G8"]
+
+
+class TestContactsParseSpec:
+    def test_it_is_a_separate_capability(self):
+        # Servers advertise it independently of `:contacts`, so folding the
+        # method into CONTACTS would offer /parse against every RFC 9610 server.
+        assert CONTACTS_PARSE_URN == "urn:ietf:params:jmap:contacts:parse"
+        assert CONTACTS_PARSE.urn == CONTACTS_PARSE_URN
+        assert CONTACTS_PARSE.urn != CONTACTS.urn
+
+    def test_it_is_stable_despite_having_no_rfc(self):
+        # A vendor extension like the legacy contacts pair, not a draft tracker:
+        # there is no draft to track. The IETF spelling is Stalwart's choice.
+        assert CONTACTS_PARSE.experimental is False
+        assert CONTACTS_PARSE.reference == "Stalwart vendor extension"
+
+    def test_it_gets_no_client_attribute(self):
+        # Like the calendars `:parse` companion: it adds one method to a data
+        # type defined next door, not a namespace of its own.
+        assert CONTACTS_PARSE.attr is None
+        assert CONTACTS_PARSE.data_types == ()
+
+    def test_it_requires_the_contacts_urn(self):
+        assert CONTACTS_PARSE.requires == frozenset({CONTACTS_URN})
+
+    def test_parse_is_custom_with_its_own_response_model(self):
+        method = CONTACTS_PARSE.method("ContactCard/parse")
+        assert method is not None
+        assert method.kind is MethodKind.CUSTOM
+        assert method.response_model is ParsedCards
+        assert set(method.extra_args) == {"blobIds", "properties"}
+
+    def test_parse_lives_nowhere_else(self):
+        assert CONTACTS.method("ContactCard/parse") is None
 
 
 class TestLegacyContactsSpecs:

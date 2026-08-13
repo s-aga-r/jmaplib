@@ -26,6 +26,9 @@ SPEC_REVISIONS: Final[dict[str, str]] = {
     "urn:ietf:params:jmap:blob": "RFC 9404",
     "urn:ietf:params:jmap:quota": "RFC 9425",
     "urn:ietf:params:jmap:contacts": "RFC 9610",
+    # No IETF document defines a contacts `:parse`; the URN and the shape behind
+    # it are Stalwart's, mirroring the calendars companion.
+    "urn:ietf:params:jmap:contacts:parse": "Stalwart vendor extension (v0.16)",
     # The pre-RFC contacts model, gated by vendor URNs rather than by the IETF
     # one. A server may advertise both at once; Cyrus 3.10 does.
     "https://www.fastmail.com/dev/contacts": "pre-RFC Contact/ContactGroup",

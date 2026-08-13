@@ -112,8 +112,11 @@ From an authenticated session on a freshly bootstrapped v0.16.14:
   and the Windows device names — matching the FileNode model exactly.
 * `supportedDigestAlgorithms: ["sha", "sha-256", "sha-512"]`,
   `supportedTypeNames: ["Email", "Thread", "SieveScript"]`.
-* Stalwart advertises `urn:ietf:params:jmap:contacts:parse`, which is **not** a
-  capability this library models.
+* Stalwart advertises `urn:ietf:params:jmap:contacts:parse`, which at the time
+  was not a capability this library modelled. It is now - `CONTACTS_PARSE` in
+  `jmap.capabilities.contacts`, with the shape verified against Stalwart's
+  source: one Card per blob, and a per-call blob cap that is advertised nowhere
+  and surfaces only as `requestTooLarge`.
 
 ---
 

@@ -91,6 +91,14 @@ losslessly and is readable by exact wire name, but there are no field-by-field
 Python models for the JSContact vocabulary itself. What *is* modelled is the JMAP
 layer around it, which is where the traps live.
 
+**Parsing vCards server-side** is a Stalwart extension, behind
+`urn:ietf:params:jmap:contacts:parse` - an IETF-spelled URN that no RFC defines;
+RFC 9610 has no `/parse` at all. Upload the vCard as a blob, then
+`batch.add("ContactCard/parse", {"blobIds": [blob_id]})`. Each blob parses to
+**one** Card - not an array, which is what the calendars `/parse` returns - and
+the per-call blob cap is server configuration advertised nowhere, so an oversized
+call answers `requestTooLarge`; halve the batch and retry.
+
 ## Calendars (draft, experimental)
 
 Tracks `draft-ietf-jmap-calendars`. Needs `experimental=True` at connect, and is

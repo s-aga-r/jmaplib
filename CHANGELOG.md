@@ -7,6 +7,18 @@ for exactly which revision of each spec this build implements.
 
 ## Unreleased
 
+### Added
+
+**`ContactCard/parse`, behind `urn:ietf:params:jmap:contacts:parse`.** A Stalwart
+extension - the URN is IETF-spelled but no RFC defines it; RFC 9610 has no
+`/parse` at all. Reached through `batch.add("ContactCard/parse", {...})` like the
+other builder-less methods, with the response parsed into `ParsedCards`. The
+shape was verified against Stalwart's implementation, and differs from the
+calendars `/parse` in the way most easily got wrong: each blob parses to **one**
+Card, not an array. The per-call blob cap is server configuration advertised
+nowhere - an oversized call answers `requestTooLarge`, and halving the batch is
+the working strategy.
+
 ### Changed
 
 **I-JSON enforcement no longer costs a second pass over every payload.** RFC 8620

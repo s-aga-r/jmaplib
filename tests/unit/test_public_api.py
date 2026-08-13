@@ -61,6 +61,8 @@ CAPABILITY_URNS = {
     "urn:ietf:params:jmap:principals",
     "urn:ietf:params:jmap:principals:owner",
     "urn:ietf:params:jmap:contacts",
+    # Stalwart's ContactCard/parse, behind an IETF-spelled URN no RFC defines.
+    "urn:ietf:params:jmap:contacts:parse",
     "urn:ietf:params:jmap:mdn",
     "https://www.fastmail.com/dev/contacts",
     "https://cyrusimap.org/ns/jmap/contacts",

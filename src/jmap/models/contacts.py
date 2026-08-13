@@ -179,6 +179,29 @@ class ContactCard(JMAPModel):
         return (self.__pydantic_extra__ or {}).get(name)
 
 
+class ParsedCards(JMAPModel):
+    """``ContactCard/parse`` - a Stalwart extension; no RFC defines one for contacts.
+
+    ``parsed`` maps a blob id to **one** Card. That is the opposite trap from the
+    calendars ``/parse``, whose ``parsed`` values are arrays - so a reader porting
+    code between the two will get exactly one of them wrong. Verified against
+    Stalwart's implementation, which runs each blob through a single-card vCard
+    parse rather than splitting a multi-card file.
+
+    ``not_found`` and ``not_parsable`` are arrays of blob ids, as for
+    ``Email/parse``.
+    """
+
+    account_id: str | None = None
+    parsed: dict[str, ContactCard] | None = None
+    not_found: list[str] | None = None
+    not_parsable: list[str] | None = None
+
+    def card_of(self, blob_id: str) -> ContactCard | None:
+        """The card parsed out of one blob, or ``None`` if it yielded nothing."""
+        return (self.parsed or {}).get(blob_id)
+
+
 def _text(value: Any) -> str | None:
     """A JSContact string property, or ``None`` for anything else.
 

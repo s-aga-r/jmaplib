@@ -177,7 +177,7 @@ except MethodError as error:
 
 Most methods have one of six shapes, which is why they can be generated. A few
 do not, and of those, most have a hand-written builder - `Blob/upload`,
-`Blob/lookup`, `SieveScript/validate`, `MDN/send`. Four modelled methods have
+`Blob/lookup`, `SieveScript/validate`, `MDN/send`. Five modelled methods have
 none yet and go through `batch.add` with wire-spelled arguments:
 
 | Method | Reach it with |
@@ -185,6 +185,7 @@ none yet and go through `batch.add` with wire-spelled arguments:
 | `Email/import` | `batch.add("Email/import", {...})` |
 | `Email/parse` | `batch.add("Email/parse", {...})` |
 | `CalendarEvent/parse` | `batch.add("CalendarEvent/parse", {...})` |
+| `ContactCard/parse` | `batch.add("ContactCard/parse", {...})` |
 | `Principal/getAvailability` | `batch.add("Principal/getAvailability", {...})` |
 
 (`Core/echo` is in the same position but has `client.echo(**arguments)`.)

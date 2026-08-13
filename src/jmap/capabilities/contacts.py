@@ -29,6 +29,10 @@ The legacy method inventory is also *not* the standard six. ``Contact`` has no
 ``/queryChanges`` while ``ContactGroup`` does have ``/query`` - which the composed
 façades reproduce, so ``client.fastmail_contacts.contact`` genuinely has no
 ``.query_changes``.
+
+A fourth capability lives here too: Stalwart's ``ContactCard/parse``, behind
+``urn:ietf:params:jmap:contacts:parse`` - an IETF-spelled URN that no IETF
+document defines. See :data:`CONTACTS_PARSE`.
 """
 
 from __future__ import annotations
@@ -38,9 +42,11 @@ from typing import Any, Final
 from jmap.capabilities.spec import CapabilitySpec, DataTypeSpec, MethodKind, MethodSpec
 from jmap.core.limits import LimitKey
 from jmap.models.base import JMAPModel
-from jmap.models.contacts import AddressBook, ContactCard
+from jmap.models.contacts import AddressBook, ContactCard, ParsedCards
 
 CONTACTS_URN: Final = "urn:ietf:params:jmap:contacts"
+#: Stalwart's, despite the IETF spelling - see :data:`CONTACTS_PARSE`.
+CONTACTS_PARSE_URN: Final = "urn:ietf:params:jmap:contacts:parse"
 #: Fastmail's vendor URN. Lowercase, ``www.``, plural, no trailing path.
 FASTMAIL_CONTACTS_URN: Final = "https://www.fastmail.com/dev/contacts"
 #: Cyrus's, advertised only when ``jmap_nonstandard_extensions`` is enabled.
@@ -131,6 +137,35 @@ CONTACTS: Final = CapabilitySpec(
         MethodSpec("ContactCard/queryChanges", MethodKind.QUERY_CHANGES),
         MethodSpec("ContactCard/set", MethodKind.SET, mutating=True, chunk_by=LimitKey.SET_OBJECTS),
         MethodSpec("ContactCard/copy", MethodKind.COPY, mutating=True),
+    ),
+)
+
+
+#: ``ContactCard/parse`` alone, mirroring the calendars ``:parse`` companion.
+#:
+#: RFC 9610 defines no ``/parse`` and no such URN - the IETF spelling is
+#: Stalwart's choice, anticipating a registration that has not happened. It is
+#: still a *vendor* extension: the authority on its shape is Stalwart's
+#: implementation, from which two facts are worth the read. ``parsed`` maps each
+#: blob to **one** Card, where the calendars method maps each blob to an array -
+#: see :class:`~jmap.models.contacts.ParsedCards`. And the per-call blob cap is a
+#: server config value (``contact_parse_max_items``) advertised nowhere, so an
+#: oversized call answers ``requestTooLarge`` with no limit to pre-check against;
+#: halving the batch and retrying is the working strategy.
+CONTACTS_PARSE: Final = CapabilitySpec(
+    urn=CONTACTS_PARSE_URN,
+    reference="Stalwart vendor extension",
+    requires=frozenset({CONTACTS_URN}),
+    methods=(
+        MethodSpec(
+            "ContactCard/parse",
+            MethodKind.CUSTOM,
+            response_model=ParsedCards,
+            extra_args={
+                "blobIds": "blobs to parse as vCard",
+                "properties": "ContactCard properties to return",
+            },
+        ),
     ),
 )
 
