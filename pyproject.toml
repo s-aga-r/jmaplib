@@ -13,7 +13,9 @@ requires-python = ">=3.11"
 authors = [{ name = "Sagar Sharma", email = "sagarsharma.s312@gmail.com" }]
 keywords = ["jmap", "email", "calendar", "contacts", "rfc8620", "rfc8621"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    # 1.x with a stated SemVer promise (see CHANGELOG.md); experimental
+    # draft-tracking capabilities are opt-in and excluded from it.
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -33,7 +35,9 @@ cli = ["typer>=0.15", "rich>=13"]
 
 [project.urls]
 Homepage = "https://github.com/s-aga-r/jmaplib"
+Repository = "https://github.com/s-aga-r/jmaplib"
 Issues = "https://github.com/s-aga-r/jmaplib/issues"
+Changelog = "https://github.com/s-aga-r/jmaplib/blob/main/CHANGELOG.md"
 
 # The fake JMAP server will ship as a pytest plugin so downstream users get
 # `jmap_fake_server` / `jmap_client` fixtures from `pip install jmaplib` alone.
