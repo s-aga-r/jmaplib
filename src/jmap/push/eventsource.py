@@ -135,13 +135,17 @@ def parse_event(event_type: str, data: str) -> StateChange | Ping | None:
     if event_type == EVENT_PING:
         payload = _json_object(data)
         interval = payload.get("interval")
-        return Ping(interval=interval if isinstance(interval, int) else None)
+        # bool is an int subclass; `interval: true` must not become Ping(True).
+        genuine = isinstance(interval, int) and not isinstance(interval, bool)
+        return Ping(interval=interval if genuine else None)
     return None
 
 
 def _json_object(data: str) -> dict[str, Any]:
     try:
-        decoded = loads(data.encode())
+        # The str goes straight in: encoding it first pays a full UTF-8 pass
+        # per event for bytes that came from a decode moments earlier.
+        decoded = loads(data)
     except (ValueError, json.JSONDecodeError) as exc:
         raise EventSourceError(f"event payload was not JSON: {data[:80]!r}") from exc
     if not is_object(decoded):

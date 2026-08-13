@@ -166,7 +166,7 @@ class WebSocketProtocol:
         Raises :class:`WebSocketProtocolError` for anything the subprotocol does
         not allow, which §4.3.1 lets a client answer with a 1007 close.
         """
-        decoded = loads(text.encode())
+        decoded = loads(text)
         if not is_object(decoded):
             raise WebSocketProtocolError("a JMAP WebSocket message must be a JSON object")
         body = as_object(decoded)

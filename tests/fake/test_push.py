@@ -524,3 +524,45 @@ class TestReconnectLoop:
         assert isinstance(second, StateChange)
         assert second.states_for("a") == {"Email": "e2"}
         assert fake.event_source_requests[1]["last-event-id"] == "1"
+
+
+class TestListenReconnects:
+    def test_a_mid_stream_drop_redials_instead_of_escaping(self, monkeypatch):
+        # The ping deadline and NAT timeouts surface as transport errors, and
+        # they are precisely what reconnection exists for. listen() used to let
+        # them escape, so the mechanism built to detect a dead connection
+        # killed the listener instead of recovering it.
+        fake = server()
+        fake.push("a", {"Email": "e1"}, event_id="1")
+        drops = {"remaining": 1}
+
+        def flaky(request: httpx.Request) -> httpx.Response | None:
+            if "/jmap/eventsource/" in request.url.path and drops["remaining"]:
+                drops["remaining"] -= 1
+                raise httpx.ReadError("connection reset mid-stream")
+            return None
+
+        naps: list[float] = []
+        monkeypatch.setattr("jmap.push.listener.time.sleep", naps.append)
+        with connect(fake) as client:
+            fake.intercept = flaky
+            stream = EventSourceClient(client).listen()
+            event = next(stream)
+            stream.close()
+        assert isinstance(event, StateChange)
+        assert naps, "the redial should have waited out the reconnect delay"
+
+    def test_an_authentication_failure_still_escapes(self, monkeypatch):
+        # Retrying a 401 loops on an answer that will not change.
+        fake = server()
+
+        def unauthorised(request: httpx.Request) -> httpx.Response | None:
+            if "/jmap/eventsource/" in request.url.path:
+                return httpx.Response(401, headers={"WWW-Authenticate": "Basic realm=x"})
+            return None
+
+        monkeypatch.setattr("jmap.push.listener.time.sleep", lambda _s: None)
+        with connect(fake) as client:
+            fake.intercept = unauthorised
+            with pytest.raises(AuthenticationError):
+                next(EventSourceClient(client).listen())

@@ -29,8 +29,11 @@ and lose every change that arrived before it.
 
 from __future__ import annotations
 
+import codecs
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+
+from jmap.core.errors import JMAPError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -40,6 +43,37 @@ DEFAULT_EVENT_TYPE = "message"
 
 #: A NUL in an ``id`` field means the field is ignored entirely (HTML spec).
 _NUL = "\x00"
+
+#: The most characters one event (its pending line included) may accumulate.
+#: A JMAP StateChange is a few hundred bytes; this is three orders of magnitude
+#: of headroom. Without a bound, a hostile server streams one endless ``data:``
+#: line - or endless terminated ones with no blank line - into a connection
+#: designed to stay open for days, and the client grows until the OS kills it.
+MAX_EVENT_CHARS = 1 << 22
+
+#: ``retry:`` values longer than this are nonsense, not pacing - and a huge
+#: digit string would trip CPython's int-conversion limit besides.
+_MAX_RETRY_DIGITS = 15
+
+
+class EventOverflowError(JMAPError):
+    """The stream accumulated more than :data:`MAX_EVENT_CHARS` for one event."""
+
+    def __init__(self, buffered: int) -> None:
+        self.buffered = buffered
+        super().__init__(
+            f"the event source buffered {buffered} characters without completing an "
+            f"event (limit {MAX_EVENT_CHARS}); a conforming JMAP stream never comes "
+            f"close, so this connection is broken or hostile"
+        )
+
+
+def _new_decoder() -> codecs.IncrementalDecoder:
+    # Incremental because the transport chunks at arbitrary byte boundaries: a
+    # multi-byte character split across two reads must decode as one character,
+    # not crash. `replace` because the WHATWG stream spec decodes with U+FFFD
+    # substitution - strict decoding turns one bad byte into a dead listener.
+    return codecs.getincrementaldecoder("utf-8")(errors="replace")
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +106,11 @@ class SSEParser:
 
     _buffer: str = ""
     _data: list[str] = field(default_factory=lambda: [])
+    _data_chars: int = 0
     _event_type: str = ""
     _pending_cr: bool = False
+    _at_stream_start: bool = True
+    _decoder: codecs.IncrementalDecoder = field(default_factory=_new_decoder)
 
     def feed(self, chunk: str) -> Iterator[ServerSentEvent]:
         """Consume a chunk of the stream, yielding whatever events complete."""
@@ -83,24 +120,44 @@ class SSEParser:
             self._pending_cr = False
             if chunk.startswith("\n"):
                 chunk = chunk[1:]
-        self._buffer += chunk
+        if self._at_stream_start:
+            # One leading U+FEFF is a byte-order mark, not the first field name.
+            self._at_stream_start = False
+            chunk = chunk.removeprefix("\ufeff")
+        buffer = self._buffer + chunk
+        if len(buffer) + self._data_chars > MAX_EVENT_CHARS:
+            raise EventOverflowError(len(buffer) + self._data_chars)
 
-        while True:
-            line, terminator, rest = _split_line(self._buffer)
-            if terminator is None:
+        # Scanned by offset rather than re-sliced per line: slicing copied the
+        # whole remaining buffer once per extracted line, which for a large
+        # multi-chunk event is quadratic. The buffer is compacted once per
+        # completed event (so an abandoned generator never replays one) and
+        # once when the chunk is exhausted.
+        position = 0
+        length = len(buffer)
+        while position < length:
+            index = _next_terminator(buffer, position)
+            if index is None:
                 break
-            if terminator == "\r" and not rest:
-                # Cannot tell yet whether the next chunk starts with LF, which
-                # would make this one CRLF rather than a bare CR.
-                self._pending_cr = True
-            self._buffer = rest
+            line = buffer[position:index]
+            if buffer.startswith("\r\n", index):
+                position = index + 2
+            else:
+                if buffer[index] == "\r" and index + 1 == length:
+                    # Cannot tell yet whether the next chunk starts with LF,
+                    # which would make this one CRLF rather than a bare CR.
+                    self._pending_cr = True
+                position = index + 1
             event = self._consume(line)
             if event is not None:
+                self._buffer = buffer[position:]
                 yield event
+        self._buffer = buffer[position:]
 
     def feed_bytes(self, chunk: bytes) -> Iterator[ServerSentEvent]:
-        """Consume raw bytes. The format is always UTF-8."""
-        return self.feed(chunk.decode())
+        """Consume raw bytes. The format is always UTF-8, decoded incrementally
+        so a character split across transport chunks survives."""
+        return self.feed(self._decoder.decode(chunk))
 
     def _consume(self, line: str) -> ServerSentEvent | None:
         if not line:
@@ -118,9 +175,12 @@ class SSEParser:
             self._event_type = value
         elif name == "data":
             self._data.append(value)
+            self._data_chars += len(value)
         elif name == "id" and _NUL not in value:
             self._last_id_is(value)
-        elif name == "retry" and value.isdigit():
+        elif name == "retry" and _is_ascii_digits(value):
+            # isascii() matters: '²'.isdigit() is true but int('²') raises, and
+            # a Unicode digit crashing the parser kills the whole listener.
             self.retry = int(value)
         # Any other field name is ignored, per the spec - which is what lets the
         # format be extended without breaking existing parsers.
@@ -144,26 +204,19 @@ class SSEParser:
             retry=self.retry,
         )
         self._data = []
+        self._data_chars = 0
         self._event_type = ""
         return event
 
 
-def _split_line(buffer: str) -> tuple[str, str | None, str]:
-    """Split off one complete line, returning ``(line, terminator, rest)``.
-
-    ``terminator`` is ``None`` when the buffer holds no complete line yet.
-    """
-    index = _first_terminator(buffer)
-    if index is None:
-        return "", None, buffer
-    if buffer.startswith("\r\n", index):
-        return buffer[:index], "\r\n", buffer[index + 2 :]
-    return buffer[:index], buffer[index], buffer[index + 1 :]
+def _is_ascii_digits(value: str) -> bool:
+    return bool(value) and len(value) <= _MAX_RETRY_DIGITS and value.isascii() and value.isdigit()
 
 
-def _first_terminator(buffer: str) -> int | None:
-    carriage = buffer.find("\r")
-    newline = buffer.find("\n")
+def _next_terminator(buffer: str, start: int) -> int | None:
+    """The index of the first ``\\r`` or ``\\n`` at or after ``start``."""
+    carriage = buffer.find("\r", start)
+    newline = buffer.find("\n", start)
     if carriage == -1 and newline == -1:
         return None
     if carriage == -1:

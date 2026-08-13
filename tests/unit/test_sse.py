@@ -7,7 +7,14 @@ place, an event delivered twice.
 
 from __future__ import annotations
 
-from jmap.push.sse import DEFAULT_EVENT_TYPE, ServerSentEvent, SSEParser
+import pytest
+
+from jmap.push.sse import (
+    DEFAULT_EVENT_TYPE,
+    EventOverflowError,
+    ServerSentEvent,
+    SSEParser,
+)
 
 
 def events(*chunks: str) -> list[ServerSentEvent]:
@@ -179,3 +186,65 @@ class TestChunking:
             "b",
             "c",
         ]
+
+
+class TestByteDecoding:
+    def test_a_character_split_across_chunks_survives(self):
+        # The transport chunks at arbitrary byte boundaries; a multi-byte
+        # character cut in half must decode as one character, not crash.
+        parser = SSEParser()
+        payload = "data: café\n\n".encode()
+        cut = payload.index("é".encode()) + 1  # inside the two-byte é
+        collected = list(parser.feed_bytes(payload[:cut]))
+        collected += list(parser.feed_bytes(payload[cut:]))
+        assert [event.data for event in collected] == ["café"]
+
+    def test_an_invalid_byte_becomes_the_replacement_character(self):
+        # WHATWG decodes event streams with U+FFFD substitution; strict
+        # decoding would turn one bad byte into a dead listener.
+        parser = SSEParser()
+        [event] = parser.feed_bytes(b"data: a\xffb\n\n")
+        assert event.data == "a�b"
+
+    def test_a_leading_bom_is_not_a_field_name(self):
+        parser = SSEParser()
+        [event] = parser.feed_bytes("﻿event: state\ndata: {}\n\n".encode())
+        assert event.type == "state"
+
+
+class TestHostileStreams:
+    @staticmethod
+    def _flood(parser: SSEParser, chunk: str) -> None:
+        for _ in range(8):
+            list(parser.feed(chunk))
+
+    def test_an_endless_unterminated_line_overflows_loudly(self):
+        # The connection is designed to stay open for days; without a bound a
+        # single never-terminated data: line grows until the OS kills us.
+        parser = SSEParser()
+        with pytest.raises(EventOverflowError):
+            self._flood(parser, "x" * (1 << 20))
+
+    def test_endless_data_lines_with_no_dispatch_overflow_too(self):
+        # Terminated lines that never see a blank line accumulate in _data;
+        # they count toward the same cap as the raw buffer.
+        parser = SSEParser()
+        with pytest.raises(EventOverflowError):
+            self._flood(parser, "data: " + "x" * (1 << 20) + "\n")
+
+    def test_a_unicode_digit_retry_is_ignored_not_fatal(self):
+        # '²'.isdigit() is true but int('²') raises; the crash would kill the
+        # listener, so the field is ignored instead.
+        parser = SSEParser()
+        list(parser.feed("retry:²\n"))
+        assert parser.retry is None
+
+    def test_an_arabic_indic_retry_is_not_silently_honoured(self):
+        parser = SSEParser()
+        list(parser.feed("retry:٣\n"))
+        assert parser.retry is None
+
+    def test_an_absurdly_long_retry_is_ignored(self):
+        parser = SSEParser()
+        list(parser.feed("retry:" + "9" * 400 + "\n"))
+        assert parser.retry is None

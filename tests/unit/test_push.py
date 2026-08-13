@@ -454,6 +454,47 @@ class TestVapid:
         assert VAPID.urn == VAPID_URN
 
 
+class TestReconnectDelay:
+    def _listener_with_retry(self, milliseconds: int) -> PushListener:
+        listener = PushListener("https://x/es", close_after_state=False)
+        stream = listener.new_stream()
+        list(stream.feed(f"retry: {milliseconds}\n\n".encode()))
+        listener.absorb(stream)
+        return listener
+
+    def test_the_server_retry_is_honoured(self):
+        assert self._listener_with_retry(5000).delay() == 5.0
+
+    def test_an_absurd_retry_is_capped(self):
+        # retry: has no upper bound in the spec; honouring a huge one would let
+        # a single frame disable push forever while the client looks alive.
+        listener = self._listener_with_retry(999_999_999_999)
+        assert listener.delay() == 600.0
+
+    def test_consecutive_failures_back_off_exponentially(self):
+        listener = PushListener("https://x/es", close_after_state=False)
+        first = listener.delay()
+        listener.note_failure()
+        second = listener.delay()
+        listener.note_failure()
+        third = listener.delay()
+        assert first < second < third
+
+    def test_backoff_is_capped(self):
+        listener = PushListener("https://x/es", close_after_state=False)
+        for _ in range(64):
+            listener.note_failure()
+        assert listener.delay() == 600.0
+
+    def test_a_delivery_resets_the_backoff(self):
+        listener = PushListener("https://x/es", close_after_state=False)
+        resting = listener.delay()
+        listener.note_failure()
+        listener.note_failure()
+        listener.note_delivery()
+        assert listener.delay() == resting
+
+
 class TestTheEventSourceDeadline:
     """An event source is idle by design, so the HTTP client's read timeout is
     exactly the wrong deadline to inherit: it bounds how long a *healthy* stream

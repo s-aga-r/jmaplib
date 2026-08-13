@@ -130,8 +130,9 @@ class PushKeys(JMAPModel):
 
     #: The P-256 ECDH public key.
     p256dh: str | None = None
-    #: The authentication secret.
-    auth: str | None = None
+    #: The authentication secret. Excluded from repr: it authenticates the
+    #: RFC 8291 key derivation, and model reprs end up in logs.
+    auth: str | None = Field(default=None, repr=False)
 
 
 class PushSubscription(JMAPModel):

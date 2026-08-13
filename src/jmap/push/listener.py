@@ -43,7 +43,7 @@ from jmap.push.eventsource import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Generator
+    from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
 
     from jmap.aio import AsyncJMAPClient
     from jmap.client import JMAPClient
@@ -56,6 +56,16 @@ MIN_RECONNECT_SECONDS = 0.1
 
 #: Used when the server has never sent a ``retry:``.
 DEFAULT_RECONNECT_SECONDS = 3.0
+
+#: Ceiling on the reconnect delay, server-requested or backed-off. ``retry:``
+#: has no upper bound in the spec, and honouring a huge one would let a single
+#: frame silently disable push forever while the client looks alive.
+MAX_RECONNECT_SECONDS = 600.0
+
+#: Read this much of an error response's body and no more. A problem+json fits
+#: in a fraction of it; only a hostile server answers the event-source GET with
+#: a 4xx and then streams gigabytes, and buffering that is an OOM.
+ERROR_BODY_LIMIT = 64 * 1024
 
 #: Added to the ping interval before a silent connection is declared dead. A
 #: server promising a ping "every n seconds" is not promising a stopwatch, and
@@ -72,7 +82,7 @@ class PushListener:
     here rather than inside any one connection.
     """
 
-    __slots__ = ("_close_after_state", "_last_event_id", "_ping", "_retry", "_url")
+    __slots__ = ("_close_after_state", "_failures", "_last_event_id", "_ping", "_retry", "_url")
 
     def __init__(self, url: str, *, close_after_state: bool, ping: int = 0) -> None:
         self._url = url
@@ -80,6 +90,7 @@ class PushListener:
         self._ping = ping
         self._last_event_id = ""
         self._retry: int | None = None
+        self._failures = 0
 
     @property
     def url(self) -> str:
@@ -138,11 +149,30 @@ class PushListener:
         if stream.retry is not None:
             self._retry = stream.retry
 
+    def note_delivery(self) -> None:
+        """An event arrived: the connection works, so backoff resets."""
+        self._failures = 0
+
+    def note_failure(self) -> None:
+        """A connection died without proving itself; the next delay doubles."""
+        self._failures += 1
+
     def delay(self) -> float:
-        """How long to wait before redialling."""
+        """How long to wait before redialling.
+
+        The base is the server's ``retry:`` when it sent one. Consecutive
+        connections that die without delivering anything escalate it
+        exponentially - a permanently unreachable server should be dialled
+        rarely, not every three seconds forever - and everything is capped at
+        :data:`MAX_RECONNECT_SECONDS`, because ``retry:`` is server-chosen and
+        an absurd value would otherwise disable push while looking alive.
+        """
         if self._retry is None:
-            return DEFAULT_RECONNECT_SECONDS
-        return max(MIN_RECONNECT_SECONDS, self._retry / 1000)
+            base = DEFAULT_RECONNECT_SECONDS
+        else:
+            base = max(MIN_RECONNECT_SECONDS, self._retry / 1000)
+        escalated = base * (2.0 ** min(self._failures, 16))
+        return min(MAX_RECONNECT_SECONDS, escalated)
 
     def __repr__(self) -> str:
         return f"PushListener(last_event_id={self._last_event_id!r})"
@@ -174,6 +204,30 @@ def stream_timeout(base: httpx.Timeout, read: float | None) -> httpx.Timeout:
     instance alongside overrides, so the legs are copied across by hand.
     """
     return httpx.Timeout(connect=base.connect, read=read, write=base.write, pool=base.pool)
+
+
+def _limited_body(chunks: Iterator[bytes]) -> bytes:
+    """At most :data:`ERROR_BODY_LIMIT` bytes of an error response.
+
+    An error body is only ever fed to the problem parser; reading it in full
+    would hand a hostile server an unbounded allocation before the error is
+    even raised.
+    """
+    collected = bytearray()
+    for chunk in chunks:
+        collected += chunk
+        if len(collected) >= ERROR_BODY_LIMIT:
+            break
+    return bytes(collected[:ERROR_BODY_LIMIT])
+
+
+async def _limited_body_async(chunks: AsyncIterator[bytes]) -> bytes:
+    collected = bytearray()
+    async for chunk in chunks:
+        collected += chunk
+        if len(collected) >= ERROR_BODY_LIMIT:
+            break
+    return bytes(collected[:ERROR_BODY_LIMIT])
 
 
 def _check(response: httpx.Response, body: bytes) -> None:
@@ -236,7 +290,7 @@ class EventSourceClient:
                 timeout=stream_timeout(self._client.http.timeout, self._listener.read_timeout),
             ) as response:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
-                    _check(response, response.read())
+                    _check(response, _limited_body(response.iter_bytes()))
                 for chunk in response.iter_bytes():
                     yield from stream.feed(chunk)
         except httpx.HTTPError as exc:
@@ -250,12 +304,32 @@ class EventSourceClient:
         """Yield events indefinitely, reconnecting whenever the stream ends.
 
         Resumes from ``Last-Event-ID`` each time, so a drop costs latency rather
-        than data. Typed as a generator rather than an iterator because a caller
-        that stops listening needs ``close()`` to end the connection - an
-        infinite iterator with no way to stop it is a leak.
+        than data - and "ends" includes dying: a reset, a NAT timeout, and the
+        ping-deadline read timeout are precisely what reconnection exists for,
+        so a :class:`TransportError` here redials rather than escaping. (It used
+        to escape, which meant the ping mechanism built to *detect* a dead
+        connection killed the listener instead of recovering it.) Failures
+        without a delivered event back off exponentially, so a server that is
+        gone gets dialled rarely rather than every few seconds forever;
+        anything that is not a transport drop - a 401, a problem response, an
+        overflowing stream - still raises, because retrying those loops on an
+        answer that will not change.
+
+        Typed as a generator rather than an iterator because a caller that
+        stops listening needs ``close()`` to end the connection - an infinite
+        iterator with no way to stop it is a leak.
         """
         while True:
-            yield from self.events()
+            try:
+                for event in self.events():
+                    self._listener.note_delivery()
+                    yield event
+            except TransportError:
+                self._listener.note_failure()
+            else:
+                # A clean end (closeafter=state, server shutdown) is the
+                # connection working as designed, not a failure.
+                self._listener.note_delivery()
             time.sleep(self._listener.delay())
 
 
@@ -296,7 +370,7 @@ class AsyncEventSourceClient:
                 timeout=stream_timeout(self._client.http.timeout, self._listener.read_timeout),
             ) as response:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
-                    _check(response, await response.aread())
+                    _check(response, await _limited_body_async(response.aiter_bytes()))
                 async for chunk in response.aiter_bytes():
                     for event in stream.feed(chunk):
                         yield event
@@ -306,9 +380,19 @@ class AsyncEventSourceClient:
             self._listener.absorb(stream)
 
     async def listen(self) -> AsyncGenerator[StateChange | Ping, None]:
-        """Yield events indefinitely, reconnecting whenever the stream ends."""
+        """Yield events indefinitely, reconnecting whenever the stream ends.
+
+        Transport drops redial with backoff; everything else raises - see the
+        sync twin for the reasoning.
+        """
         while True:
-            async for event in self.events():
-                yield event
+            try:
+                async for event in self.events():
+                    self._listener.note_delivery()
+                    yield event
+            except TransportError:
+                self._listener.note_failure()
+            else:
+                self._listener.note_delivery()
             # anyio rather than asyncio.sleep, so this works under trio too.
             await anyio.sleep(self._listener.delay())

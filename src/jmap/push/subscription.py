@@ -26,7 +26,7 @@ when the subscription was created has to be remembered and re-checked.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from jmap.capabilities.push import VAPID_URN, VapidCapability, vapid_key_rotated
 from jmap.core.errors import JMAPError
@@ -117,14 +117,25 @@ class PendingVerification:
     two actually happen.
     """
 
+    #: A client has a handful of subscriptions in flight at most; the cap only
+    #: matters when whatever feeds :meth:`record` is reachable by a sender who
+    #: can mint subscription ids, where an unbounded dict is a slow leak.
+    MAX_PENDING: ClassVar[int] = 64
+
     _codes: dict[str, str] = field(default_factory=lambda: {})
 
     def record(self, verification: PushVerification) -> None:
         """Note a verification push, whether or not its subscription is known yet."""
         identifier = verification.push_subscription_id
         code = verification.verification_code
-        if identifier is not None and code is not None:
-            self._codes[identifier] = code
+        if identifier is None or code is None:
+            return
+        if identifier not in self._codes and len(self._codes) >= self.MAX_PENDING:
+            # Evict the oldest unclaimed code (dicts preserve insertion order):
+            # a code that sat unclaimed behind 64 later ones belongs to a create
+            # that is not coming back for it.
+            del self._codes[next(iter(self._codes))]
+        self._codes[identifier] = code
 
     def claim(self, subscription_id: str) -> str | None:
         """Take the code for a subscription, if one has arrived."""
