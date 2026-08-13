@@ -63,6 +63,9 @@ ERROR_EXPIRED_TOKEN: Final = "expired_token"
 #: minimum increase a ``slow_down`` demands.
 DEFAULT_POLL_INTERVAL: Final = 5.0
 SLOW_DOWN_INCREMENT: Final = 5.0
+#: Ceiling on a server-chosen poll interval. Device codes live for minutes, so
+#: an interval past this is a stalled flow, not pacing.
+MAX_POLL_INTERVAL: Final = 1800.0
 
 
 class OAuthError(JMAPError):
@@ -261,7 +264,14 @@ class DeviceAuthorization:
                 else None
             ),
             expires_in=int(seconds) if (seconds := _number(body.get("expires_in"))) else None,
-            interval=polled if (polled := _number(interval)) is not None else DEFAULT_POLL_INTERVAL,
+            # Clamped: `interval: 0` (or negative) turns the poll loop into a
+            # request cannon against the token endpoint, and a huge value stalls
+            # the flow past any code's lifetime. Both are server-chosen numbers.
+            interval=(
+                min(max(polled, 1.0), MAX_POLL_INTERVAL)
+                if (polled := _number(interval)) is not None
+                else DEFAULT_POLL_INTERVAL
+            ),
         )
 
     def __repr__(self) -> str:

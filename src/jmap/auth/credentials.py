@@ -136,7 +136,10 @@ class OAuth2Token:
 
     access_token: str
     refresh_token: str | None
-    #: Monotonic-clock deadline, or ``None`` when the server did not say.
+    #: Unix-time deadline (seconds since the epoch, compare against
+    #: ``time.time()``), or ``None`` when the server did not say. Wall clock
+    #: rather than monotonic because :class:`TokenStore` persists it, and a
+    #: monotonic value is meaningless in any other process.
     expires_at: float | None
     scope: str | None
 

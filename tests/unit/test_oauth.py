@@ -656,6 +656,33 @@ class TestDeviceAuthorization:
         )
         assert device.interval == 2.5
 
+    def test_a_zero_or_negative_interval_is_clamped(self):
+        # `interval: 0` would turn the poll loop into a request cannon against
+        # the token endpoint, and a negative one crashes time.sleep.
+        for hostile in (0, -1):
+            device = DeviceAuthorization.of(
+                {
+                    "device_code": "d",
+                    "user_code": "U",
+                    "verification_uri": "https://x/",
+                    "interval": hostile,
+                }
+            )
+            assert device.interval == 1.0
+
+    def test_an_absurd_interval_is_clamped_to_the_ceiling(self):
+        # A server-chosen interval past the code's own lifetime is a stalled
+        # flow, not pacing.
+        device = DeviceAuthorization.of(
+            {
+                "device_code": "d",
+                "user_code": "U",
+                "verification_uri": "https://x/",
+                "interval": 999_999_999,
+            }
+        )
+        assert device.interval == 1800.0
+
     def test_a_non_numeric_interval_falls_back_to_the_default(self):
         device = DeviceAuthorization.of(
             {

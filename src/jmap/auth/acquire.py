@@ -24,10 +24,12 @@ socket accepting unauthenticated requests for no reason.
 from __future__ import annotations
 
 import http.server
+import re
 import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -65,6 +67,46 @@ if TYPE_CHECKING:
 #: RFC 8252 §8.3. The literal address, not ``localhost``.
 LOOPBACK_HOST: Final = "127.0.0.1"
 
+#: Hosts allowed to speak plain ``http`` in the discovery/token chain. RFC 8414
+#: §3.1 and RFC 6749 §3.2 mandate TLS for everything else - every credential in
+#: the flow travels through these exchanges - but a development server on the
+#: caller's own machine has nowhere for cleartext to leak to.
+_LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})
+
+#: C0 and C1 control characters. Terminal escape sequences live here, and the
+#: URLs this module prints are the one line the user is told to trust.
+_CONTROL_CHARS: Final = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def _require_https(url: str, *, purpose: str) -> str:
+    """Refuse to carry credentials to a non-TLS endpoint.
+
+    Applied to every URL the discovery chain fetches or POSTs secrets to. The
+    RFC 8414 §3.3 issuer check downstream cannot help against a cleartext
+    endpoint: a network attacker serves self-consistent metadata for the
+    ``http://`` issuer it injected, and the code, verifier and refresh token
+    then travel in the clear to an endpoint it controls.
+    """
+    split = urlsplit(url)
+    if split.scheme == "https":
+        return url
+    if split.scheme == "http" and (split.hostname or "").lower() in _LOOPBACK_HOSTS:
+        return url
+    raise DiscoveryError(
+        f"{purpose} must be https (or http on loopback for development), got {url!r}; "
+        f"OAuth credentials travel through this exchange and cleartext hands them "
+        f"to the network"
+    )
+
+
+def _printable(text: str) -> str:
+    """Server-supplied text made safe to print to a terminal.
+
+    Escape sequences could overwrite the displayed URL with a legitimate-looking
+    one while the copyable target stays the attacker's.
+    """
+    return _CONTROL_CHARS.sub("�", text)
+
 #: How long to wait for the browser to come back before giving up.
 DEFAULT_REDIRECT_TIMEOUT: Final = 300.0
 
@@ -94,6 +136,9 @@ class _RedirectServer(http.server.HTTPServer):
     """
 
     holder: _Redirect
+    #: The redirect path registered with the authorization server. Only requests
+    #: for it may occupy the capture slot.
+    expected_path: str
 
 
 class _RedirectHandler(http.server.BaseHTTPRequestHandler):
@@ -104,8 +149,13 @@ class _RedirectHandler(http.server.BaseHTTPRequestHandler):
     sys_version = ""
 
     def do_GET(self) -> None:
-        holder = cast("_RedirectServer", self.server).holder
-        if holder.url is None:
+        server = cast("_RedirectServer", self.server)
+        holder = server.holder
+        # Only the registered path may occupy the one capture slot. Anything can
+        # reach a loopback port - a web page port-scanning 127.0.0.1, another
+        # local process - and a stray request winning the slot would abort the
+        # flow for the genuine redirect arriving a moment later.
+        if holder.url is None and self.path.split("?", 1)[0] == server.expected_path:
             holder.url = self.path
             holder.arrived.set()
             body = _DONE_PAGE
@@ -150,6 +200,7 @@ class LoopbackReceiver:
         self._holder = _Redirect()
         self._httpd = _RedirectServer((LOOPBACK_HOST, 0), _RedirectHandler)
         self._httpd.holder = self._holder
+        self._httpd.expected_path = path
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
 
     @property
@@ -237,6 +288,7 @@ class OAuthClient:
         """
         client = http or httpx.Client(follow_redirects=True, timeout=timeout)
         try:
+            _require_https(resource_metadata_url, purpose="the resource metadata URL")
             resource = ProtectedResourceMetadata.of(_fetch_json(client, resource_metadata_url))
             chosen = issuer or resource.issuer()
             return _fetch_server_metadata(client, chosen)
@@ -270,9 +322,12 @@ class OAuthClient:
         a secret, and asking for one produces a credential that ships in the
         binary and fools nobody.
         """
-        endpoint = self.metadata.require("registration_endpoint")
+        endpoint = _require_https(
+            self.metadata.require("registration_endpoint"), purpose="the registration endpoint"
+        )
         response = self._http.post(
             endpoint,
+            follow_redirects=False,
             json=registration_body(
                 client_name=client_name,
                 redirect_uris=redirect_uris,
@@ -350,7 +405,7 @@ class OAuthClient:
 
                 webbrowser.open(url)
             else:
-                print(f"Open this URL to authorise:\n{url}")
+                print(f"Open this URL to authorise:\n{_printable(url)}")
             redirect = receiver.wait(timeout)
             code = parse_redirect(redirect, expected_state=state)
             return self.exchange_code(
@@ -360,9 +415,13 @@ class OAuthClient:
     # -- device flow -------------------------------------------------------- #
     def begin_device_flow(self, *, scope: str | None = None) -> DeviceAuthorization:
         """Ask for a user code (RFC 8628 §3.1)."""
-        endpoint = self.metadata.require("device_authorization_endpoint")
+        endpoint = _require_https(
+            self.metadata.require("device_authorization_endpoint"),
+            purpose="the device authorization endpoint",
+        )
         response = self._http.post(
             endpoint,
+            follow_redirects=False,
             data=device_authorization_body(client_id=self.client_id, scope=scope),
             headers={"Accept": "application/json"},
         )
@@ -405,8 +464,8 @@ class OAuthClient:
         # Both are shown: the complete URI is convenient, but a user reading this
         # to someone else needs the short one and the code separately (§3.3.1).
         print(
-            f"Go to {authorization.verification_uri} and enter the code "
-            f"{authorization.user_code}\n  (or open {target} directly)"
+            f"Go to {_printable(authorization.verification_uri)} and enter the code "
+            f"{_printable(authorization.user_code)}\n  (or open {_printable(target)} directly)"
         )
         return self.poll_device_flow(authorization)
 
@@ -424,9 +483,16 @@ class OAuthClient:
 
     # -- plumbing ----------------------------------------------------------- #
     def _token_request(self, body: Mapping[str, str]) -> OAuth2Token:
-        endpoint = self.metadata.require("token_endpoint")
+        endpoint = _require_https(
+            self.metadata.require("token_endpoint"), purpose="the token endpoint"
+        )
+        # No redirects: a 307/308 would re-send the form body - code, verifier,
+        # refresh token, client secret - to wherever the Location header points.
         response = self._http.post(
-            endpoint, data=dict(body), headers={"Accept": "application/json"}
+            endpoint,
+            follow_redirects=False,
+            data=dict(body),
+            headers={"Accept": "application/json"},
         )
         return _as_token(_json_body(response))
 
@@ -445,7 +511,9 @@ class OAuthClient:
 
 
 def _as_token(document: Any) -> OAuth2Token:
-    fields = parse_token_response(document, now=time.monotonic())
+    # Wall clock, not monotonic: TokenStore persists this deadline, and a
+    # monotonic value is meaningless in any other process.
+    fields = parse_token_response(document, now=time.time())
     return OAuth2Token(
         fields["access_token"],
         refresh_token=fields["refresh_token"],
@@ -471,6 +539,7 @@ def _fetch_server_metadata(client: httpx.Client, issuer: str) -> AuthorizationSe
     costs a round trip on servers that follow the older convention and saves the
     caller from having to know which they are talking to.
     """
+    _require_https(issuer, purpose="the issuer")
     attempts = (
         well_known_url(issuer, AUTHORIZATION_SERVER_SUFFIX),
         openid_url(issuer),

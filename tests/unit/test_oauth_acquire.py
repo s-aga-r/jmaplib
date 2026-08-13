@@ -116,6 +116,16 @@ class TestLoopbackReceiver:
         finally:
             probe.close()
 
+    def test_a_stray_request_cannot_occupy_the_capture_slot(self):
+        # Anything can reach a loopback port - a web page port-scanning
+        # 127.0.0.1, another local process. A request for the wrong path must
+        # not poison the one-shot slot and abort the genuine redirect.
+        with loopback_receiver() as receiver:
+            base = receiver.redirect_uri.rsplit("/callback", 1)[0]
+            _get(f"{base}/favicon.ico")
+            _get(f"{receiver.redirect_uri}?code=genuine&state=st")
+            assert "genuine" in receiver.wait(timeout=5)
+
 
 class TestDiscovery:
     def test_the_chain_runs_from_a_challenge_pointer(self):
@@ -163,6 +173,36 @@ class TestDiscovery:
             "/.well-known/oauth-authorization-server",
             "/.well-known/openid-configuration",
         ]
+
+    def test_a_cleartext_resource_metadata_url_is_refused(self):
+        # RFC 9728 mandates TLS; the RFC 8414 issuer check downstream cannot
+        # help against a MITM who serves self-consistent metadata for the
+        # http:// URL it injected into the 401.
+        router = Router()
+        with pytest.raises(DiscoveryError, match="must be https"):
+            OAuthClient.discover(
+                "http://jmap.example.com/.well-known/oauth-protected-resource",
+                http=router.client(),
+            )
+        assert router.requests == []
+
+    def test_a_cleartext_issuer_is_refused(self):
+        router = Router()
+        with pytest.raises(DiscoveryError, match="must be https"):
+            OAuthClient.discover_from_issuer("http://auth.example.com", http=router.client())
+        assert router.requests == []
+
+    def test_a_loopback_development_server_may_stay_cleartext(self):
+        # RFC 8252's development posture: on the caller's own machine there is
+        # nowhere for cleartext to leak to.
+        issuer = "http://127.0.0.1:8080"
+        router = Router()
+        router.add(
+            "/.well-known/oauth-authorization-server",
+            httpx.Response(200, json={**SERVER_METADATA, "issuer": issuer}),
+        )
+        found = OAuthClient.discover_from_issuer(issuer, http=router.client())
+        assert found.issuer == issuer
 
     def test_a_mismatched_issuer_is_refused(self):
         # RFC 8414 §3.3. Without this any host answering the path could nominate
@@ -501,6 +541,59 @@ class TestRefresh:
             client.refresh("old")
         sent = dict(httpx.QueryParams(router.requests[-1].content.decode()))
         assert sent["client_secret"] == "s"
+
+
+class TestTokenEndpointHardening:
+    def test_a_cleartext_token_endpoint_is_refused(self):
+        # The POST body carries the code, verifier, refresh token and client
+        # secret; https is not negotiable outside loopback development.
+        router = Router()
+        with (
+            OAuthClient(
+                metadata(token_endpoint="http://auth.example.com/token"),
+                client_id="c",
+                http=router.client(),
+            ) as client,
+            pytest.raises(DiscoveryError, match="token endpoint must be https"),
+        ):
+            client.refresh("old")
+        assert router.requests == []
+
+    def test_a_loopback_token_endpoint_stays_usable(self):
+        router = Router()
+        router.add("/token", httpx.Response(200, json={"access_token": "new"}))
+        with OAuthClient(
+            metadata(token_endpoint="http://127.0.0.1:8080/token"),
+            client_id="c",
+            http=router.client(),
+        ) as client:
+            assert client.refresh("old").access_token == "new"
+
+    def test_a_token_endpoint_redirect_is_not_followed(self):
+        # A 307 would re-send the whole form body - code, verifier, refresh
+        # token, client secret - to wherever Location points.
+        router = Router()
+        router.add(
+            "/token",
+            httpx.Response(307, headers={"Location": "https://elsewhere.example/collect"}),
+        )
+        with oauth(router) as client, pytest.raises(DiscoveryError):
+            client.refresh("old")
+        assert [request.url.path for request in router.requests] == ["/token"]
+
+    def test_token_deadlines_are_wall_clock(self):
+        # TokenStore persists expires_at; a monotonic deadline is meaningless in
+        # any other process.
+        import time
+
+        router = Router()
+        router.add(
+            "/token", httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
+        )
+        with oauth(router) as client:
+            token = client.refresh("old")
+        assert token.expires_at is not None
+        assert abs(token.expires_at - (time.time() + 3600)) < 60
 
 
 class TestLifecycle:
