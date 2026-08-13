@@ -37,6 +37,10 @@ SPEC_REVISIONS: Final[dict[str, str]] = {
     "urn:ietf:params:jmap:principals:owner": "RFC 9670",
     "urn:ietf:params:jmap:sieve": "RFC 9661",
     "urn:ietf:params:jmap:webpush-vapid": "RFC 9749",
+    # The x:-prefixed management dialect, advertised at account level only. The
+    # object inventory is the server's registry schema; this build declares a
+    # verified subset - see jmap.capabilities.stalwart.
+    "urn:stalwart:jmap": "Stalwart v0.16 management API",
     # Experimental — tracking drafts, excluded from the SemVer promise.
     #
     # The calendars draft is in the RFC Editor queue but *blocked* on

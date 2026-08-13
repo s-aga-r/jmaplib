@@ -174,6 +174,45 @@ the key, and treats a missing right as `False` rather than raising.
 the error you get back does not explain why - so it is checked here, with
 `owner_principal_id` if you need to name the owner explicitly.
 
+## Stalwart management (vendor)
+
+Stalwart's admin API is a JMAP dialect behind `urn:stalwart:jmap` - v0.16
+removed the `/api/*` REST surface. Method names carry an `x:` prefix and only
+three shapes exist per object: `get`, `set`, `query`. There is no `/changes`.
+
+The URN is advertised at **account level only**, never in the session-level
+map - the capability resolves through the registry's union rule, and appears
+only on a connection authenticated as an account that holds the management
+permission.
+
+The `x:` names are not attribute material, so calls go through `batch.add` like
+the other builder-less methods - with account resolution, `using` derivation and
+the read-only and limit gates all applying as usual:
+
+```python
+with client.batch() as batch:
+    minted = batch.add(
+        "x:AppPassword/set",
+        {"create": {"p1": {"description": "imap-client"}}},
+    )
+
+secret = minted.result.created["p1"]["secret"]  # shown at creation only
+```
+
+The object inventory is the server's registry schema - ~150 types, served at
+`/api/schema` and grown per release - so the default spec declares a verified
+subset (accounts, app passwords, domains and DKIM, groups, mailing lists,
+roles, OAuth clients, the mail queue, logs, actions, DMARC/TLS/ARF reports,
+bootstrap, listeners). For anything else, build your own inventory with
+`jmap.capabilities.stalwart.management_spec` and register it in a custom
+registry.
+
+Three server behaviours worth knowing: `x:Log` is read-only and pages only by
+`anchor` - offset paging is refused. `x:Action` is *run* by a `set` whose
+created object carries the result. And `x:Bootstrap` is a singleton (id
+`"singleton"`), whose `/query` the server rejects - so the spec does not offer
+it.
+
 ## Read receipts (RFC 9007)
 
 ```python
