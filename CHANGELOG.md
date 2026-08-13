@@ -7,6 +7,73 @@ for exactly which revision of each spec this build implements.
 
 ## Unreleased
 
+### Security
+
+A deep review of what a hostile network, server, or session document could do
+to this client. Every fix below is regression-tested; the themes, worst first:
+
+- **OAuth ran over any scheme.** Nothing in the discovery/token chain enforced
+  TLS, and the RFC 8414 issuer check cannot help against a MITM serving
+  self-consistent metadata for an `http://` issuer it injected - the code, PKCE
+  verifier, refresh token and client secret then travelled in cleartext to an
+  endpoint the attacker controls. Every URL the chain fetches or POSTs secrets
+  to now requires https (loopback excepted, for development). Token POSTs also
+  no longer follow redirects, the device-flow poll interval is clamped, the
+  loopback listener's capture slot only accepts the registered callback path,
+  and server-supplied URLs are stripped of terminal escapes before printing.
+- **A transport error could double-send mail.** Every non-timeout httpx error
+  was classified "connection never established" and retried - including
+  ReadError and RemoteProtocolError, which arrive after the request went out.
+  A server that applied an unguarded `EmailSubmission/set` and then dropped the
+  connection got the batch re-sent. Only connect-phase failures retry unguarded
+  mutations now.
+- **The session document could redirect credentials.** Endpoint URLs were
+  adopted verbatim, so a document fetched over https naming an `http://`
+  `apiUrl` steered every authenticated request onto cleartext. Refused now
+  (`InsecureEndpointError`); cross-host https stays legal, http sessions keep
+  http endpoints, and offline parsing is not second-guessed.
+- **The event stream could exhaust memory or kill the listener.** One
+  unterminated `data:` line grew without bound; a UTF-8 character split across
+  chunks (or `retry:²`) crashed the parser; a huge `retry:` disabled push
+  forever; and the transport errors that reconnection exists for escaped
+  `listen()` instead of redialling. All bounded, decoded incrementally, capped,
+  and redialled with backoff now.
+- **Crafted documents escaped the kernel's error contract.** Hundred-thousand-
+  deep nesting killed callers with RecursionError; `NaN`/`Infinity` and
+  thousand-digit integers slipped past or produced path-less stdlib errors;
+  non-string `createdIds` reified Python reprs onto the wire; one malformed
+  method response aborted dispatch for its siblings; hostile session shapes
+  raised AttributeError. All are typed, catchable errors now.
+- **The sync engine allocated whatever the server asked.** `position`/`total`/
+  `index` sized real lists, so a fifty-byte response claiming `total: 2**45`
+  was a multi-terabyte allocation; a stuck `hasMoreChanges` looped forever.
+  Both bounded.
+
+### Fixed
+
+- Persisted query cursors survive a restart: `query_key` hashed with the
+  process-salted `hash()`, so every run re-keyed the store and silently fell
+  back to a full re-query. Now a stable SHA-256 digest.
+- Token expiry deadlines are wall-clock, since `TokenStore` persists them and a
+  monotonic value is meaningless in any other process.
+- A `/set` whose `destroy` is a back-reference (query-then-destroy) no longer
+  crashes `plan()`.
+
+### Performance
+
+- `splice()` applies a `queryChanges` delta in one merge pass instead of an
+  `insert()` per added item - O(n+k) instead of O(k·n), hypothesis-verified
+  equivalent to the RFC's own algorithm.
+- The SSE parser scans by offset instead of re-slicing its buffer per line
+  (quadratic on large multi-chunk events), and two str→bytes→str round trips
+  per push event are gone.
+- `ActiveCapabilities.limits` is computed once per resolution instead of
+  re-parsed on every `add()` and `plan()`.
+- The cost of the new validation: `Session.from_wire` +~1.6µs (once per
+  connect) and `Response.from_wire` +~0.6µs (once per request) - noise against
+  a network round trip, paid for shapes that previously crashed. Everything
+  else is within benchmark noise.
+
 ### Added
 
 **`ContactCard/parse`, behind `urn:ietf:params:jmap:contacts:parse`.** A Stalwart
