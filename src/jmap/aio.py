@@ -287,10 +287,14 @@ class AsyncJMAPClient:
                 response = await self._http.post(
                     self.session.api_url, content=body, headers=request_headers()
                 )
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+                # Only these prove the request was never sent - see the sync
+                # client for why the catch-all below must stay MAYBE_APPLIED.
+                safety, delay, error = classify(Failure.CONNECT), None, exc
             except httpx.TimeoutException as exc:
                 safety, delay, error = classify(Failure.TIMEOUT), None, exc
             except httpx.HTTPError as exc:
-                safety, delay, error = classify(Failure.CONNECT), None, exc
+                safety, delay, error = classify(Failure.INTERRUPTED), None, exc
             else:
                 problem = problem_of(response.status_code, response.headers, response.content)
                 if problem is None:

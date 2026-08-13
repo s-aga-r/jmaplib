@@ -336,12 +336,19 @@ class JMAPClient:
                 response = self._http.post(
                     self.session.api_url, content=body, headers=request_headers()
                 )
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
+                # Only these prove the request was never sent. The catch-all
+                # below must not be widened into this branch: ReadError and
+                # RemoteProtocolError arrive *after* the bytes went out, and
+                # classifying them as never-applied re-sends unguarded
+                # mutations the server may have already run.
+                safety, delay, error = classify(Failure.CONNECT), None, exc
             except httpx.TimeoutException as exc:
                 # A timeout is not a connection failure: the request went out, so
                 # the server may have applied it and simply answered too slowly.
                 safety, delay, error = classify(Failure.TIMEOUT), None, exc
             except httpx.HTTPError as exc:
-                safety, delay, error = classify(Failure.CONNECT), None, exc
+                safety, delay, error = classify(Failure.INTERRUPTED), None, exc
             else:
                 problem = problem_of(response.status_code, response.headers, response.content)
                 if problem is None:

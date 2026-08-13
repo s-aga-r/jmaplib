@@ -230,6 +230,70 @@ class TestClientLifecycle:
         with pytest.raises(TransportError, match="refused"):
             JMAPClient.connect(WELL_KNOWN, auth=BasicAuth("u", "p"), http=http)
 
+
+class TestTransportFailureClassification:
+    """Which transport failures may re-send a request.
+
+    The line that matters: a ConnectError provably never sent the request, while
+    a connection that died mid-exchange (reset, server hung up unanswered) is
+    the same silence as a timeout - the server may have done the work. Getting
+    that wrong re-sends unguarded mutations, which for EmailSubmission/set is
+    mail sent twice.
+    """
+
+    def _flaky_http(
+        self, fake: FakeJMAPServer, exc: type[Exception], failures: int
+    ) -> tuple[httpx.Client, dict[str, int]]:
+        """A transport that raises ``exc`` for the first ``failures`` API POSTs."""
+        seen = {"posts": 0}
+
+        def route(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                seen["posts"] += 1
+                if seen["posts"] <= failures:
+                    raise exc("mid-exchange loss")
+            return fake.route(request)
+
+        kwargs = {**fake.client_kwargs(), "transport": httpx.MockTransport(route)}
+        return httpx.Client(**kwargs), seen
+
+    def test_an_interrupted_unguarded_mutation_is_not_retried(self):
+        # The server may have applied the set before the connection died;
+        # re-sending it without ifInState could duplicate the work.
+        fake = server()
+        fake.respond("Email/set", {"created": {}, "newState": "s2"})
+        http, seen = self._flaky_http(fake, httpx.RemoteProtocolError, failures=99)
+        policy = RetryPolicy(max_attempts=3, initial_backoff=0)
+        with (
+            connect(fake, http=http, retry_policy=policy) as client,
+            pytest.raises(TransportError, match="mid-exchange"),
+        ):
+            client.call("Email/set", {"create": {"d": {}}})
+        assert seen["posts"] == 1
+
+    def test_an_interrupted_read_is_retried(self):
+        # A read that cannot have changed anything is always safe to re-send.
+        fake = server()
+        fake.respond("Email/get", {"list": [], "state": "s1"})
+        http, seen = self._flaky_http(fake, httpx.RemoteProtocolError, failures=1)
+        policy = RetryPolicy(max_attempts=3, initial_backoff=0)
+        with connect(fake, http=http, retry_policy=policy) as client:
+            result = client.call("Email/get", {"ids": []})
+        assert result.state == "s1"
+        assert seen["posts"] == 2
+
+    def test_a_connect_failure_still_retries_an_unguarded_mutation(self):
+        # ConnectError proves the request never went out, so nothing can have
+        # run - the one transport failure where an unguarded retry is safe.
+        fake = server()
+        fake.respond("Email/set", {"created": {}, "newState": "s2"})
+        http, seen = self._flaky_http(fake, httpx.ConnectError, failures=1)
+        policy = RetryPolicy(max_attempts=3, initial_backoff=0)
+        with connect(fake, http=http, retry_policy=policy) as client:
+            result = client.call("Email/set", {"create": {"d": {}}})
+        assert result.new_state == "s2"
+        assert seen["posts"] == 2
+
     def test_connect_closes_a_client_it_created_when_the_session_fails(self):
         # Only reachable when connect() owns the client, so it cannot leak.
         with pytest.raises((TransportError, httpx.HTTPError)):

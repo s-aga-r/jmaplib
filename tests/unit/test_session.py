@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from jmap.core.ids import Id
-from jmap.core.session import CORE_URN, Account, Session
+from jmap.core.session import CORE_URN, Account, InsecureEndpointError, Session
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "stalwart-0.16.17-session-bootstrap.json"
 
@@ -88,6 +88,73 @@ class TestUrlResolution:
 
     def test_no_base_url_leaves_values_untouched(self):
         assert Session.from_wire({"apiUrl": "/jmap/"}).api_url == "/jmap/"
+
+
+class TestEndpointDowngradeRefusal:
+    """The endpoint URLs are where credentials go; a session fetched over https
+    must not steer them onto cleartext."""
+
+    BASE = "https://mail.example.com/jmap/session"
+
+    def test_an_http_endpoint_in_an_https_session_is_refused(self):
+        # The classic MITM shape: the document itself came over TLS, but points
+        # the authenticated traffic at a host the attacker can read.
+        with pytest.raises(InsecureEndpointError, match="apiUrl"):
+            Session.from_wire({"apiUrl": "http://harvest.example.net/api"}, base_url=self.BASE)
+
+    def test_every_endpoint_field_is_covered(self):
+        for field in ("apiUrl", "downloadUrl", "uploadUrl", "eventSourceUrl"):
+            with pytest.raises(InsecureEndpointError, match=field):
+                Session.from_wire({field: "http://harvest.example.net/x"}, base_url=self.BASE)
+
+    def test_a_cross_host_https_endpoint_stays_legal(self):
+        # Real providers serve upload/download from separate hosts.
+        session = Session.from_wire(
+            {"downloadUrl": "https://content.example.net/blob/{blobId}"}, base_url=self.BASE
+        )
+        assert session.download_url.startswith("https://content.example.net/")
+
+    def test_an_http_session_may_keep_http_endpoints(self):
+        # A caller who connected over http has already accepted cleartext -
+        # this is what keeps an internal-network deployment working.
+        session = Session.from_wire(
+            {"apiUrl": "http://mail.internal:8080/jmap/"},
+            base_url="http://mail.internal:8080/jmap/session",
+        )
+        assert session.api_url == "http://mail.internal:8080/jmap/"
+
+    def test_loopback_is_always_allowed(self):
+        session = Session.from_wire(
+            {"apiUrl": "http://127.0.0.1:8080/jmap/"}, base_url=self.BASE
+        )
+        assert session.api_url == "http://127.0.0.1:8080/jmap/"
+
+    def test_a_foreign_scheme_is_refused_outright(self):
+        with pytest.raises(InsecureEndpointError):
+            Session.from_wire({"apiUrl": "ftp://mail.example.com/api"}, base_url=self.BASE)
+
+    def test_offline_parsing_is_not_second_guessed(self):
+        # No base_url means no fetch context - a cached document is the
+        # caller's own input, not a network response.
+        session = Session.from_wire({"apiUrl": "http://mail.internal:8080/jmap/"})
+        assert session.api_url == "http://mail.internal:8080/jmap/"
+
+
+class TestHostileSessionShapes:
+    def test_a_non_object_accounts_map_is_a_value_error(self):
+        # The entry point for a network-fetched document must fail as a
+        # catchable ValueError, never an AttributeError from a comprehension.
+        for hostile in ("accounts", "primaryAccounts", "capabilities"):
+            with pytest.raises(ValueError, match=hostile):
+                Session.from_wire({hostile: "not-an-object"})
+
+    def test_a_non_object_account_entry_is_a_value_error(self):
+        with pytest.raises(ValueError, match="a1"):
+            Session.from_wire({"accounts": {"a1": "not-an-object"}})
+
+    def test_a_non_string_primary_account_is_a_value_error(self):
+        with pytest.raises(ValueError, match="urn:ietf:params:jmap:mail"):
+            Session.from_wire({"primaryAccounts": {"urn:ietf:params:jmap:mail": 7}})
 
 
 class TestCapabilityResolution:

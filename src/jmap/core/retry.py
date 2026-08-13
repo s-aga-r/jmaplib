@@ -56,10 +56,16 @@ class Safety(StrEnum):
 class Failure(StrEnum):
     """What went wrong, at the level of detail the decision actually needs."""
 
-    #: The connection never established: DNS, refused, TLS handshake.
+    #: The connection never established: DNS, refused, TLS handshake, no free
+    #: slot in the pool. Nothing can have been sent.
     CONNECT = "connect"
     #: The request went out but no response came back in time.
     TIMEOUT = "timeout"
+    #: The connection died after the request may have gone out - a reset while
+    #: reading the response, a server that hung up without answering. From the
+    #: client's side this is the same silence as a timeout, and must be treated
+    #: with the same suspicion: the server may have done the work.
+    INTERRUPTED = "interrupted"
     #: A response arrived.
     STATUS = "status"
 
@@ -74,7 +80,7 @@ def classify(
     if failure is Failure.CONNECT:
         # Nothing was sent, so nothing can have run.
         return Safety.NEVER_APPLIED
-    if failure is Failure.TIMEOUT:
+    if failure in (Failure.TIMEOUT, Failure.INTERRUPTED):
         # The bytes went out. Silence is indistinguishable from a slow success.
         return Safety.MAYBE_APPLIED
 

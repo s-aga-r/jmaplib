@@ -29,6 +29,11 @@ class TestClassify:
         # The bytes went out; silence is indistinguishable from a slow success.
         assert classify(Failure.TIMEOUT) is Safety.MAYBE_APPLIED
 
+    def test_an_interrupted_exchange_might_have_applied(self):
+        # A reset while reading the response, or a server that hung up without
+        # answering, is the same silence as a timeout - the work may be done.
+        assert classify(Failure.INTERRUPTED) is Safety.MAYBE_APPLIED
+
     @pytest.mark.parametrize("status", [429, 503])
     def test_backpressure_means_nothing_ran(self, status):
         assert classify(Failure.STATUS, status=status) is Safety.NEVER_APPLIED

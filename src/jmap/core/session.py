@@ -24,12 +24,64 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, Final, Self, cast
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
+from jmap.core.errors import JMAPError
 from jmap.core.ids import Id
 from jmap.core.limits import Limits
 
 CORE_URN: Final = "urn:ietf:params:jmap:core"
+
+#: Hosts whose cleartext endpoints leak nowhere off the machine.
+_LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+class InsecureEndpointError(JMAPError):
+    """A session document pointed an endpoint at a weaker channel.
+
+    The endpoint URLs are the one part of the session a client *acts* on with
+    credentials attached: every subsequent request carries the Authorization
+    header to wherever ``apiUrl`` and friends say. A document fetched over
+    https that names an ``http://`` endpoint is therefore not a config quirk,
+    it is a downgrade - the classic shape of a MITM harvesting Basic
+    credentials in cleartext. Cross-host https endpoints stay legal; real
+    providers serve upload and download from separate hosts.
+    """
+
+    def __init__(self, field: str, url: str, *, base_url: str) -> None:
+        self.field = field
+        self.url = url
+        super().__init__(
+            f"the session document ({base_url}) names {url!r} as its {field}; refusing "
+            f"to send credentials over a weaker scheme than the session itself came over"
+        )
+
+
+def _malformed(field: str, value: Any) -> ValueError:
+    return ValueError(
+        f"the session document's {field!r} is not the shape RFC 8620 requires: "
+        f"got {type(value).__name__}"
+    )
+
+
+def _check_endpoint_scheme(field: str, url: str, base_scheme: str, *, base_url: str) -> None:
+    """Refuse an endpoint on a weaker scheme than the session's own channel.
+
+    Only enforced when the fetch context is known (``base_url`` given): parsing
+    a cached document offline is the caller's own input, and a session fetched
+    over http has already accepted cleartext, so its endpoints may stay http -
+    which is what keeps an internal-network deployment working. Loopback is
+    always allowed; ``wss``/``ws`` follow the same rule for the WebSocket URL a
+    capability may carry a client through here.
+    """
+    split = urlsplit(url)
+    scheme = split.scheme
+    if scheme in ("https", "wss") or not scheme:
+        return
+    downgraded = base_scheme == "https" and scheme in ("http", "ws")
+    foreign = scheme not in ("http", "ws")
+    if foreign or (downgraded and (split.hostname or "").lower() not in _LOOPBACK_HOSTS):
+        raise InsecureEndpointError(field, url, base_url=base_url)
 
 
 class Account:
@@ -132,30 +184,49 @@ class Session:
         redirects, so relative endpoint URLs resolve correctly.
         """
 
-        def absolute(value: Any) -> str:
+        base_scheme = urlsplit(base_url).scheme if base_url else ""
+
+        def absolute(field: str, value: Any) -> str:
             text = str(value or "")
-            return urljoin(base_url, text) if base_url else text
+            resolved = urljoin(base_url, text) if base_url else text
+            if base_scheme and resolved:
+                _check_endpoint_scheme(field, resolved, base_scheme, base_url=base_url)
+            return resolved
 
-        # Explicit casts because `data` is untyped JSON: without them the dict
-        # comprehensions below infer unknown key and value types.
-        raw_accounts = cast("Mapping[str, Mapping[str, Any]]", data.get("accounts") or {})
-        raw_primary = cast("Mapping[str, str]", data.get("primaryAccounts") or {})
-        capabilities = cast("Mapping[str, Any]", data.get("capabilities") or {})
+        # This is the entry point for a document fetched from the network, so
+        # the shapes are checked rather than cast: a hostile or broken server
+        # must produce a ValueError a caller can catch, not an AttributeError
+        # from deep inside a comprehension.
+        raw_accounts = data.get("accounts") or {}
+        if not isinstance(raw_accounts, Mapping):
+            raise _malformed("accounts", raw_accounts)
+        raw_primary = data.get("primaryAccounts") or {}
+        if not isinstance(raw_primary, Mapping):
+            raise _malformed("primaryAccounts", raw_primary)
+        capabilities = data.get("capabilities") or {}
+        if not isinstance(capabilities, Mapping):
+            raise _malformed("capabilities", capabilities)
 
-        accounts = {
-            Id(account_id): Account.from_wire(account_id, account)
-            for account_id, account in raw_accounts.items()
-        }
-        primary = {urn: Id(account_id) for urn, account_id in raw_primary.items()}
+        accounts: dict[Id, Account] = {}
+        for account_id, account in cast("Mapping[str, Any]", raw_accounts).items():
+            if not isinstance(account, Mapping):
+                raise _malformed(f"accounts[{account_id!r}]", account)
+            accounts[Id(str(account_id))] = Account.from_wire(str(account_id), account)
+
+        primary: dict[str, Id] = {}
+        for urn, account_id in cast("Mapping[str, Any]", raw_primary).items():
+            if not isinstance(account_id, str):
+                raise _malformed(f"primaryAccounts[{urn!r}]", account_id)
+            primary[str(urn)] = Id(account_id)
         return cls(
             capabilities=capabilities,
             accounts=accounts,
             primary_accounts=primary,
             username=str(data.get("username", "")),
-            api_url=absolute(data.get("apiUrl")),
-            download_url=absolute(data.get("downloadUrl")),
-            upload_url=absolute(data.get("uploadUrl")),
-            event_source_url=absolute(data.get("eventSourceUrl")),
+            api_url=absolute("apiUrl", data.get("apiUrl")),
+            download_url=absolute("downloadUrl", data.get("downloadUrl")),
+            upload_url=absolute("uploadUrl", data.get("uploadUrl")),
+            event_source_url=absolute("eventSourceUrl", data.get("eventSourceUrl")),
             state=str(data.get("state", "")),
             raw=data,
         )
