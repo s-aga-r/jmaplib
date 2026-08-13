@@ -30,7 +30,7 @@ from jmap.capabilities.spec import MethodKind
 from jmap.chunking import ChunkedHandle, chunk_get_call
 from jmap.core.errors import CapabilityFieldError, JMAPError
 from jmap.core.invocation import Handle, MethodCall
-from jmap.core.narrow import as_list, is_list
+from jmap.core.narrow import as_list, is_list, is_object
 from jmap.core.request import plan_requests
 from jmap.core.response import dispatch
 
@@ -302,11 +302,11 @@ class Batch:
             # Only literal containers can be counted: a ResultRef in `destroy`
             # (the query-then-destroy pattern) names ids that do not exist yet,
             # and calling len() on it crashed plan() on a legitimate batch.
-            total = sum(
-                len(value)
-                for key in ("create", "update", "destroy")
-                if isinstance(value := args.get(key), (dict, list))
-            )
+            total = 0
+            for key in ("create", "update", "destroy"):
+                value = args.get(key)
+                if is_list(value) or is_object(value):
+                    total += len(value)
             if total > limit:
                 raise CapabilityFieldError(handle.call.name, "maxObjectsInSet", limit, total)
 

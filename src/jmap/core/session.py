@@ -197,24 +197,29 @@ class Session:
         # the shapes are checked rather than cast: a hostile or broken server
         # must produce a ValueError a caller can catch, not an AttributeError
         # from deep inside a comprehension.
-        raw_accounts = data.get("accounts") or {}
-        if not isinstance(raw_accounts, Mapping):
-            raise _malformed("accounts", raw_accounts)
-        raw_primary = data.get("primaryAccounts") or {}
-        if not isinstance(raw_primary, Mapping):
-            raise _malformed("primaryAccounts", raw_primary)
-        capabilities = data.get("capabilities") or {}
-        if not isinstance(capabilities, Mapping):
-            raise _malformed("capabilities", capabilities)
+        raw_accounts_value: Any = data.get("accounts") or {}
+        if not isinstance(raw_accounts_value, Mapping):
+            raise _malformed("accounts", raw_accounts_value)
+        raw_accounts = cast("Mapping[str, Any]", raw_accounts_value)
+        raw_primary_value: Any = data.get("primaryAccounts") or {}
+        if not isinstance(raw_primary_value, Mapping):
+            raise _malformed("primaryAccounts", raw_primary_value)
+        raw_primary = cast("Mapping[str, Any]", raw_primary_value)
+        capabilities_value: Any = data.get("capabilities") or {}
+        if not isinstance(capabilities_value, Mapping):
+            raise _malformed("capabilities", capabilities_value)
+        capabilities = cast("Mapping[str, Any]", capabilities_value)
 
         accounts: dict[Id, Account] = {}
-        for account_id, account in cast("Mapping[str, Any]", raw_accounts).items():
+        for account_id, account in raw_accounts.items():
             if not isinstance(account, Mapping):
                 raise _malformed(f"accounts[{account_id!r}]", account)
-            accounts[Id(str(account_id))] = Account.from_wire(str(account_id), account)
+            accounts[Id(str(account_id))] = Account.from_wire(
+                str(account_id), cast("Mapping[str, Any]", account)
+            )
 
         primary: dict[str, Id] = {}
-        for urn, account_id in cast("Mapping[str, Any]", raw_primary).items():
+        for urn, account_id in raw_primary.items():
             if not isinstance(account_id, str):
                 raise _malformed(f"primaryAccounts[{urn!r}]", account_id)
             primary[str(urn)] = Id(account_id)
