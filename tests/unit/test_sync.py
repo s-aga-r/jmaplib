@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import ClassVar
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from jmap.models.responses import AddedItem, ChangesResponse, QueryChangesResponse, QueryResponse
 from jmap.sync import (
@@ -15,6 +17,7 @@ from jmap.sync import (
     StaleQueryViewError,
     StateStore,
     UncacheableQueryError,
+    ViewTooLargeError,
     query_key,
     splice,
     type_key,
@@ -342,3 +345,68 @@ class TestChangeSet:
 
     def test_repr(self):
         assert "created=1" in repr(ChangeSet("Email", created=["m1"]))
+
+
+class TestHostileQueryResponses:
+    def test_an_absurd_position_is_refused(self):
+        # position/total/index size real allocations: [None] * 2**40 from a
+        # fifty-byte response is a multi-terabyte list.
+        response = QueryResponse.model_validate({"position": 2**40, "ids": []})
+        with pytest.raises(ViewTooLargeError):
+            QueryView.from_query(QuerySpec("Email", "a"), response)
+
+    def test_an_absurd_total_is_refused(self):
+        response = QueryResponse.model_validate({"position": 0, "ids": [], "total": 2**45})
+        with pytest.raises(ViewTooLargeError):
+            QueryView.from_query(QuerySpec("Email", "a"), response)
+
+    def test_an_absurd_added_index_is_refused(self):
+        with pytest.raises(ViewTooLargeError):
+            splice(["a"], added=added(("x", 2**40)))
+
+    def test_a_negative_added_index_is_refused(self):
+        # Python's insert() would have accepted it and silently corrupted the
+        # view via negative-index semantics.
+        with pytest.raises(ViewTooLargeError):
+            splice(["a", "b", "c"], added=added(("x", -2)))
+
+    def test_a_negative_total_is_refused(self):
+        with pytest.raises(ViewTooLargeError):
+            splice(["a"], total=-5)
+
+
+class TestSpliceMergeEquivalence:
+    """The single merge pass must reproduce the spec's insert-per-item algorithm."""
+
+    @staticmethod
+    def _reference(ids, removed=(), added=(), total=None):
+        # RFC 8620 §5.6's own algorithm, executed literally.
+        doomed = set(removed)
+        result = [item for item in ids if item is None or item not in doomed]
+        for item in sorted(added, key=lambda entry: entry.index or 0):
+            index = item.index or 0
+            if index > len(result):
+                result.extend([None] * (index - len(result)))
+            result.insert(index, item.id)
+        if total is not None:
+            if total < len(result):
+                del result[total:]
+            else:
+                result.extend([None] * (total - len(result)))
+        return result
+
+    @given(
+        ids=st.lists(st.one_of(st.none(), st.text("ab", min_size=1, max_size=2)), max_size=30),
+        removals=st.lists(st.text("ab", min_size=1, max_size=2), max_size=10),
+        add_pairs=st.lists(
+            st.tuples(st.text("xyz", min_size=1, max_size=2), st.integers(0, 40)),
+            max_size=10,
+            unique_by=lambda pair: pair[1],
+        ),
+        total=st.one_of(st.none(), st.integers(0, 60)),
+    )
+    def test_matches_the_reference_algorithm(self, ids, removals, add_pairs, total):
+        additions = added(*add_pairs)
+        assert splice(ids, removed=removals, added=additions, total=total) == self._reference(
+            ids, removed=removals, added=additions, total=total
+        )

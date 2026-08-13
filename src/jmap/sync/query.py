@@ -25,7 +25,7 @@ example includes one.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from jmap.core.errors import JMAPError
 from jmap.core.narrow import as_list, as_object, is_list, is_object
@@ -38,6 +38,32 @@ if TYPE_CHECKING:
 #: A cached result is sparse: ``None`` marks a position the client knows exists
 #: but has never fetched.
 SparseIds = list[str | None]
+
+#: The most positions a sparse view will materialise. ``position``, ``total``
+#: and each added item's ``index`` are server-chosen integers, and the view
+#: allocates a slot per position - so without a bound, a fifty-byte response
+#: claiming ``"total": 2**45`` is a multi-terabyte allocation. A million rows
+#: is far past any list a client usefully caches.
+MAX_VIEW_LENGTH: Final = 1_000_000
+
+
+class ViewTooLargeError(JMAPError):
+    """A query response named a position beyond what a view will materialise."""
+
+    def __init__(self, what: str, value: int) -> None:
+        self.what = what
+        self.value = value
+        super().__init__(
+            f"{what} of {value} is outside [0, {MAX_VIEW_LENGTH}]; a sparse view "
+            f"allocates a slot per position, so honouring it would be an "
+            f"allocation the size the server chose"
+        )
+
+
+def _checked_position(value: int, *, what: str) -> int:
+    if value < 0 or value > MAX_VIEW_LENGTH:
+        raise ViewTooLargeError(what, value)
+    return value
 
 
 class StaleQueryViewError(JMAPError):
@@ -145,17 +171,36 @@ def splice(
     # Splicing out shifts everything after it down, which a filtered rebuild
     # does in one pass. Ids we never cached are simply absent - the RFC's example
     # includes one such id.
-    result: SparseIds = [item for item in ids if item is None or item not in doomed]
+    survivors: SparseIds = [item for item in ids if item is None or item not in doomed]
 
-    for item in sorted(added, key=lambda entry: entry.index or 0):
-        index = item.index or 0
-        # A sparse cache may not reach this far yet; pad so the id lands at the
-        # index the server actually gave, rather than being appended.
+    # A single merge pass rather than insert() per added item: each insert
+    # shifts the whole tail, so a large delta into a large view was O(k*n) -
+    # roughly 10^9 element moves for 10k additions into a 100k view, with both
+    # numbers under server control. The indices are checked first because they
+    # size the result. (Out-of-spec duplicate indices land in delta order.)
+    additions = sorted(
+        (
+            (_checked_position(item.index or 0, what="an added item's index"), item.id)
+            for item in added
+        ),
+        key=lambda pair: pair[0],
+    )
+    result: SparseIds = []
+    consumed = 0
+    for index, added_id in additions:
+        take = index - len(result)
+        if take > 0:
+            result.extend(survivors[consumed : consumed + take])
+            consumed += take
         if index > len(result):
+            # The sparse cache does not reach this far yet; pad so the id lands
+            # at the index the server actually gave, not appended at the end.
             result.extend([None] * (index - len(result)))
-        result.insert(index, item.id)
+        result.append(added_id)
+    result.extend(survivors[consumed:])
 
     if total is not None:
+        _checked_position(total, what="total")
         if total < len(result):
             del result[total:]
         else:
@@ -188,8 +233,10 @@ class QueryView:
         view has to record them as unfetched rather than pretend the results start
         at zero.
         """
-        ids: SparseIds = [None] * response.position + list(response.ids)
+        position = _checked_position(response.position, what="position")
+        ids: SparseIds = [None] * position + list(response.ids)
         if response.total is not None and response.total > len(ids):
+            _checked_position(response.total, what="total")
             ids.extend([None] * (response.total - len(ids)))
         return cls(
             spec=spec,

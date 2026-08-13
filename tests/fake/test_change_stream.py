@@ -14,6 +14,7 @@ from jmap.capabilities.registry import Registry
 from jmap.client import JMAPClient
 from jmap.core.errors import MethodError
 from jmap.sync import ChangeStream, InMemoryStateStore, ResyncRequiredError
+from jmap.sync.changes import StuckChangeStreamError
 from jmap.testing import FakeJMAPServer
 
 WELL_KNOWN = "https://jmap.example.com/.well-known/jmap"
@@ -266,4 +267,18 @@ class TestResync:
             stream = ChangeStream(client, "Email")
             stream.seed("s0")
             with pytest.raises(MethodError, match="accountNotFound"):
+                stream.catch_up()
+
+
+class TestStuckStream:
+    def test_a_non_advancing_cursor_with_more_promised_is_refused(self):
+        # RFC 8620 §5.2 requires newState to move when hasMoreChanges is true.
+        # A server violating that used to loop pages() forever - and catch_up()
+        # accumulates every page, so the loop was unbounded memory too.
+        fake = server()
+        fake.respond("Email/changes", page(newState="s0", hasMoreChanges=True))
+        with connect(fake) as client:
+            stream = ChangeStream(client, "Email")
+            stream.seed("s0")
+            with pytest.raises(StuckChangeStreamError):
                 stream.catch_up()

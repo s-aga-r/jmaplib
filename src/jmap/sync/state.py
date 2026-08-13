@@ -17,6 +17,7 @@ account is removed and its rows should go with it.
 
 from __future__ import annotations
 
+import hashlib
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -35,10 +36,17 @@ def type_key(account_id: str, type_name: str) -> str:
 def query_key(spec: QuerySpec) -> str:
     """The key for one query's ``queryState``.
 
-    Includes a hash of the filter and sort, because a different filter is a
-    different result set and must not share a cursor.
+    Includes a digest of the filter and sort, because a different filter is a
+    different result set and must not share a cursor. The digest must be
+    *stable across processes* - a persisted cursor is the entire point of a
+    :class:`StateStore` - which rules out ``hash()``: string hashing is salted
+    per process, so every restart would compute a different key, orphan the
+    stored cursor, and silently degrade each run to a full re-query.
     """
-    digest = format(abs(hash((spec.filter_key, spec.sort_key, spec.collapse_threads))), "x")
+    material = "\x1f".join(
+        (spec.filter_key, spec.sort_key, "1" if spec.collapse_threads else "0")
+    )
+    digest = hashlib.sha256(material.encode()).hexdigest()[:16]
     return f"{spec.account_id}{SEPARATOR}{spec.type_name}{SEPARATOR}query{SEPARATOR}{digest}"
 
 

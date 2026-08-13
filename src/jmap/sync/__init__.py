@@ -14,12 +14,18 @@ and the application decides what to persist.
 
 from __future__ import annotations
 
-from jmap.sync.changes import ChangeSet, ChangeStream, ResyncRequiredError
+from jmap.sync.changes import (
+    ChangeSet,
+    ChangeStream,
+    ResyncRequiredError,
+    StuckChangeStreamError,
+)
 from jmap.sync.query import (
     QuerySpec,
     QueryView,
     StaleQueryViewError,
     UncacheableQueryError,
+    ViewTooLargeError,
     splice,
 )
 from jmap.sync.state import InMemoryStateStore, StateStore, query_key, type_key
@@ -33,7 +39,9 @@ __all__ = [
     "ResyncRequiredError",
     "StaleQueryViewError",
     "StateStore",
+    "StuckChangeStreamError",
     "UncacheableQueryError",
+    "ViewTooLargeError",
     "query_key",
     "splice",
     "type_key",

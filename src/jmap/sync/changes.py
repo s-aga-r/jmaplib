@@ -35,6 +35,24 @@ if TYPE_CHECKING:
 CANNOT_CALCULATE_CHANGES = "cannotCalculateChanges"
 
 
+class StuckChangeStreamError(JMAPError):
+    """The server claims more changes but its state cursor is not moving.
+
+    RFC 8620 §5.2 requires ``newState`` to differ from ``sinceState`` whenever
+    ``hasMoreChanges`` is true. A server violating that would loop
+    :meth:`ChangeStream.pages` forever - and :meth:`ChangeStream.catch_up`
+    accumulates every page, so the loop is also unbounded memory.
+    """
+
+    def __init__(self, type_name: str, state: str) -> None:
+        self.type_name = type_name
+        self.state = state
+        super().__init__(
+            f"{type_name}/changes reported hasMoreChanges without advancing from "
+            f"state {state!r}; following it would loop forever"
+        )
+
+
 class ResyncRequiredError(JMAPError):
     """The server cannot describe what changed since our state.
 
@@ -166,7 +184,12 @@ class ChangeStream:
             # Only reached when the consumer asks for another page, which is what
             # makes delivery at-least-once: abandoning the iterator here leaves
             # the cursor where it was, and this page arrives again next time.
-            since = response.new_state or since
+            advanced = response.new_state or since
+            if response.has_more_changes and advanced == since:
+                # §5.2 requires newState to move when hasMoreChanges is true;
+                # following a stuck cursor is an infinite request loop.
+                raise StuckChangeStreamError(self._type_name, since)
+            since = advanced
             self._store.set(self._key, since)
             if not response.has_more_changes:
                 return
