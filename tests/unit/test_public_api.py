@@ -66,8 +66,6 @@ CAPABILITY_URNS = {
     "urn:ietf:params:jmap:mdn",
     "https://www.fastmail.com/dev/contacts",
     "https://cyrusimap.org/ns/jmap/contacts",
-    # Stalwart's x:-prefixed management dialect, account-level only.
-    "urn:stalwart:jmap",
     # Experimental: excluded from the SemVer promise, but still pinned - a silent
     # disappearance would be as confusing as a silent rename.
     "urn:ietf:params:jmap:calendars",

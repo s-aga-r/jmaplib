@@ -34,7 +34,6 @@ from jmap.capabilities.push import VAPID, WEBSOCKET
 from jmap.capabilities.quota import QUOTA
 from jmap.capabilities.registry import Registry
 from jmap.capabilities.sieve import SIEVE
-from jmap.capabilities.stalwart import STALWART_MANAGEMENT
 
 
 def default_registry() -> Registry:
@@ -62,7 +61,6 @@ def default_registry() -> Registry:
         FASTMAIL_CONTACTS,
         CYRUS_CONTACTS,
         MDN_CAPABILITY,
-        STALWART_MANAGEMENT,
     ):
         registry.register(spec)
     return registry

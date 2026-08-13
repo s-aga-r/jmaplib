@@ -9,18 +9,6 @@ for exactly which revision of each spec this build implements.
 
 ### Added
 
-**Stalwart's management dialect, behind `urn:stalwart:jmap`.** The admin API is
-a JMAP dialect - v0.16 removed REST - with `x:`-prefixed method names and
-exactly three shapes per object: `get`, `set`, `query`. The URN is advertised
-at account level only, which the registry's union rule already handles; what
-was missing was a spec, without which every `x:` call failed locally as
-`UnsupportedMethodError`. The default registry now declares a verified subset
-of the server's ~150-object schema (directory, queue, logs, actions, reports,
-bootstrap), singletons like `x:Bootstrap` get no `/query` because the server's
-parser rejects it, and `jmap.capabilities.stalwart.management_spec` builds a
-spec over any other inventory so a Stalwart release that adds an object does
-not need a library release to manage it.
-
 **`ContactCard/parse`, behind `urn:ietf:params:jmap:contacts:parse`.** A Stalwart
 extension - the URN is IETF-spelled but no RFC defines it; RFC 9610 has no
 `/parse` at all. Reached through `batch.add("ContactCard/parse", {...})` like the
