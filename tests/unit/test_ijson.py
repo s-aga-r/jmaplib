@@ -541,9 +541,13 @@ class TestHostileDocuments:
 
     def test_deep_nesting_around_a_bad_scalar_stays_typed(self):
         # The locating re-walk is recursive and dies far shallower than the C
-        # parser; the typed (if unlocated) error must survive that.
+        # parser; the typed error must survive that. *Which* typed error
+        # depends on how deep this interpreter's parser can reach: 3.13+ gets
+        # to the scalar and reports IntegerRangeError, 3.12's parser exhausts
+        # recursion first and reports NestingLimitError. The contract under
+        # test is the family - an IJSONError, never a raw RecursionError.
         crafted = "[" * 20_000 + str(2**60) + "]" * 20_000
-        with pytest.raises(IntegerRangeError):
+        with pytest.raises(IJSONError):
             loads(crafted)
 
     def test_nan_and_infinity_literals_are_rejected(self):
