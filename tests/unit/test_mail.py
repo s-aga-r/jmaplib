@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
+from jmap.batch import Batch
 from jmap.capabilities.core import CORE, CORE_URN
 from jmap.capabilities.mail import (
     EMAIL_DEFAULT_PROPERTIES,
@@ -17,6 +20,7 @@ from jmap.capabilities.mail import (
     VACATION_URN,
 )
 from jmap.capabilities.registry import Registry
+from jmap.core.errors import CapabilityNotSupportedError
 from jmap.core.session import Session
 from jmap.defaults import default_registry
 from jmap.models.mail.objects import (
@@ -373,3 +377,55 @@ class TestSmimeVerify:
             CORE_URN,
             MAIL_URN,
         }
+
+    @staticmethod
+    def batch(*, smime: bool = True) -> Batch:
+        capabilities: dict[str, Any] = {CORE_URN: {}, MAIL_URN: {}}
+        if smime:
+            capabilities[SMIME_URN] = {}
+        session = Session.from_wire(
+            {
+                "capabilities": capabilities,
+                "accounts": {"a": {"name": "alice"}},
+                "primaryAccounts": {MAIL_URN: "a"},
+            }
+        )
+        return Batch(default_registry().resolve(session))
+
+    def test_an_smime_filter_condition_pulls_the_urn_into_using(self):
+        # RFC 9219 §4.2's conditions are how a query asks about S/MIME at all.
+        # Without the URN in `using` the server must behave as though it has
+        # never heard of them (RFC 8620 §1.8), so the batch has to find them.
+        batch = self.batch()
+        batch.add("Email/query", {"filter": {"hasSmime": True}})
+        assert SMIME_URN in batch.using()
+
+    def test_a_condition_under_an_operator_counts_too(self):
+        batch = self.batch()
+        nested = {"operator": "NOT", "conditions": [{"hasVerifiedSmime": True}]}
+        batch.add(
+            "Email/query",
+            {"filter": {"operator": "AND", "conditions": [{"inMailbox": "m1"}, nested]}},
+        )
+        assert SMIME_URN in batch.using()
+
+    def test_a_snippet_filter_is_an_email_filter(self):
+        batch = self.batch()
+        batch.add("SearchSnippet/get", {"emailIds": ["m1"], "filter": {"hasSmime": True}})
+        assert SMIME_URN in batch.using()
+
+    def test_an_smime_filter_against_a_server_without_it_is_refused_locally(self):
+        batch = self.batch(smime=False)
+        batch.add("Email/query", {"filter": {"hasSmime": True}})
+        with pytest.raises(CapabilityNotSupportedError, match="smimeverify"):
+            batch.using()
+
+    def test_ordinary_and_odd_shaped_filters_and_sorts_leave_it_out(self):
+        batch = self.batch()
+        batch.add(
+            "Email/query",
+            {"filter": {"inMailbox": "m1"}, "sort": [{"property": "receivedAt"}, "x", {}]},
+        )
+        batch.add("Email/query", {"filter": {"operator": "OR", "conditions": [5, "x"]}})
+        batch.add("Email/query", {"filter": {"operator": "AND", "conditions": "nope"}})
+        assert batch.using() == {CORE_URN, MAIL_URN}

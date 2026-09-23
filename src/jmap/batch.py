@@ -30,7 +30,7 @@ from jmap.capabilities.spec import MethodKind
 from jmap.chunking import ChunkedHandle, chunk_get_call
 from jmap.core.errors import CapabilityFieldError, JMAPError
 from jmap.core.invocation import Handle, MethodCall
-from jmap.core.narrow import as_list, is_list, is_object
+from jmap.core.narrow import as_list, as_object, is_list, is_object
 from jmap.core.request import plan_requests
 from jmap.core.response import dispatch
 
@@ -78,8 +78,10 @@ class Batch:
         "_counter",
         "_created_ids",
         "_default_account",
+        "_filter_fields",
         "_handles",
         "_properties",
+        "_sort_options",
         "_type_names",
     )
 
@@ -95,6 +97,11 @@ class Batch:
         self._handles: list[Handle[Any]] = []
         #: (type, property) pairs seen so far, for `using` derivation.
         self._properties: list[tuple[str, str]] = []
+        #: (type, name) pairs for every FilterCondition property and sort
+        #: comparator named so far. A capability can add these without adding a
+        #: method - RFC 9219's `hasSmime` is one - so they feed `using` too.
+        self._filter_fields: list[tuple[str, str]] = []
+        self._sort_options: list[tuple[str, str]] = []
         #: Data type names named as *arguments*, which pull their owning
         #: capabilities into `using` too - see ``MethodSpec.type_names_argument``.
         self._type_names: list[str] = []
@@ -170,6 +177,18 @@ class Batch:
             if is_list(type_names):
                 for type_name in as_list(type_names):
                     self._type_names.append(str(type_name))
+        conditions = args.get("filter")
+        if is_object(conditions):
+            filter_type = spec.filter_type or spec.type_name
+            self._filter_fields.extend(
+                (filter_type, name) for name in _condition_names(as_object(conditions))
+            )
+        sort = args.get("sort")
+        if is_list(sort):
+            for comparator in as_list(sort):
+                named = as_object(comparator).get("property") if is_object(comparator) else None
+                if isinstance(named, str):
+                    self._sort_options.append((spec.type_name, named))
 
         self._counter += 1
         call_id = f"c{self._counter}"
@@ -271,6 +290,8 @@ class Batch:
         return self._capabilities.using_for(
             [handle.call.name for handle in self._handles],
             properties=self._properties,
+            filter_fields=self._filter_fields,
+            sort_options=self._sort_options,
             type_names=self._type_names,
             extra=extra,
         )
@@ -335,6 +356,27 @@ class Batch:
 
     def __repr__(self) -> str:
         return f"Batch({[handle.call.name for handle in self._handles]})"
+
+
+def _condition_names(filter_: dict[str, Any]) -> list[str]:
+    """Every FilterCondition property named anywhere in a filter tree (RFC 8620 §5.5).
+
+    A FilterOperator nests further filters under ``conditions``; anything else is
+    a FilterCondition, whose keys are the names a capability may have added.
+    Walked with a stack rather than recursion: the tree is caller-built and
+    nothing bounds its depth.
+    """
+    names: list[str] = []
+    pending = [filter_]
+    while pending:
+        node = pending.pop()
+        if "operator" in node:
+            nested = node.get("conditions")
+            if is_list(nested):
+                pending.extend(as_object(item) for item in as_list(nested) if is_object(item))
+        else:
+            names.extend(node)
+    return names
 
 
 def is_mutating(batch: Batch, capabilities: ActiveCapabilities) -> bool:

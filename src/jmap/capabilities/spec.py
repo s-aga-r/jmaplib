@@ -103,6 +103,10 @@ class MethodSpec:
     #: requested type to be in the request, and answers ``unknownDataType``
     #: otherwise - a failure with no hint that ``using`` was the problem.
     type_names_argument: str | None = None
+    #: The data type whose FilterConditions this method's ``filter`` argument
+    #: holds, when it is not the method's own: ``SearchSnippet/get`` filters
+    #: Emails. The conditions named there can pull a capability into ``using``.
+    filter_type: str | None = None
 
     @property
     def type_name(self) -> str:

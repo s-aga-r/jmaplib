@@ -196,6 +196,7 @@ MAIL: Final = CapabilitySpec(
         MethodSpec(
             "SearchSnippet/get",
             MethodKind.CUSTOM,
+            filter_type="Email",
             extra_args={
                 "emailIds": "the emails to snippet",
                 "filter": "the query whose matches should be highlighted",
