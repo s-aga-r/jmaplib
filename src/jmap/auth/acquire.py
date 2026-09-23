@@ -437,13 +437,23 @@ class OAuthClient:
         rather than for one poll - which is the whole difference between backing
         off and being rate-limited.
         """
-        endpoint = self.metadata.require("token_endpoint")
+        # The device code redeems the grant once the user approves it, so the poll
+        # gets exactly the protection the other token requests do: https only,
+        # and no redirect that would re-post the code to wherever it points.
+        endpoint = _require_https(
+            self.metadata.require("token_endpoint"), purpose="the token endpoint"
+        )
         interval = authorization.interval
         if deadline is None and authorization.expires_in is not None:
             deadline = time.monotonic() + authorization.expires_in
         body = device_token_body(device_code=authorization.device_code, client_id=self.client_id)
         while True:
-            response = self._http.post(endpoint, data=body, headers={"Accept": "application/json"})
+            response = self._http.post(
+                endpoint,
+                follow_redirects=False,
+                data=body,
+                headers={"Accept": "application/json"},
+            )
             result = classify_poll(
                 response.status_code, _json_body(response, strict=False), interval=interval
             )

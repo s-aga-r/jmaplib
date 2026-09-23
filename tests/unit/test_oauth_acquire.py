@@ -617,6 +617,34 @@ class TestTokenEndpointHardening:
             client.refresh("old")
         assert [request.url.path for request in router.requests] == ["/token"]
 
+    def test_the_device_poll_gets_the_same_protection(self):
+        # The poll posts the device_code, which redeems the grant the moment the
+        # user approves it: the same kind of secret, in the same kind of body,
+        # that the other token requests refuse to send in cleartext or re-post
+        # to wherever a redirect points.
+        authorization = DeviceAuthorization(
+            device_code="dc", user_code="u", verification_uri="v", interval=0
+        )
+        router = Router()
+        with (
+            OAuthClient(
+                metadata(token_endpoint="http://auth.example.com/token"),
+                client_id="c",
+                http=router.client(),
+            ) as client,
+            pytest.raises(DiscoveryError, match="token endpoint must be https"),
+        ):
+            client.poll_device_flow(authorization)
+        assert router.requests == []
+        router = Router()
+        router.add(
+            "/token",
+            httpx.Response(307, headers={"Location": "https://elsewhere.example/collect"}),
+        )
+        with oauth(router) as client, pytest.raises(OAuthError):
+            client.poll_device_flow(authorization)
+        assert [request.url.path for request in router.requests] == ["/token"]
+
     def test_token_deadlines_are_wall_clock(self):
         # TokenStore persists expires_at; a monotonic deadline is meaningless in
         # any other process.
