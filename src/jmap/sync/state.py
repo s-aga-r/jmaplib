@@ -43,9 +43,7 @@ def query_key(spec: QuerySpec) -> str:
     per process, so every restart would compute a different key, orphan the
     stored cursor, and silently degrade each run to a full re-query.
     """
-    material = "\x1f".join(
-        (spec.filter_key, spec.sort_key, "1" if spec.collapse_threads else "0")
-    )
+    material = "\x1f".join((spec.filter_key, spec.sort_key, "1" if spec.collapse_threads else "0"))
     digest = hashlib.sha256(material.encode()).hexdigest()[:16]
     return f"{spec.account_id}{SEPARATOR}{spec.type_name}{SEPARATOR}query{SEPARATOR}{digest}"
 

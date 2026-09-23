@@ -107,6 +107,7 @@ def _printable(text: str) -> str:
     """
     return _CONTROL_CHARS.sub("�", text)
 
+
 #: How long to wait for the browser to come back before giving up.
 DEFAULT_REDIRECT_TIMEOUT: Final = 300.0
 

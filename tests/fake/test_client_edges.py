@@ -573,6 +573,21 @@ class TestAsyncTransportFailures:
         assert calls["n"] == 1
 
     @pytest.mark.asyncio
+    async def test_an_interrupted_unguarded_mutation_is_not_retried(self):
+        # A connection that died after the request went out is the same silence
+        # as a timeout: the server may have applied the set.
+        calls = {"n": 0}
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.RemoteProtocolError("server hung up mid-exchange")
+
+        async with await self._connect(handler) as client:
+            with pytest.raises(TransportError, match="hung up"):
+                await client.call("Email/set", {"create": {"d": {}}})
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
     async def test_a_connect_error_is_retried_then_surfaced(self):
         calls = {"n": 0}
 

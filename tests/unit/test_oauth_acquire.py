@@ -587,9 +587,7 @@ class TestTokenEndpointHardening:
         import time
 
         router = Router()
-        router.add(
-            "/token", httpx.Response(200, json={"access_token": "t", "expires_in": 3600})
-        )
+        router.add("/token", httpx.Response(200, json={"access_token": "t", "expires_in": 3600}))
         with oauth(router) as client:
             token = client.refresh("old")
         assert token.expires_at is not None

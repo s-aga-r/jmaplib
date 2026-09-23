@@ -388,6 +388,17 @@ class TestPendingVerification:
         pending.record(PushVerification(verificationCode="orphan"))
         assert len(pending) == 0
 
+    def test_the_oldest_unclaimed_code_is_evicted_at_the_cap(self):
+        # Whatever feeds record() may be reachable by a sender who can mint
+        # subscription ids, so the codes are bounded - and the one that has
+        # waited longest belongs to a create that is not coming back for it.
+        pending = PendingVerification()
+        for index in range(PendingVerification.MAX_PENDING + 1):
+            pending.record(PushVerification(pushSubscriptionId=f"p{index}", verificationCode="c"))
+        assert len(pending) == PendingVerification.MAX_PENDING
+        assert "p0" not in pending
+        assert f"p{PendingVerification.MAX_PENDING}" in pending
+
 
 class TestWebSocketCapability:
     def test_the_rfc_example_parses(self):

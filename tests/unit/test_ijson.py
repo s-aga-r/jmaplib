@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
@@ -531,13 +532,36 @@ class TestLocalDate:
 
 
 class TestHostileDocuments:
-    def test_deep_nesting_is_a_value_error_not_a_recursion_error(self):
-        # A 100k-deep array is a crafted document; it must fail as the
-        # documented ValueError, not escape as RecursionError past every
-        # `except ValueError` wrapped around a parse.
+    def test_deep_nesting_is_never_a_raw_recursion_error(self):
+        # A 100k-deep array is a crafted document. Whether this interpreter can
+        # descend it at all is not portable - 3.13 gives up, 3.14.7 parses it -
+        # so both outcomes pass. What must never happen is RecursionError
+        # escaping past every `except ValueError` wrapped around a parse.
         crafted = "[" * 100_000 + "]" * 100_000
-        with pytest.raises(NestingLimitError):
+        with contextlib.suppress(NestingLimitError):
             loads(crafted)
+
+    def test_a_recursion_error_inside_the_parse_is_typed(self, monkeypatch):
+        # The real trigger is a document deeper than the parser can descend, and
+        # that depth varies by interpreter, so the overflow is raised from inside
+        # the parse instead: the translation is then pinned on every version
+        # rather than only on the ones that happen to overflow.
+        def overflow(_pairs: object) -> object:
+            raise RecursionError
+
+        monkeypatch.setattr(ijson_module, "_reject_duplicates", overflow)
+        with pytest.raises(NestingLimitError):
+            loads('{"a": 1}')
+
+    def test_a_recursion_error_in_the_surrogate_walk_is_typed(self, monkeypatch):
+        # A document that may hold an unpaired surrogate is walked after the
+        # parse, and that walk recurses where the C parser may not have.
+        def overflow(*_args: object) -> None:
+            raise RecursionError
+
+        monkeypatch.setattr(ijson_module, "_check_tree", overflow)
+        with pytest.raises(NestingLimitError):
+            loads('["\\ud800"]')
 
     def test_deep_nesting_around_a_bad_scalar_stays_typed(self):
         # The locating re-walk is recursive and dies far shallower than the C
@@ -568,11 +592,20 @@ class TestHostileDocuments:
         with pytest.raises(IntegerRangeError):
             loads('{"x": ' + "9" * 5000 + "}")
 
-    def test_dumping_a_self_deep_structure_is_a_value_error(self):
+    def test_dumping_a_self_deep_structure_is_never_a_raw_recursion_error(self):
+        # As for parsing: 3.14.7 serialises this, earlier versions overflow.
         nested: list[Any] = []
         tip = nested
         for _ in range(100_000):
             tip.append([])
             tip = tip[0]
-        with pytest.raises(NestingLimitError):
+        with contextlib.suppress(NestingLimitError):
             dumps(nested)
+
+    def test_a_recursion_error_while_dumping_is_typed(self, monkeypatch):
+        def overflow(*_args: object) -> None:
+            raise RecursionError
+
+        monkeypatch.setattr(ijson_module, "_check_tree", overflow)
+        with pytest.raises(NestingLimitError):
+            dumps(["\ud800"])

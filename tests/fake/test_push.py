@@ -7,7 +7,7 @@ URL template expansion, the streaming read, incremental parsing, and the
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -36,10 +36,20 @@ from jmap.push import (
     new_subscription,
     verification_update,
 )
-from jmap.push.listener import DEFAULT_RECONNECT_SECONDS, MIN_RECONNECT_SECONDS
+from jmap.push.listener import (
+    DEFAULT_RECONNECT_SECONDS,
+    ERROR_BODY_LIMIT,
+    MIN_RECONNECT_SECONDS,
+)
 from jmap.testing import FakeJMAPServer
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+
 WELL_KNOWN = "https://jmap.example.com/.well-known/jmap"
+
+#: One read of an error body in the tests below that stream one without end.
+ERROR_CHUNK = 16 * 1024
 
 
 def registry() -> Registry:
@@ -230,6 +240,29 @@ class TestFailures:
             fake.intercept = broken
             with pytest.raises(TransportError, match="no route"):
                 list(EventSourceClient(client).events())
+
+    def test_an_endless_error_body_is_not_read_to_the_end(self):
+        # Only a hostile server answers the event source with an error and then
+        # keeps streaming; the problem parser needs a fraction of the limit, and
+        # reading on would be an allocation the size the server chose.
+        fake = server()
+        pulled = {"chunks": 0}
+
+        def endless() -> Iterator[bytes]:
+            while True:
+                pulled["chunks"] += 1
+                yield b"x" * ERROR_CHUNK
+
+        def refused(request: httpx.Request) -> httpx.Response | None:
+            if "/jmap/eventsource/" in request.url.path:
+                return httpx.Response(500, content=endless())
+            return None
+
+        with connect(fake) as client:
+            fake.intercept = refused
+            with pytest.raises(RequestError):
+                list(EventSourceClient(client).events())
+        assert pulled["chunks"] <= ERROR_BODY_LIMIT // ERROR_CHUNK + 1
 
 
 class TestSubscriptionLifecycle:
@@ -450,6 +483,27 @@ class TestAsyncEventSource:
             with pytest.raises(RequestError):
                 [event async for event in AsyncEventSourceClient(client).events()]
 
+    @pytest.mark.asyncio
+    async def test_an_endless_error_body_is_not_read_to_the_end(self):
+        fake = server()
+        pulled = {"chunks": 0}
+
+        async def endless() -> AsyncIterator[bytes]:
+            while True:
+                pulled["chunks"] += 1
+                yield b"x" * ERROR_CHUNK
+
+        def refused(request: httpx.Request) -> httpx.Response | None:
+            if "/jmap/eventsource/" in request.url.path:
+                return httpx.Response(500, content=endless())
+            return None
+
+        async with await self.aconnect(fake) as client:
+            fake.intercept = refused
+            with pytest.raises(RequestError):
+                [event async for event in AsyncEventSourceClient(client).events()]
+        assert pulled["chunks"] <= ERROR_BODY_LIMIT // ERROR_CHUNK + 1
+
 
 class TestReconnectLoop:
     """``listen()`` is the loop most callers actually want.
@@ -549,6 +603,32 @@ class TestListenReconnects:
             stream = EventSourceClient(client).listen()
             event = next(stream)
             stream.close()
+        assert isinstance(event, StateChange)
+        assert naps, "the redial should have waited out the reconnect delay"
+
+    @pytest.mark.asyncio
+    async def test_the_async_loop_redials_after_a_drop_too(self, monkeypatch):
+        fake = server()
+        fake.push("a", {"Email": "e1"}, event_id="1")
+        drops = {"remaining": 1}
+
+        def flaky(request: httpx.Request) -> httpx.Response | None:
+            if "/jmap/eventsource/" in request.url.path and drops["remaining"]:
+                drops["remaining"] -= 1
+                raise httpx.ReadError("connection reset mid-stream")
+            return None
+
+        naps: list[float] = []
+
+        async def nap(seconds: float) -> None:
+            naps.append(seconds)
+
+        monkeypatch.setattr("jmap.push.listener.anyio.sleep", nap)
+        async with await TestAsyncEventSource().aconnect(fake) as client:
+            fake.intercept = flaky
+            stream = AsyncEventSourceClient(client).listen()
+            event = await anext(stream)
+            await stream.aclose()
         assert isinstance(event, StateChange)
         assert naps, "the redial should have waited out the reconnect delay"
 

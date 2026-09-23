@@ -124,9 +124,7 @@ class TestEndpointDowngradeRefusal:
         assert session.api_url == "http://mail.internal:8080/jmap/"
 
     def test_loopback_is_always_allowed(self):
-        session = Session.from_wire(
-            {"apiUrl": "http://127.0.0.1:8080/jmap/"}, base_url=self.BASE
-        )
+        session = Session.from_wire({"apiUrl": "http://127.0.0.1:8080/jmap/"}, base_url=self.BASE)
         assert session.api_url == "http://127.0.0.1:8080/jmap/"
 
     def test_a_foreign_scheme_is_refused_outright(self):
