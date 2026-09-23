@@ -114,6 +114,9 @@ class JMAPClient:
     #: not refetched automatically - that would turn one stale read into a
     #: surprise round trip in the middle of someone's batch.
     session_stale: bool
+    #: Whether draft-tracking capabilities were opted into. Kept so that
+    #: :meth:`refresh_session` resolves the same way :meth:`connect` did.
+    experimental: bool
 
     def __init__(
         self,
@@ -126,6 +129,7 @@ class JMAPClient:
         default_account: Id | None = None,
         owns_http: bool = False,
         session_url: str = "",
+        experimental: bool = False,
     ) -> None:
         self.session = session
         self.session_url = session_url or session.api_url
@@ -136,6 +140,7 @@ class JMAPClient:
         self._http = http
         self._owns_http = owns_http
         self.session_stale = False
+        self.experimental = experimental
 
     # -- construction ------------------------------------------------------- #
     @classmethod
@@ -177,6 +182,7 @@ class JMAPClient:
             default_account=account,
             owns_http=owns_http,
             session_url=url,
+            experimental=experimental,
         )
 
     @classmethod
@@ -218,10 +224,13 @@ class JMAPClient:
 
         Called by the application when :attr:`session_stale` is set. A server may
         gain or lose a capability at any time, so the resolution is redone rather
-        than patched.
+        than patched - with the same ``experimental`` opt-in :meth:`connect` had,
+        or the draft-tracking capabilities would vanish on the first refresh.
         """
         self.session = _fetch_session(self._http, self.session_url, auth=None)
-        self.capabilities = self.registry.resolve(self.session, self.default_account)
+        self.capabilities = self.registry.resolve(
+            self.session, self.default_account, experimental=self.experimental
+        )
         self.session_stale = False
 
     @property

@@ -55,6 +55,23 @@ def registry() -> Registry:
     return reg
 
 
+#: A draft-tracking capability, for the experimental opt-in.
+DRAFT_URN = "urn:example:draft"
+DRAFT = CapabilitySpec(
+    urn=DRAFT_URN,
+    attr="draft",
+    experimental=True,
+    data_types=(DataTypeSpec(name="Draft"),),
+    methods=(MethodSpec(name="Draft/get", kind=MethodKind.GET),),
+)
+
+
+def draft_registry() -> Registry:
+    reg = registry()
+    reg.register(DRAFT)
+    return reg
+
+
 def capabilities(**session_overrides: Any) -> ActiveCapabilities:
     document: dict[str, Any] = {
         "capabilities": {
@@ -220,6 +237,15 @@ class TestClientLifecycle:
             client.refresh_session()
             assert not client.capabilities.supports("Email/get")
             assert not client.session_stale
+
+    def test_refresh_session_keeps_the_experimental_opt_in(self):
+        # Re-resolving without it quietly moved every draft-tracking capability
+        # into unknown_urns, so `client.calendars` vanished after a refresh.
+        fake = server(capabilities={CORE_URN: {}, MAIL_URN: {}, DRAFT_URN: {}})
+        with connect(fake, registry=draft_registry(), experimental=True) as client:
+            assert client.capabilities.supports("Draft/get")
+            client.refresh_session()
+            assert client.capabilities.supports("Draft/get")
 
     def test_a_guarded_mutation_is_retried_after_a_5xx(self):
         # ifInState makes the retry safe: a second landing fails stateMismatch.
@@ -453,6 +479,20 @@ class TestAsyncEdges:
             fake.capabilities.pop(MAIL_URN)
             await client.refresh_session()
             assert not client.capabilities.supports("Email/get")
+
+    @pytest.mark.asyncio
+    async def test_refresh_session_keeps_the_experimental_opt_in(self):
+        fake = server(capabilities={CORE_URN: {}, MAIL_URN: {}, DRAFT_URN: {}})
+        http = httpx.AsyncClient(**fake.client_kwargs())
+        async with await AsyncJMAPClient.connect(
+            WELL_KNOWN,
+            auth=BasicAuth("u", "p"),
+            http=http,
+            registry=draft_registry(),
+            experimental=True,
+        ) as client:
+            await client.refresh_session()
+            assert client.capabilities.supports("Draft/get")
 
     @pytest.mark.asyncio
     async def test_a_connection_failure_becomes_a_transport_error(self):

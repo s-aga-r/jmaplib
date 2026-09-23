@@ -108,6 +108,9 @@ class AsyncJMAPClient:
     #: not refetched automatically - that would turn one stale read into a
     #: surprise round trip in the middle of someone's batch.
     session_stale: bool
+    #: Whether draft-tracking capabilities were opted into. Kept so that
+    #: :meth:`refresh_session` resolves the same way :meth:`connect` did.
+    experimental: bool
 
     def __init__(
         self,
@@ -120,6 +123,7 @@ class AsyncJMAPClient:
         default_account: Id | None = None,
         owns_http: bool = False,
         session_url: str = "",
+        experimental: bool = False,
     ) -> None:
         self.session = session
         self.session_url = session_url or session.api_url
@@ -130,6 +134,7 @@ class AsyncJMAPClient:
         self._http = http
         self._owns_http = owns_http
         self.session_stale = False
+        self.experimental = experimental
 
     # -- construction ------------------------------------------------------- #
     @classmethod
@@ -167,12 +172,16 @@ class AsyncJMAPClient:
             default_account=account,
             owns_http=owns_http,
             session_url=url,
+            experimental=experimental,
         )
 
     async def refresh_session(self) -> None:
-        """Refetch the session and re-resolve capabilities."""
+        """Refetch the session and re-resolve capabilities, with the same
+        ``experimental`` opt-in :meth:`connect` had."""
         self.session = await _fetch_session(self._http, self.session_url, auth=None)
-        self.capabilities = self.registry.resolve(self.session, self.default_account)
+        self.capabilities = self.registry.resolve(
+            self.session, self.default_account, experimental=self.experimental
+        )
         self.session_stale = False
 
     @property
