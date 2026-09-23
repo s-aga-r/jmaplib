@@ -25,6 +25,11 @@ JMAP ping rule work: RFC 8620 §7.3 says a ping MUST NOT set a new event id, so
 pings leave the resumption cursor exactly where the last real event left it. A
 client that instead tracked "the last thing I received" would resume from a ping
 and lose every change that arrived before it.
+
+**And it takes effect when its event is dispatched.** An ``id:`` line is held
+until the blank line that completes its event, as WHATWG's parser holds it: a
+connection that drops mid-event never delivered that event, and resuming past it
+would ask the server for everything *after* something the client never saw.
 """
 
 from __future__ import annotations
@@ -100,7 +105,7 @@ class SSEParser:
     """
 
     #: Survives across events (see the module docstring), and is what a reconnect
-    #: sends back as ``Last-Event-ID``.
+    #: sends back as ``Last-Event-ID``. Moves only when an event is dispatched.
     last_event_id: str = ""
     #: The server's requested reconnection delay, in milliseconds.
     retry: int | None = None
@@ -112,6 +117,14 @@ class SSEParser:
     _pending_cr: bool = False
     _at_stream_start: bool = True
     _decoder: codecs.IncrementalDecoder = field(default_factory=_new_decoder)
+    #: The id the event being assembled carries, adopted as :attr:`last_event_id`
+    #: once it is dispatched. Starts from the cursor the stream was opened with,
+    #: so an event without an id - a ping, first thing after a reconnect - keeps
+    #: that cursor rather than clearing it.
+    _id_buffer: str = field(init=False, default="")
+
+    def __post_init__(self) -> None:
+        self._id_buffer = self.last_event_id
 
     def feed(self, chunk: str) -> Iterator[ServerSentEvent]:
         """Consume a chunk of the stream, yielding whatever events complete."""
@@ -181,7 +194,7 @@ class SSEParser:
             # bare `data` lines grow this list at a tally of zero.
             self._data_chars += len(value) + 1
         elif name == "id" and _NUL not in value:
-            self._last_id_is(value)
+            self._id_buffer = value
         elif name == "retry" and _is_ascii_digits(value):
             # isascii() matters: '²'.isdigit() is true but int('²') raises, and
             # a Unicode digit crashing the parser kills the whole listener.
@@ -189,11 +202,11 @@ class SSEParser:
         # Any other field name is ignored, per the spec - which is what lets the
         # format be extended without breaking existing parsers.
 
-    def _last_id_is(self, value: str) -> None:
-        self.last_event_id = value
-
     def _dispatch(self) -> ServerSentEvent | None:
         """Finish the current event, if there is one."""
+        # First, and whether or not there is data: a blank line after a bare id
+        # is how a stream moves the cursor without delivering anything.
+        self.last_event_id = self._id_buffer
         if not self._data:
             # No data means nothing is delivered, but any id: line has already
             # moved the cursor - which is how a stream sends a bare checkpoint.

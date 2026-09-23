@@ -167,6 +167,18 @@ class TestResumption:
             assert source.last_event_id == ""
         assert len(events) == 1
 
+    def test_a_drop_mid_event_resumes_from_the_last_complete_one(self):
+        # Event 5's id line arrived, its blank line did not. It was never
+        # delivered, so the reconnect must ask for everything after 4.
+        fake = server()
+        fake.push("a", {"Email": "e4"}, event_id="4")
+        fake.push_events.append('id: 5\nevent: state\ndata: {"@type": "StateChange"}\n')
+        with connect(fake) as client:
+            source = EventSourceClient(client)
+            list(source.events())
+            list(source.events())
+        assert fake.event_source_requests[1]["last-event-id"] == "4"
+
     def test_the_cursor_survives_a_connection_that_yielded_nothing(self):
         fake = server()
         fake.push("a", {"Email": "e1"}, event_id="9")

@@ -122,6 +122,28 @@ class TestTheCursor:
         list(parser.feed("id\ndata: b\n\n"))
         assert parser.last_event_id == ""
 
+    def test_the_cursor_moves_only_when_its_event_is_dispatched(self):
+        # An id line belongs to the event it sits in, and until the blank line
+        # arrives that event has not been delivered. Moving the cursor at the id
+        # line meant a connection dropping mid-event resumed *after* an event
+        # nobody received - and a server replaying from Last-Event-ID never
+        # sent it again. WHATWG's parser moves it at dispatch, too.
+        parser = SSEParser()
+        list(parser.feed("id: 4\nevent: state\ndata: {}\n\n"))
+        list(parser.feed("id: 5\nevent: state\ndata: {}\n"))
+        assert parser.last_event_id == "4"
+        [event] = parser.feed("\n")
+        assert event.last_event_id == "5"
+        assert parser.last_event_id == "5"
+
+    def test_a_resumed_stream_keeps_its_cursor_through_an_event_without_an_id(self):
+        # A new connection starts from the cursor it was opened with, so its
+        # first ping - which never carries an id - cannot wipe it.
+        parser = SSEParser(last_event_id="7")
+        [event] = parser.feed("event: ping\ndata: {}\n\n")
+        assert event.last_event_id == "7"
+        assert parser.last_event_id == "7"
+
 
 class TestRetry:
     def test_a_numeric_retry_is_recorded(self):
