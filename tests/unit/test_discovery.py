@@ -140,10 +140,10 @@ class TestLookup:
 
 class TestCandidates:
     def test_srv_targets_come_before_the_fallback(self):
-        resolver = FakeResolver([FakeRecord("jmap.example.net.", 443, 0, 0)])
+        resolver = FakeResolver([FakeRecord("jmap.example.com.", 443, 0, 0)])
         urls = candidate_urls("alice@example.com", resolver=resolver)
         assert urls == [
-            f"https://jmap.example.net{WELL_KNOWN_PATH}",
+            f"https://jmap.example.com{WELL_KNOWN_PATH}",
             f"https://example.com{WELL_KNOWN_PATH}",
         ]
 
@@ -184,6 +184,66 @@ class TestCandidates:
         monkeypatch.setattr("jmap.discovery._default_resolver", unavailable)
         with pytest.raises(DiscoveryUnavailableError, match="jmaplib\\[discovery\\]"):
             lookup_srv("example.com")
+
+
+class TestTargetsOutsideTheDomain:
+    """RFC 6186 §6: ask before connecting to an SRV target outside the domain.
+
+    Without DNSSEC the answer is attacker-influenced, and TLS authenticates the
+    host it names - not the domain that was asked about - so an unchecked record
+    decides who receives the credentials.
+    """
+
+    def test_one_is_not_tried_unconfirmed(self):
+        resolver = FakeResolver([FakeRecord("mail.attacker.example.", 443, 0, 0)])
+        assert candidate_urls("alice@example.com", resolver=resolver) == [
+            f"https://example.com{WELL_KNOWN_PATH}"
+        ]
+
+    def test_a_confirmed_one_is_tried_in_its_place(self):
+        asked: list[SRVTarget] = []
+
+        def confirm(target: SRVTarget) -> bool:
+            asked.append(target)
+            return True
+
+        resolver = FakeResolver(
+            [
+                FakeRecord("api.provider.example.", 443, 0, 0),
+                FakeRecord("jmap.example.org.", 443, 1, 0),
+            ]
+        )
+        urls = candidate_urls("alice@example.org", resolver=resolver, confirm_srv_target=confirm)
+        assert urls == [
+            f"https://api.provider.example{WELL_KNOWN_PATH}",
+            f"https://jmap.example.org{WELL_KNOWN_PATH}",
+            f"https://example.org{WELL_KNOWN_PATH}",
+        ]
+        # Only the one outside the domain needed asking about.
+        assert asked == [SRVTarget(host="api.provider.example")]
+
+    def test_a_declined_one_is_not_tried(self):
+        resolver = FakeResolver([FakeRecord("api.provider.example.", 443, 0, 0)])
+        urls = candidate_urls(
+            "alice@example.org", resolver=resolver, confirm_srv_target=lambda _target: False
+        )
+        assert urls == [f"https://example.org{WELL_KNOWN_PATH}"]
+
+    def test_a_name_that_merely_ends_the_same_is_outside(self):
+        resolver = FakeResolver([FakeRecord("jmap.notexample.com.", 443, 0, 0)])
+        assert candidate_urls("alice@example.com", resolver=resolver) == [
+            f"https://example.com{WELL_KNOWN_PATH}"
+        ]
+
+    def test_case_is_not_a_different_domain(self):
+        resolver = FakeResolver([FakeRecord("JMAP.Example.COM.", 443, 0, 0)])
+        urls = candidate_urls("alice@example.com", resolver=resolver)
+        assert urls[0] == f"https://JMAP.Example.COM{WELL_KNOWN_PATH}"
+
+    def test_the_domain_itself_is_inside(self):
+        resolver = FakeResolver([FakeRecord("example.com.", 8443, 0, 0)])
+        urls = candidate_urls("alice@example.com", resolver=resolver)
+        assert urls[0] == f"https://example.com:8443{WELL_KNOWN_PATH}"
 
 
 class TestDefaultResolver:

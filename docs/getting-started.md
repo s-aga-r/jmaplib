@@ -86,11 +86,26 @@ The full set of `connect` options:
 | `timeout` | Seconds, default 30. Ignored when you pass your own `http`. |
 
 If you have an email address rather than a URL, `discover` will find the server
-from it - `/.well-known/jmap` on the domain first, then a `_jmap._tcp` SRV
-lookup, which needs `jmaplib[discovery]`:
+from it - a `_jmap._tcp` SRV lookup first, which needs `jmaplib[discovery]`, then
+`/.well-known/jmap` on the domain:
 
 ```python
 client = JMAPClient.discover("alice@example.com", auth=auth)
+```
+
+An SRV record naming a host outside the address's domain is not tried unless
+`confirm_srv_target` accepts it. Without DNSSEC the answer can be forged, and the
+host it names would receive your credentials, so RFC 6186 §6 has the client ask
+the user first. A custom domain at a hosted provider is the usual case; when
+nothing else answers, `UnconfirmedSRVTargetError` names the host, ready to ask
+about:
+
+```python
+client = JMAPClient.discover(
+    "alice@example.org",
+    auth=auth,
+    confirm_srv_target=lambda target: ask_user(f"Is {target.host} your mail server?"),
+)
 ```
 
 ## Your first request

@@ -322,7 +322,9 @@ client = JMAPClient.discover("alice@example.com", auth=BearerAuth(token.access_t
 
 `JMAPClient.discover` tries `_jmap._tcp` SRV records before
 `https://<domain>/.well-known/jmap`, because the well-known guess alone is not
-enough — Fastmail answers 404 there.
+enough — Fastmail answers 404 there. A record naming a host outside the address's
+domain is tried only once `confirm_srv_target` accepts it: without DNSSEC the
+answer can be forged, and whoever it names receives the credentials (RFC 6186 §6).
 
 Two things in the OAuth path are security properties rather than conveniences,
 and both are the kind that work fine against a cooperative server:

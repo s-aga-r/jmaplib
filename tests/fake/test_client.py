@@ -7,6 +7,7 @@ drifted.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -27,6 +28,7 @@ from jmap.core.errors import (
 )
 from jmap.core.ids import Id
 from jmap.core.retry import RetryPolicy
+from jmap.discovery import SRVTarget, UnconfirmedSRVTargetError
 from jmap.testing import FakeJMAPServer, ServerQuirks
 
 WELL_KNOWN = "https://jmap.example.com/.well-known/jmap"
@@ -441,3 +443,54 @@ class TestAddressDiscovery:
             http=httpx.Client(transport=httpx.MockTransport(route), follow_redirects=True),
         ) as client:
             assert client.session.api_url.startswith("https://example.com/")
+
+    @staticmethod
+    def srv_answer(monkeypatch: pytest.MonkeyPatch, target: str) -> None:
+        record = SimpleNamespace(target=target, port=443, priority=0, weight=0)
+        resolver = SimpleNamespace(resolve=lambda _name, _kind: [record])
+        monkeypatch.setattr("jmap.discovery._default_resolver", lambda: resolver)
+
+    def test_an_srv_target_outside_the_domain_gets_no_credentials(self, monkeypatch):
+        # RFC 6186 §6. A forged record named the attacker's host, and discovery
+        # handed it the password before trying the domain's own URL.
+        self.srv_answer(monkeypatch, "mail.attacker.example.")
+        hosts: list[str] = []
+
+        def refuse(request: httpx.Request) -> httpx.Response:
+            hosts.append(request.url.host)
+            raise httpx.ConnectError("nothing listening")
+
+        with pytest.raises(UnconfirmedSRVTargetError, match=r"mail\.attacker\.example") as excinfo:
+            JMAPClient.discover(
+                "alice@example.com",
+                auth=BasicAuth("alice", "pw"),
+                http=httpx.Client(transport=httpx.MockTransport(refuse)),
+            )
+        assert hosts == ["example.com"]
+        # Named, so a caller can ask its user and try again with the answer.
+        assert excinfo.value.domain == "example.com"
+        assert excinfo.value.targets == (SRVTarget(host="mail.attacker.example"),)
+        assert isinstance(excinfo.value.__cause__, TransportError)
+
+    def test_a_declined_target_does_not_matter_when_the_domain_answers(self, monkeypatch):
+        self.srv_answer(monkeypatch, "mail.attacker.example.")
+        fake = FakeJMAPServer(base_url="https://example.com")
+        with JMAPClient.discover(
+            "alice@example.com",
+            auth=BasicAuth("alice", "pw"),
+            http=httpx.Client(**fake.client_kwargs()),
+        ) as client:
+            assert client.session.api_url.startswith("https://example.com/")
+
+    def test_a_confirmed_target_outside_the_domain_is_used(self, monkeypatch):
+        # A custom domain at a hosted provider: exactly what the SRV record is
+        # for, once someone has said the provider is the right one.
+        self.srv_answer(monkeypatch, "api.provider.example.")
+        fake = FakeJMAPServer(base_url="https://api.provider.example")
+        with JMAPClient.discover(
+            "alice@example.org",
+            auth=BasicAuth("alice", "pw"),
+            confirm_srv_target=lambda target: target.host == "api.provider.example",
+            http=httpx.Client(**fake.client_kwargs()),
+        ) as client:
+            assert client.session.api_url.startswith("https://api.provider.example/")

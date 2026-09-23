@@ -47,13 +47,14 @@ from jmap.core.session import Session, check_session_redirects
 from jmap.defaults import default_registry
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from types import TracebackType
 
     from jmap.capabilities.registry import ActiveCapabilities, Registry
     from jmap.core.ids import Id
     from jmap.core.invocation import Handle
     from jmap.core.request import Request
+    from jmap.discovery import SRVTarget
 
 
 class BatchContext:
@@ -192,6 +193,7 @@ class JMAPClient:
         *,
         auth: httpx.Auth,
         use_srv: bool = True,
+        confirm_srv_target: Callable[[SRVTarget], bool] | None = None,
         **kwargs: Any,
     ) -> Self:
         """Connect using only an email address or domain (RFC 8620 §2.2).
@@ -202,8 +204,16 @@ class JMAPClient:
         there, so a client that only tries it cannot reach one of the largest JMAP
         deployments in existence.
 
-        The error raised on total failure is the *last* one, which is the
-        well-known URL's - the one a user can most easily check by hand.
+        An SRV target outside the address's domain is tried only when
+        ``confirm_srv_target`` returns true for it. The first candidate receives
+        the credentials, a forged DNS answer can name any host, and TLS vouches
+        for that host rather than the domain - so RFC 6186 §6 has the client ask
+        first. When nothing else answers and such a target went untried,
+        :class:`~jmap.discovery.UnconfirmedSRVTargetError` names it, so the
+        question can be put to the user and the call made again with the answer.
+
+        Otherwise the error raised on total failure is the *last* one, which is
+        the well-known URL's - the one a user can most easily check by hand.
 
         A candidate that answers with something other than a session - a parked
         domain's page, a portal, JSON of the wrong shape - is moved past like
@@ -211,14 +221,24 @@ class JMAPClient:
         there is none. A 401 or a downgrading session still stops the search,
         because trying the next candidate would hand it the same credentials.
         """
-        from jmap.discovery import candidate_urls
+        from jmap.discovery import UnconfirmedSRVTargetError, candidate_urls, domain_of
+
+        untried: list[SRVTarget] = []
+
+        def confirm(target: SRVTarget) -> bool:
+            if confirm_srv_target is not None and confirm_srv_target(target):
+                return True
+            untried.append(target)
+            return False
 
         failure: BaseException | None = None
-        for url in candidate_urls(address, use_srv=use_srv):
+        for url in candidate_urls(address, use_srv=use_srv, confirm_srv_target=confirm):
             try:
                 return cls.connect(url, auth=auth, **kwargs)
             except (TransportError, RequestError, ValueError) as exc:
                 failure = exc
+        if untried:
+            raise UnconfirmedSRVTargetError(domain_of(address), tuple(untried)) from failure
         raise (
             failure
             if failure is not None

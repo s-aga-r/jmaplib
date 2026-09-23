@@ -12,17 +12,19 @@ Three sources, tried in order, because no single one works everywhere:
    one of the largest JMAP deployments in existence.
 
 DNS is an optional dependency because most callers connect to a server they were
-told about. When it is missing, SRV lookup is skipped with an error that says so
-rather than silently falling through to the guess - a silent fallback turns a
-missing package into a mysterious connection failure against a correctly
-configured domain.
+told about. When it is missing, :func:`lookup_srv` raises an error that says so
+rather than returning nothing - an empty answer would pass for "this domain has
+no records". :func:`candidate_urls`, and so ``JMAPClient.discover``, then skip SRV
+and offer the well-known URL alone, which is all a domain answering there needs.
 
 **Unless the resolver validates DNSSEC, SRV results are attacker-influenced.**
 RFC 8620 §8.3 says so plainly: a poisoned answer points the client at someone
 else's server, and whether that matters depends on the credential being presented.
 TLS still authenticates the *host that was resolved to*, not the domain that was
 asked about, so the name in the certificate is the SRV target - not the user's
-mail domain.
+mail domain. So RFC 6186 §6's rule applies: a target inside the queried domain is
+used, and one outside it only once the caller confirms it - by asking its user,
+or because its resolver validates.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from typing import TYPE_CHECKING, Final
 from jmap.core.errors import JMAPError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 #: RFC 8620 §2.2's well-known path.
 WELL_KNOWN_PATH: Final = "/.well-known/jmap"
@@ -83,6 +85,28 @@ class SRVTarget:
         """
         authority = self.host if self.port == DEFAULT_PORT else f"{self.host}:{self.port}"
         return f"{SCHEME}://{authority}{WELL_KNOWN_PATH}"
+
+
+class UnconfirmedSRVTargetError(JMAPError):
+    """Nothing answered, and SRV named servers outside the domain that went untried.
+
+    RFC 6186 §6 has a client ask before connecting to one: a record is only as
+    trustworthy as the DNS answer that carried it, and TLS vouches for the host
+    it names rather than for the domain asked about. Raised in place of the last
+    failure, which is its ``__cause__``, so a caller can put the question to its
+    user and try again with ``confirm_srv_target``.
+    """
+
+    def __init__(self, domain: str, targets: tuple[SRVTarget, ...]) -> None:
+        self.domain = domain
+        self.targets = targets
+        named = ", ".join(f"{target.host}:{target.port}" for target in targets)
+        super().__init__(
+            f"no JMAP server answered for {domain}. Its SRV records also name {named}, "
+            f"outside that domain, which went untried: a forged DNS answer can name any "
+            f"host, so RFC 6186 §6 asks the user first. Pass confirm_srv_target to "
+            f"accept one"
+        )
 
 
 def domain_of(address: str) -> str:
@@ -147,23 +171,44 @@ def _default_resolver() -> object:
     return dns.resolver.Resolver()
 
 
+def _in_domain(host: str, domain: str) -> bool:
+    """Whether ``host`` is ``domain`` or a name under it (RFC 6186 §6)."""
+    host, domain = host.rstrip(".").lower(), domain.rstrip(".").lower()
+    return host == domain or host.endswith(f".{domain}")
+
+
 def candidate_urls(
-    address: str, *, resolver: object | None = None, use_srv: bool = True
+    address: str,
+    *,
+    resolver: object | None = None,
+    use_srv: bool = True,
+    confirm_srv_target: Callable[[SRVTarget], bool] | None = None,
 ) -> list[str]:
     """Every URL worth trying for an address or domain, best first.
 
-    The well-known URL is always last rather than omitted: a domain with SRV
-    records may still answer there, and trying it costs one request against a
-    server that has already failed to be reached any other way.
+    An SRV target outside the address's domain is included only when
+    ``confirm_srv_target`` returns true for it - see the module docstring for
+    why an unconfirmed one must not receive a connection, let alone
+    credentials. The well-known URL is always last rather than omitted: a
+    domain with SRV records may still answer there, and trying it costs one
+    request against a server that has already failed to be reached any other
+    way.
     """
     domain = domain_of(address)
     urls: list[str] = []
     if use_srv:
+        targets: list[SRVTarget] = []
         # Asked for but unavailable is not fatal here: the caller still gets the
         # fallback, and finds out about the missing package from `lookup_srv`
         # when it calls that directly.
         with suppress(DiscoveryUnavailableError):
-            urls.extend(target.session_url for target in lookup_srv(domain, resolver=resolver))
+            targets = lookup_srv(domain, resolver=resolver)
+        urls.extend(
+            target.session_url
+            for target in targets
+            if _in_domain(target.host, domain)
+            or (confirm_srv_target is not None and confirm_srv_target(target))
+        )
     fallback = well_known_url(domain)
     if fallback not in urls:
         urls.append(fallback)
