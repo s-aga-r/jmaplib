@@ -73,6 +73,10 @@ LOOPBACK_HOST: Final = "127.0.0.1"
 #: caller's own machine has nowhere for cleartext to leak to.
 _LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})
 
+#: Redirects one discovery fetch follows: plenty for a canonicalising chain, and
+#: where a loop stops.
+_MAX_REDIRECTS: Final = 10
+
 #: C0 and C1 control characters. Terminal escape sequences live here, and the
 #: URLs this module prints are the one line the user is told to trust.
 _CONTROL_CHARS: Final = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -287,7 +291,7 @@ class OAuthClient:
         ``issuer`` overrides the one the resource names, for the case where a
         resource lists several and the caller has chosen.
         """
-        client = http or httpx.Client(follow_redirects=True, timeout=timeout)
+        client = http or httpx.Client(timeout=timeout)
         try:
             _require_https(resource_metadata_url, purpose="the resource metadata URL")
             resource = ProtectedResourceMetadata.of(_fetch_json(client, resource_metadata_url))
@@ -302,7 +306,7 @@ class OAuthClient:
         issuer: str, *, http: httpx.Client | None = None, timeout: float = 30.0
     ) -> AuthorizationServerMetadata:
         """Fetch RFC 8414 metadata for a known issuer."""
-        client = http or httpx.Client(follow_redirects=True, timeout=timeout)
+        client = http or httpx.Client(timeout=timeout)
         try:
             return _fetch_server_metadata(client, issuer)
         finally:
@@ -555,13 +559,25 @@ def _as_token(document: Any) -> OAuth2Token:
 
 
 def _fetch_json(client: httpx.Client, url: str) -> Any:
-    """GET a discovery document, without the borrowed client's credential.
+    """GET a discovery document, following redirects one checked hop at a time.
 
-    The documents live on hosts the server's metadata chose, and the reason
-    that keeps the credential off them is in :meth:`OAuthClient._post`.
+    Each hop must be https before it is requested. The documents carry no
+    secret, but they name the endpoints that receive them, and one cleartext
+    hop lets whoever is on the path serve a self-consistent set naming its own.
+    Never with the borrowed client's credential, for the reason in
+    :meth:`OAuthClient._post`.
     """
     try:
-        response = client.get(url, headers={"Accept": "application/json"}, auth=None)
+        response = client.get(
+            url, headers={"Accept": "application/json"}, auth=None, follow_redirects=False
+        )
+        hops = 0
+        while (hop := response.next_request) is not None:
+            hops += 1
+            if hops > _MAX_REDIRECTS:
+                raise DiscoveryError(f"{url} redirected more than {_MAX_REDIRECTS} times")
+            _require_https(str(hop.url), purpose="a redirect in the discovery chain")
+            response = client.send(hop, auth=None, follow_redirects=False)
     except httpx.HTTPError as exc:
         raise DiscoveryError(f"could not fetch {url}: {exc}") from exc
     if response.status_code >= httpx.codes.BAD_REQUEST:

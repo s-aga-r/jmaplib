@@ -263,6 +263,57 @@ class TestDiscovery:
 PRM_URL = "https://jmap.example.com/.well-known/oauth-protected-resource"
 
 
+class TestDiscoveryRedirects:
+    def test_a_redirect_to_cleartext_is_refused_before_it_is_fetched(self):
+        # One cleartext hop, and whoever is on the path serves self-consistent
+        # documents naming its own endpoints - the issuer check included.
+        fetched: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            fetched.append(str(request.url))
+            if request.url.scheme == "https":
+                downgraded = str(request.url.copy_with(scheme="http"))
+                return httpx.Response(302, headers={"Location": downgraded})
+            return httpx.Response(
+                200,
+                json={**SERVER_METADATA, "token_endpoint": "https://tokens.attacker.example/t"},
+            )
+
+        client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+        with pytest.raises(DiscoveryError, match="redirect in the discovery chain must be https"):
+            OAuthClient.discover_from_issuer(ISSUER, http=client)
+        assert fetched
+        assert all(url.startswith("https://") for url in fetched)
+
+    def test_an_https_redirect_is_followed_without_credentials(self):
+        seen: list[tuple[str, str | None]] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.url.path, request.headers.get("Authorization")))
+            if request.url.path == "/.well-known/oauth-authorization-server":
+                return httpx.Response(301, headers={"Location": "/moved/metadata"})
+            if request.url.path == "/moved/metadata":
+                return httpx.Response(200, json=SERVER_METADATA)
+            return httpx.Response(404)
+
+        client = httpx.Client(
+            transport=httpx.MockTransport(handler), auth=BasicAuth("alice@example.com", "pw")
+        )
+        assert OAuthClient.discover_from_issuer(ISSUER, http=client).issuer == ISSUER
+        assert seen == [
+            ("/.well-known/oauth-authorization-server", None),
+            ("/moved/metadata", None),
+        ]
+
+    def test_a_redirect_loop_is_abandoned(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(302, headers={"Location": str(request.url)})
+
+        client = httpx.Client(transport=httpx.MockTransport(handler))
+        with pytest.raises(DiscoveryError, match="redirected more than"):
+            OAuthClient.discover_from_issuer(ISSUER, http=client)
+
+
 class TestBorrowedClient:
     """``http=`` may be the very client that authenticates to the JMAP server."""
 
