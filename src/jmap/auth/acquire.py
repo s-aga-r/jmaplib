@@ -472,8 +472,15 @@ class OAuthClient:
 
     # -- refresh ------------------------------------------------------------ #
     def refresh(self, refresh_token: str, *, scope: str | None = None) -> OAuth2Token:
-        """Exchange a refresh token for a new access token (RFC 6749 §6)."""
-        return self._token_request(
+        """Exchange a refresh token for a new access token (RFC 6749 §6).
+
+        The server MAY issue a new refresh token, and when it does the old one
+        is dead. When it does not, the one presented is still the grant, so it
+        is carried into the result: returning none there made the *next*
+        refresh present nothing and fail with ``invalid_grant``, stranding the
+        grant on every server that does not rotate.
+        """
+        token = self._token_request(
             refresh_body(
                 refresh_token=refresh_token,
                 client_id=self.client_id,
@@ -481,6 +488,14 @@ class OAuthClient:
                 scope=scope,
             )
         )
+        if token.refresh_token is None and refresh_token:
+            return OAuth2Token(
+                token.access_token,
+                refresh_token=refresh_token,
+                expires_at=token.expires_at,
+                scope=token.scope,
+            )
+        return token
 
     # -- plumbing ----------------------------------------------------------- #
     def _token_request(self, body: Mapping[str, str]) -> OAuth2Token:

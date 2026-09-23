@@ -542,6 +542,42 @@ class TestRefresh:
         sent = dict(httpx.QueryParams(router.requests[-1].content.decode()))
         assert sent["client_secret"] == "s"
 
+    def test_a_refresh_token_that_is_not_rotated_is_kept(self):
+        # RFC 6749 §6: the server MAY issue a new refresh token. When it does
+        # not, the one presented is still the grant - returning none made the
+        # next refresh present nothing and fail with invalid_grant, stranding the
+        # grant an hour in on every server that does not rotate.
+        router = Router()
+        router.add("/token", httpx.Response(200, json={"access_token": "new"}))
+        with oauth(router) as client:
+            token = client.refresh("RT-1")
+        assert token.access_token == "new"
+        assert token.refresh_token == "RT-1"
+
+    def test_the_documented_wiring_survives_a_second_refresh(self):
+        # docs/auth.md feeds each token's refresh_token into the next refresh.
+        router = Router()
+        router.add(
+            "/token",
+            httpx.Response(200, json={"access_token": "AT-2"}),
+            httpx.Response(200, json={"access_token": "AT-3"}),
+        )
+        with oauth(router) as client:
+            first = client.refresh("RT-1")
+            second = client.refresh(first.refresh_token or "")
+        presented = [
+            dict(httpx.QueryParams(request.content.decode()))["refresh_token"]
+            for request in router.requests
+        ]
+        assert presented == ["RT-1", "RT-1"]
+        assert second.access_token == "AT-3"
+
+    def test_no_refresh_token_is_invented_from_nothing(self):
+        router = Router()
+        router.add("/token", httpx.Response(200, json={"access_token": "new"}))
+        with oauth(router) as client:
+            assert client.refresh("").refresh_token is None
+
 
 class TestTokenEndpointHardening:
     def test_a_cleartext_token_endpoint_is_refused(self):
