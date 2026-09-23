@@ -213,7 +213,7 @@ class AsyncJMAPClient:
 
     async def execute(self, batch: Batch, *, extra_using: frozenset[str] = frozenset()) -> None:
         """Send ``batch``, possibly as several requests, and resolve its handles."""
-        for request in batch.plan(extra_using=extra_using):
+        for request in batch.requests(extra_using=extra_using):
             response = await self._post(request, batch)
             batch.absorb(response)
             if session_is_stale(self.session, response.session_state):

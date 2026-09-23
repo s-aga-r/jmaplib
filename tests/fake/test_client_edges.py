@@ -25,7 +25,7 @@ from jmap.core.errors import (
     RequestError,
     TransportError,
 )
-from jmap.core.ids import Id
+from jmap.core.ids import CreationRef, Id
 from jmap.core.retry import RetryPolicy
 from jmap.core.session import Session
 from jmap.testing import FakeJMAPServer, ServerQuirks
@@ -675,6 +675,52 @@ class TestOwnedHttpClients:
             await AsyncJMAPClient.connect(
                 "http://127.0.0.1:1/.well-known/jmap", auth=BasicAuth("u", "p")
             )
+
+
+class TestSplitBatchesCarryCreationIds:
+    """RFC 8620 §3.3: ``createdIds`` is how ``#creationId`` crosses requests.
+
+    A batch split under ``maxCallsInRequest`` used to plan every request up
+    front with only the caller's seed, so the ids the server assigned while
+    answering one request never reached the next - and a creation reference
+    there resolved to nothing.
+    """
+
+    def _fake(self) -> FakeJMAPServer:
+        fake = server(capabilities={CORE_URN: {"maxCallsInRequest": 1}, MAIL_URN: {}})
+
+        def email_set(arguments: dict[str, Any], srv: FakeJMAPServer) -> dict[str, Any]:
+            created = {}
+            for creation_id in arguments.get("create") or {}:
+                srv.created_ids[creation_id] = f"M-{creation_id}"
+                created[creation_id] = {"id": f"M-{creation_id}"}
+            return {"created": created, "newState": "s2"}
+
+        fake.handle("Email/set", email_set)
+        return fake
+
+    def test_a_later_request_carries_the_ids_an_earlier_one_created(self):
+        fake = self._fake()
+        with connect(fake) as client, client.batch() as batch:
+            batch.add("Email/set", {"create": {"draft": {}}})
+            batch.add("Email/set", {"create": {"reply": {"inReplyTo": CreationRef("draft")}}})
+        assert len(fake.requests) == 2
+        assert "createdIds" not in fake.requests[0]
+        assert fake.requests[1]["createdIds"] == {"draft": "M-draft"}
+
+    @pytest.mark.asyncio
+    async def test_the_async_client_carries_them_too(self):
+        fake = self._fake()
+        http = httpx.AsyncClient(**fake.client_kwargs())
+        async with (
+            await AsyncJMAPClient.connect(
+                WELL_KNOWN, auth=BasicAuth("u", "p"), http=http, registry=registry()
+            ) as client,
+            client.batch() as batch,
+        ):
+            batch.add("Email/set", {"create": {"draft": {}}})
+            batch.add("Email/set", {"create": {"reply": {"inReplyTo": CreationRef("draft")}}})
+        assert fake.requests[1]["createdIds"] == {"draft": "M-draft"}
 
 
 class TestConformantNullResultMaps:

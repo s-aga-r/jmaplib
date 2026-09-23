@@ -35,7 +35,7 @@ from jmap.core.request import plan_requests
 from jmap.core.response import dispatch
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterator, Mapping, Sequence
 
     from jmap.capabilities.registry import ActiveCapabilities
     from jmap.capabilities.spec import MethodSpec
@@ -286,6 +286,20 @@ class Batch:
             max_calls_in_request=self._capabilities.limits.max_calls_in_request,
             created_ids=self._created_ids or None,
         )
+
+    def requests(self, *, extra_using: frozenset[str] = frozenset()) -> Iterator[Request]:
+        """Plan the batch, then yield each request as it is due to be sent.
+
+        Lazily, because every request after the first must carry the creation
+        ids the server assigned while answering the ones before it: RFC 8620
+        §3.3's ``createdIds`` is the only way a ``#creationId`` survives a split
+        under ``maxCallsInRequest``. Planning them all up front sent each later
+        request without those ids, so its creation references resolved to
+        nothing. :meth:`absorb` each response before asking for the next.
+        """
+        for request in self.plan(extra_using=extra_using):
+            request.created_ids = dict(self._created_ids) or None
+            yield request
 
     def _check_set_sizes(self) -> None:
         """Refuse an oversized ``/set`` rather than splitting it.
