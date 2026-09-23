@@ -152,12 +152,17 @@ class Account:
 
     @classmethod
     def from_wire(cls, account_id: str, data: Mapping[str, Any]) -> Self:
+        capabilities: Any = data.get("accountCapabilities") or {}
+        if not isinstance(capabilities, Mapping):
+            # dict() would raise TypeError for a number, or build nonsense from a
+            # two-character string, instead of the documented ValueError.
+            raise _malformed(f"accounts[{account_id!r}].accountCapabilities", capabilities)
         return cls(
             Id(account_id),
             str(data.get("name", "")),
             is_personal=bool(data.get("isPersonal", False)),
             is_read_only=bool(data.get("isReadOnly", False)),
-            account_capabilities=data.get("accountCapabilities") or {},
+            account_capabilities=cast("Mapping[str, Any]", capabilities),
         )
 
     def __repr__(self) -> str:

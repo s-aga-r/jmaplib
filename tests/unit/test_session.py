@@ -193,6 +193,12 @@ class TestHostileSessionShapes:
         with pytest.raises(ValueError, match="urn:ietf:params:jmap:mail"):
             Session.from_wire({"primaryAccounts": {"urn:ietf:params:jmap:mail": 7}})
 
+    @pytest.mark.parametrize("hostile", [5, [1], "ab"])
+    def test_a_non_object_account_capabilities_map_is_a_value_error(self, hostile):
+        # dict() of these raised TypeError, or built a nonsense map from "ab".
+        with pytest.raises(ValueError, match="accountCapabilities"):
+            Session.from_wire({"accounts": {"a1": {"accountCapabilities": hostile}}})
+
 
 class TestCapabilityResolution:
     @pytest.fixture

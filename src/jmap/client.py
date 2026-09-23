@@ -204,6 +204,12 @@ class JMAPClient:
 
         The error raised on total failure is the *last* one, which is the
         well-known URL's - the one a user can most easily check by hand.
+
+        A candidate that answers with something other than a session - a parked
+        domain's page, a portal, JSON of the wrong shape - is moved past like
+        one that cannot be reached: it says this is not the server, not that
+        there is none. A 401 or a downgrading session still stops the search,
+        because trying the next candidate would hand it the same credentials.
         """
         from jmap.discovery import candidate_urls
 
@@ -211,7 +217,7 @@ class JMAPClient:
         for url in candidate_urls(address, use_srv=use_srv):
             try:
                 return cls.connect(url, auth=auth, **kwargs)
-            except (TransportError, RequestError) as exc:
+            except (TransportError, RequestError, ValueError) as exc:
                 failure = exc
         raise (
             failure

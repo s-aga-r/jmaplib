@@ -412,3 +412,32 @@ class TestAddressDiscovery:
                 use_srv=False,
                 http=httpx.Client(transport=httpx.MockTransport(broken)),
             )
+
+    @pytest.mark.parametrize(
+        "impostor",
+        [
+            # A parked domain or a captive portal: 200, and not JSON at all.
+            httpx.Response(200, text="<html>parked</html>", headers={"Content-Type": "text/html"}),
+            # JSON, but not a session - the shape check refuses it.
+            httpx.Response(200, json={"accounts": {"a": {"accountCapabilities": 5}}}),
+        ],
+    )
+    def test_a_candidate_that_is_not_a_session_is_moved_past(self, monkeypatch, impostor):
+        # Either says this candidate is not the server, not that discovery is
+        # over - so the next candidate, here the domain's own, still gets tried.
+        fake = FakeJMAPServer(base_url="https://example.com")
+
+        def route(request: httpx.Request) -> httpx.Response:
+            return impostor if request.url.host == "jmap.example.net" else fake.route(request)
+
+        candidates = [
+            "https://jmap.example.net/.well-known/jmap",
+            f"{fake.base_url}/.well-known/jmap",
+        ]
+        monkeypatch.setattr("jmap.discovery.candidate_urls", lambda _address, **_: candidates)
+        with JMAPClient.discover(
+            "alice@example.com",
+            auth=BasicAuth("alice", "pw"),
+            http=httpx.Client(transport=httpx.MockTransport(route), follow_redirects=True),
+        ) as client:
+            assert client.session.api_url.startswith("https://example.com/")
