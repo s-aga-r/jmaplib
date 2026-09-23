@@ -19,6 +19,7 @@ from jmap.core.retry import Failure, Safety, classify, parse_retry_after
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from jmap.core.retry import RetryPolicy
     from jmap.core.session import Session
 
 #: RFC 8620 §3.1. Servers are entitled to reject anything else, and Stalwart does.
@@ -101,12 +102,23 @@ def failure_of(status: int, problem: RequestError | None) -> Safety:
     )
 
 
-def retry_delay(
-    headers: Mapping[str, str], *, policy_delay: float, now: float | None = None
-) -> float:
-    """Prefer the server's ``Retry-After`` over our own backoff curve."""
-    server_hint = parse_retry_after(headers, now=now)
-    return server_hint if server_hint is not None else policy_delay
+def retry_pause(
+    problem: RequestError,
+    headers: Mapping[str, str],
+    *,
+    policy: RetryPolicy,
+    attempt: int,
+    now: float,
+) -> float | None:
+    """How long to wait before re-sending after ``problem``, or ``None`` to stop.
+
+    The server's ``Retry-After`` wins over the backoff curve, up to the policy's
+    ceiling (see :meth:`RetryPolicy.pause`). It is recorded on the error first,
+    so a caller who gets the error back because the wait was too long knows how
+    long the server asked for.
+    """
+    problem.retry_after = parse_retry_after(headers, now=now)
+    return policy.pause(attempt, retry_after=problem.retry_after)
 
 
 def session_is_stale(session: Session, response_session_state: str) -> bool:

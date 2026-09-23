@@ -71,7 +71,10 @@ class RequestError(JMAPError):
     """An RFC 7807 problem response. No method in the request executed.
 
     ``limit`` is populated only for :data:`URN_LIMIT`, where RFC 8620 requires the
-    server to name which limit was exceeded.
+    server to name which limit was exceeded. ``retry_after`` is the server's
+    ``Retry-After``, in seconds, when it sent one: the error reaches the caller
+    without a retry when that is longer than the retry policy will wait, and
+    this is what to reschedule by.
     """
 
     def __init__(
@@ -83,6 +86,7 @@ class RequestError(JMAPError):
         detail: str | None = None,
         limit: str | None = None,
         raw: dict[str, Any] | None = None,
+        retry_after: float | None = None,
     ) -> None:
         self.type: str = type_
         self.status: int | None = status
@@ -90,6 +94,7 @@ class RequestError(JMAPError):
         self.detail: str | None = detail
         self.limit: str | None = limit
         self.raw: dict[str, Any] = raw or {}
+        self.retry_after: float | None = retry_after
         super().__init__(_request_message(type_, status, title, detail))
 
     @classmethod

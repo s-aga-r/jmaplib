@@ -115,6 +115,25 @@ class TestBackoff:
         assert RetryPolicy().backoff(1, retry_after=-5.0) == 0.0
 
 
+class TestPause:
+    def test_no_hint_follows_the_curve(self):
+        assert RetryPolicy(initial_backoff=0.5).pause(2) == 1.0
+
+    def test_a_hint_within_the_ceiling_wins_over_the_curve(self):
+        assert RetryPolicy(max_backoff=5.0).pause(1, retry_after=90.0) == 90.0
+
+    def test_a_hint_past_the_ceiling_is_not_waited_out(self):
+        # A server may name any delay. One 503 asking for a year parked call()
+        # for a year, and past about 290 years time.sleep itself overflowed.
+        # Past the ceiling nothing is waited for: the caller gets the error now.
+        policy = RetryPolicy(max_retry_after=120.0)
+        assert policy.pause(1, retry_after=120.0) == 120.0
+        assert policy.pause(1, retry_after=120.5) is None
+
+    def test_a_negative_hint_is_clamped(self):
+        assert RetryPolicy().pause(1, retry_after=-5.0) == 0.0
+
+
 class TestParseRetryAfter:
     def test_seconds_form(self):
         assert parse_retry_after({"retry-after": "120"}) == 120.0

@@ -15,12 +15,12 @@ from jmap._shell import (
     merged_created_ids,
     problem_of,
     request_headers,
-    retry_delay,
+    retry_pause,
     session_is_stale,
 )
 from jmap.capabilities.spec import CapabilitySpec
 from jmap.core.errors import RequestError, TransportError
-from jmap.core.retry import Safety
+from jmap.core.retry import RetryPolicy, Safety
 from jmap.core.session import Session
 from jmap.defaults import default_registry
 
@@ -112,15 +112,29 @@ class TestFailureOf:
         assert failure_of(400, None) is Safety.FUTILE
 
 
-class TestRetryDelay:
-    def test_server_hint_wins(self):
-        assert retry_delay({"retry-after": "7"}, policy_delay=1.0) == 7.0
+class TestRetryPause:
+    @staticmethod
+    def pause(headers: dict[str, str], policy: RetryPolicy) -> tuple[float | None, RequestError]:
+        problem = RequestError("about:blank", status=503)
+        return retry_pause(problem, headers, policy=policy, attempt=1, now=0.0), problem
+
+    def test_the_server_hint_wins_and_is_recorded(self):
+        delay, problem = self.pause({"retry-after": "7"}, RetryPolicy(initial_backoff=1.0))
+        assert delay == 7.0
+        assert problem.retry_after == 7.0
 
     def test_falls_back_to_the_policy(self):
-        assert retry_delay({}, policy_delay=1.5) == 1.5
+        delay, problem = self.pause({}, RetryPolicy(initial_backoff=1.5))
+        assert delay == 1.5
+        assert problem.retry_after is None
 
-    def test_unparseable_hint_falls_back(self):
-        assert retry_delay({"retry-after": "soon"}, policy_delay=2.0, now=0.0) == 2.0
+    def test_an_unparseable_hint_falls_back(self):
+        assert self.pause({"retry-after": "soon"}, RetryPolicy(initial_backoff=2.0))[0] == 2.0
+
+    def test_a_hint_past_the_policy_stops_the_retry_but_is_kept(self):
+        delay, problem = self.pause({"retry-after": "3600"}, RetryPolicy(max_retry_after=60.0))
+        assert delay is None
+        assert problem.retry_after == 3600.0
 
 
 class TestSessionIsStale:

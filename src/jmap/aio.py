@@ -25,7 +25,7 @@ from jmap._shell import (
     failure_of,
     problem_of,
     request_headers,
-    retry_delay,
+    retry_pause,
     session_is_stale,
 )
 from jmap.api.namespace import Namespaces
@@ -287,7 +287,7 @@ class AsyncJMAPClient:
         attempt = 0
 
         safety: Safety
-        delay: float | None
+        delay: float
         error: BaseException
 
         while True:
@@ -299,11 +299,14 @@ class AsyncJMAPClient:
             except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout) as exc:
                 # Only these prove the request was never sent - see the sync
                 # client for why the catch-all below must stay MAYBE_APPLIED.
-                safety, delay, error = classify(Failure.CONNECT), None, exc
+                safety, error = classify(Failure.CONNECT), exc
+                delay = self.retry_policy.backoff(attempt)
             except httpx.TimeoutException as exc:
-                safety, delay, error = classify(Failure.TIMEOUT), None, exc
+                safety, error = classify(Failure.TIMEOUT), exc
+                delay = self.retry_policy.backoff(attempt)
             except httpx.HTTPError as exc:
-                safety, delay, error = classify(Failure.INTERRUPTED), None, exc
+                safety, error = classify(Failure.INTERRUPTED), exc
+                delay = self.retry_policy.backoff(attempt)
             else:
                 problem = problem_of(response.status_code, response.headers, response.content)
                 if problem is None:
@@ -313,13 +316,17 @@ class AsyncJMAPClient:
                         "the server rejected these credentials",
                         challenges=tuple(response.headers.get_list("www-authenticate")),
                     )
-                safety = failure_of(response.status_code, problem)
-                delay = retry_delay(
+                pause = retry_pause(
+                    problem,
                     response.headers,
-                    policy_delay=self.retry_policy.backoff(attempt),
+                    policy=self.retry_policy,
+                    attempt=attempt,
                     now=time.time(),
                 )
-                error = problem
+                if pause is None:
+                    # The server asked for a longer wait than the policy takes.
+                    raise problem
+                safety, delay, error = failure_of(response.status_code, problem), pause, problem
 
             if not should_retry(
                 safety,
@@ -330,7 +337,7 @@ class AsyncJMAPClient:
             ):
                 raise _as_error(error)
             # anyio rather than asyncio.sleep so the client works under trio too.
-            await anyio.sleep(delay if delay is not None else self.retry_policy.backoff(attempt))
+            await anyio.sleep(delay)
 
     # -- lifecycle ---------------------------------------------------------- #
     async def aclose(self) -> None:

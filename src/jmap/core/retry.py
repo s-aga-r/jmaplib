@@ -109,6 +109,9 @@ class RetryPolicy:
     initial_backoff: float = 0.5
     max_backoff: float = 30.0
     multiplier: float = 2.0
+    #: The longest a server-supplied ``Retry-After`` is waited out, in seconds.
+    #: A server asking for longer gets no retry at all - see :meth:`pause`.
+    max_retry_after: float = 120.0
 
     def backoff(self, attempt: int, *, retry_after: float | None = None) -> float:
         """Delay before ``attempt`` (1-based, so attempt 2 is the first retry).
@@ -121,6 +124,20 @@ class RetryPolicy:
             return max(0.0, retry_after)
         exponent = max(0, attempt - 1)
         return min(self.max_backoff, self.initial_backoff * self.multiplier**exponent)
+
+    def pause(self, attempt: int, *, retry_after: float | None = None) -> float | None:
+        """How long to wait before ``attempt``, or ``None`` to not retry at all.
+
+        As :meth:`backoff`, except that a ``Retry-After`` longer than
+        :attr:`max_retry_after` is refused rather than waited out. A server may
+        name any delay, and honouring it outright let one 503 asking for a year
+        park a call for a year - past about 290 years, ``time.sleep`` itself
+        overflowed. Declining to wait is not ignoring the server: the request
+        is not re-sent early, the error goes back to the caller instead.
+        """
+        if retry_after is not None and retry_after > self.max_retry_after:
+            return None
+        return self.backoff(attempt, retry_after=retry_after)
 
 
 def should_retry(

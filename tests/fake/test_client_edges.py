@@ -602,6 +602,36 @@ class TestTransportFailures:
         with pytest.raises(RequestError):
             JMAPClient.connect(WELL_KNOWN, auth=BasicAuth("u", "p"), http=http, registry=registry())
 
+    def test_a_retry_after_within_the_policy_is_waited_out(self, monkeypatch):
+        naps: list[float] = []
+        monkeypatch.setattr("jmap.client.time.sleep", naps.append)
+        calls = {"n": 0}
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(503, headers={"Retry-After": "7"})
+            return httpx.Response(200, json={"methodResponses": [["Core/echo", {"ok": 1}, "c1"]]})
+
+        with self._client(handler) as client:
+            assert client.echo() == {"ok": 1}
+        assert naps == [7.0]
+
+    def test_a_retry_after_past_the_policy_fails_at_once(self, monkeypatch):
+        # One 503 asking for a year used to park the call for a year. Now the
+        # error comes straight back, carrying the hint so the caller can
+        # reschedule instead of blocking.
+        naps: list[float] = []
+        monkeypatch.setattr("jmap.client.time.sleep", naps.append)
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(503, headers={"Retry-After": "31536000"})
+
+        with self._client(handler) as client, pytest.raises(RequestError) as excinfo:
+            client.echo()
+        assert naps == []
+        assert excinfo.value.retry_after == 31536000.0
+
 
 class TestAccountFallback:
     def test_primary_accounts_supplies_the_account_when_no_default_is_set(self):
@@ -689,6 +719,24 @@ class TestAsyncTransportFailures:
             with pytest.raises(TransportError, match="refused"):
                 await client.echo()
         assert calls["n"] == 2
+
+    @pytest.mark.asyncio
+    async def test_a_retry_after_past_the_policy_fails_at_once(self, monkeypatch):
+        naps: list[float] = []
+
+        async def nap(seconds: float) -> None:
+            naps.append(seconds)
+
+        monkeypatch.setattr("jmap.aio.anyio.sleep", nap)
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, headers={"Retry-After": "86400"})
+
+        async with await self._connect(handler) as client:
+            with pytest.raises(RequestError) as excinfo:
+                await client.echo()
+        assert naps == []
+        assert excinfo.value.retry_after == 86400.0
 
     @pytest.mark.asyncio
     async def test_a_401_from_the_api_raises_with_its_challenges(self):

@@ -25,7 +25,7 @@ from jmap._shell import (
     failure_of,
     problem_of,
     request_headers,
-    retry_delay,
+    retry_pause,
     session_is_stale,
 )
 from jmap.api.namespace import Namespaces
@@ -336,7 +336,7 @@ class JMAPClient:
         attempt = 0
 
         safety: Safety
-        delay: float | None
+        delay: float
         error: BaseException
 
         while True:
@@ -351,13 +351,16 @@ class JMAPClient:
                 # RemoteProtocolError arrive *after* the bytes went out, and
                 # classifying them as never-applied re-sends unguarded
                 # mutations the server may have already run.
-                safety, delay, error = classify(Failure.CONNECT), None, exc
+                safety, error = classify(Failure.CONNECT), exc
+                delay = self.retry_policy.backoff(attempt)
             except httpx.TimeoutException as exc:
                 # A timeout is not a connection failure: the request went out, so
                 # the server may have applied it and simply answered too slowly.
-                safety, delay, error = classify(Failure.TIMEOUT), None, exc
+                safety, error = classify(Failure.TIMEOUT), exc
+                delay = self.retry_policy.backoff(attempt)
             except httpx.HTTPError as exc:
-                safety, delay, error = classify(Failure.INTERRUPTED), None, exc
+                safety, error = classify(Failure.INTERRUPTED), exc
+                delay = self.retry_policy.backoff(attempt)
             else:
                 problem = problem_of(response.status_code, response.headers, response.content)
                 if problem is None:
@@ -367,13 +370,17 @@ class JMAPClient:
                         "the server rejected these credentials",
                         challenges=tuple(response.headers.get_list("www-authenticate")),
                     )
-                safety = failure_of(response.status_code, problem)
-                delay = retry_delay(
+                pause = retry_pause(
+                    problem,
                     response.headers,
-                    policy_delay=self.retry_policy.backoff(attempt),
+                    policy=self.retry_policy,
+                    attempt=attempt,
                     now=time.time(),
                 )
-                error = problem
+                if pause is None:
+                    # The server asked for a longer wait than the policy takes.
+                    raise problem
+                safety, delay, error = failure_of(response.status_code, problem), pause, problem
 
             if not should_retry(
                 safety,
@@ -383,7 +390,7 @@ class JMAPClient:
                 all_mutations_guarded=guarded,
             ):
                 raise _as_error(error)
-            time.sleep(delay if delay is not None else self.retry_policy.backoff(attempt))
+            time.sleep(delay)
 
     # -- lifecycle ---------------------------------------------------------- #
     def close(self) -> None:
