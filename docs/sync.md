@@ -43,13 +43,19 @@ A `ChangeSet` has `.created`, `.updated`, `.destroyed`, `.new_state`, `.pages`,
 and two conveniences: `.is_empty` and `.touched` (created plus updated - the ids
 worth re-fetching).
 
-The usual shape is changes then a fetch, in one request:
+The usual shape is changes then a fetch, in one request. Created and updated ids
+arrive in separate arrays and a back-reference names one path, so it takes two
+`/get`s - still one round trip:
 
 ```python
 with client.batch() as batch:
     changed = batch.mail.email.changes(since_state=state)
-    fetched = batch.mail.email.get(ids=changed.ref_updated(), properties=["subject"])
+    created = batch.mail.email.get(ids=changed.ref("/created"), properties=["subject"])
+    updated = batch.mail.email.get(ids=changed.ref_updated(), properties=["subject"])
 ```
+
+Fetching only `ref_updated()` is the easy mistake: every new message is in
+`created` and never arrives. `changed.result.destroyed` needs no fetch at all.
 
 ### When the cursor dies
 
@@ -64,9 +70,13 @@ from jmap.sync import ResyncRequiredError
 try:
     changes = stream.catch_up()
 except ResyncRequiredError:
-    resynchronise_from_scratch()
-    stream.reset()
+    state = resynchronise_from_scratch()  # a fresh /get, returning its `state`
+    stream.seed(state)
 ```
+
+Seed the stream with the state of the download you just did. `reset()` would
+leave it with no cursor at all, so the next `catch_up()` would demand another
+full download.
 
 Not every server is well behaved here. Stalwart rejects an unparseable
 `sinceState` at the *request* level rather than the method level, which arrives
