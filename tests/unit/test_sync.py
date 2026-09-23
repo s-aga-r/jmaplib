@@ -171,13 +171,43 @@ class TestQueryViewSeeding:
         )
         assert view.ids == [None, None, None, None, None, "m6"]
 
-    def test_total_extends_the_view_beyond_what_was_fetched(self):
+    def test_the_unfetched_tail_is_implied_rather_than_allocated(self):
+        # RFC 8620 §5.6 pictures the cache padded with nulls out to the total.
+        # Those trailing slots say nothing but "unknown", so the total records
+        # them instead: len() still reports the full length.
         view = QueryView.from_query(
             QuerySpec.build("Email", "a"),
             QueryResponse.model_validate({"ids": ["m1"], "total": 4, "queryState": "q"}),
         )
-        assert view.ids == ["m1", None, None, None]
+        assert view.ids == ["m1"]
         assert view.total == 4
+        assert len(view) == 4
+
+    def test_a_query_with_millions_of_results_can_be_cached(self):
+        # The first screenful of a 1.2M-row query, with calculateTotal - the
+        # sync guide's own flow - used to be refused outright, because the tail
+        # was allocated; so did every delta once a total crossed a million.
+        response = QueryResponse.model_validate(
+            {
+                "ids": ["m1", "m2"],
+                "total": 1_200_000,
+                "queryState": "q",
+                "canCalculateChanges": True,
+            }
+        )
+        view = QueryView.from_query(QuerySpec.build("Email", "a"), response)
+        view.apply(
+            QueryChangesResponse.model_validate(
+                {
+                    "oldQueryState": "q",
+                    "newQueryState": "q2",
+                    "added": [{"id": "m0", "index": 0}],
+                    "total": 1_200_001,
+                }
+            )
+        )
+        assert view.known_ids == ["m0", "m1", "m2"]
+        assert len(view) == 1_200_001
 
     def test_known_ids_drops_the_gaps(self):
         view = QueryView(QuerySpec.build("Email", "a"), ids=["m1", None, "m2"])
@@ -355,10 +385,29 @@ class TestHostileQueryResponses:
         with pytest.raises(ViewTooLargeError):
             QueryView.from_query(QuerySpec("Email", "a"), response)
 
-    def test_an_absurd_total_is_refused(self):
+    def test_an_absurd_total_allocates_nothing(self):
+        # A view's total only ever truncates its list; it never sizes one, so a
+        # hostile value has nothing to allocate.
         response = QueryResponse.model_validate({"position": 0, "ids": [], "total": 2**45})
+        view = QueryView.from_query(QuerySpec("Email", "a"), response)
+        assert view.ids == []
+        assert view.total == 2**45
+
+    def test_a_negative_total_is_refused_by_the_view(self):
         with pytest.raises(ViewTooLargeError):
-            QueryView.from_query(QuerySpec("Email", "a"), response)
+            QueryView.from_query(
+                QuerySpec("Email", "a"), QueryResponse.model_validate({"ids": [], "total": -1})
+            )
+        view = QueryView(
+            QuerySpec("Email", "a"), ids=["m1"], query_state="q", can_calculate_changes=True
+        )
+        with pytest.raises(ViewTooLargeError):
+            view.apply(
+                QueryChangesResponse.model_validate(
+                    {"oldQueryState": "q", "newQueryState": "q2", "total": -3}
+                )
+            )
+        assert view.ids == ["m1"]
 
     def test_an_absurd_added_index_is_refused(self):
         with pytest.raises(ViewTooLargeError):

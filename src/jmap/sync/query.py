@@ -20,6 +20,12 @@ skipping the re-add loses the item.
 
 A removed id the client does not have is simply ignored - the RFC's own worked
 example includes one.
+
+:func:`splice` follows the RFC to the letter, trailing nulls and all.
+:class:`QueryView` does not store those: a run of nulls out to ``total`` says
+only "unknown", and materialising it made a view's size the server's choice -
+bounded, it refused any query past a million results, including one the client
+holds fifty rows of. The view keeps ``total`` and implies the tail.
 """
 
 from __future__ import annotations
@@ -63,6 +69,14 @@ class ViewTooLargeError(JMAPError):
 def _checked_position(value: int, *, what: str) -> int:
     if value < 0 or value > MAX_VIEW_LENGTH:
         raise ViewTooLargeError(what, value)
+    return value
+
+
+def _checked_total(value: int) -> int:
+    """A total a view can hold: any size, since it only ever truncates, but not
+    negative - ``del ids[-3:]`` would quietly drop the last three rows."""
+    if value < 0:
+        raise ViewTooLargeError("total", value)
     return value
 
 
@@ -214,6 +228,10 @@ class QueryView:
 
     Holds the ids and the ``queryState`` they correspond to, so a delta can be
     checked against the state it was computed from before being applied.
+
+    ``ids`` runs as far as the last position the view knows anything about;
+    positions past it, out to ``total``, are unknown and implied rather than
+    stored - see the module docstring. ``len(view)`` counts them.
     """
 
     spec: QuerySpec
@@ -235,9 +253,8 @@ class QueryView:
         """
         position = _checked_position(response.position, what="position")
         ids: SparseIds = [None] * position + list(response.ids)
-        if response.total is not None and response.total > len(ids):
-            _checked_position(response.total, what="total")
-            ids.extend([None] * (response.total - len(ids)))
+        if response.total is not None:
+            _checked_total(response.total)
         return cls(
             spec=spec,
             ids=ids,
@@ -273,14 +290,13 @@ class QueryView:
         if old_state != self.query_state:
             raise StaleQueryViewError(self.query_state, old_state)
 
-        self.ids = splice(
-            self.ids,
-            removed=response.removed,
-            added=response.added,
-            total=response.total,
-        )
+        # No total passed down: splice() would pad out to it, and the view
+        # implies that tail instead. A shrinking total still truncates.
+        ids = splice(self.ids, removed=response.removed, added=response.added)
         if response.total is not None:
+            del ids[_checked_total(response.total) :]
             self.total = response.total
+        self.ids = ids
         self.query_state = response.new_query_state or ""
 
     def reset(self, response: QueryResponse) -> None:
@@ -295,10 +311,11 @@ class QueryView:
         self.can_calculate_changes = refreshed.can_calculate_changes
 
     def __len__(self) -> int:
-        return len(self.ids)
+        """Every position the view knows of, including the unstored tail."""
+        return max(len(self.ids), self.total or 0)
 
     def __repr__(self) -> str:
         return (
             f"QueryView({self.spec.type_name!r}, cached={len(self.known_ids)}/"
-            f"{len(self.ids)}, state={self.query_state!r})"
+            f"{len(self)}, state={self.query_state!r})"
         )
