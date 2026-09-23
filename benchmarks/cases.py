@@ -28,6 +28,7 @@ from jmap.core.session import Session
 from jmap.defaults import default_registry
 from jmap.models.mail.objects import Email, Mailbox
 from jmap.models.responses import GetResponse
+from jmap.push.sse import SSEParser
 from jmap.testing import FakeJMAPServer
 
 if TYPE_CHECKING:
@@ -136,6 +137,17 @@ def patch_build() -> object:
     for index in range(50):
         builder.set(f"keywords/kw{index}", True)
     return builder.build()
+
+
+#: 256 KiB of short event-stream lines ending in LF alone, which is what real
+#: servers send. It is the input where looking for a CR the naive way searches
+#: to the end of the buffer once per line.
+SSE_LF_CHUNK = ("data: x\n" * 32_768).encode()
+
+
+@case("sse.feed/256KiB-lf-lines", "kernel")
+def sse_lf_lines() -> object:
+    return list(SSEParser().feed_bytes(SSE_LF_CHUNK))
 
 
 # --------------------------------------------------------------------------- #

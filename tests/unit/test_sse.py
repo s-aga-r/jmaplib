@@ -7,14 +7,20 @@ place, an event delivered twice.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
+import jmap.push.sse as sse_module
 from jmap.push.sse import (
     DEFAULT_EVENT_TYPE,
     EventOverflowError,
     ServerSentEvent,
     SSEParser,
 )
+
+if TYPE_CHECKING:
+    import re
 
 
 def events(*chunks: str) -> list[ServerSentEvent]:
@@ -242,6 +248,26 @@ class TestHostileStreams:
         parser = SSEParser()
         with pytest.raises(EventOverflowError):
             self._flood(parser, "data\n" * 100)
+
+    def test_each_line_ending_is_found_without_rescanning_the_rest(self, monkeypatch):
+        # Looking for CR and LF separately searched to the end of the buffer
+        # for whichever one a stream never sends - CR, from any real server -
+        # once per line. Quadratic: a 6 KB gzipped response inflated to 4 MB
+        # cost 30 s of CPU. One pattern for both stops at the nearest, so the
+        # searches add up to a single pass over the chunk.
+        scanned: list[int] = []
+        pattern = sse_module._LINE_ENDING
+
+        class Spy:
+            def search(self, text: str, position: int) -> re.Match[str] | None:
+                match = pattern.search(text, position)
+                scanned.append((match.end() if match else len(text)) - position)
+                return match
+
+        monkeypatch.setattr(sse_module, "_LINE_ENDING", Spy())
+        chunk = "data: x\n" * 1_000
+        list(SSEParser().feed(chunk))
+        assert sum(scanned) <= len(chunk)
 
     def test_a_unicode_digit_retry_is_ignored_not_fatal(self):
         # '²'.isdigit() is true but int('²') raises; the crash would kill the

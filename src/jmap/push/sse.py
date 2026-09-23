@@ -30,8 +30,9 @@ and lose every change that arrived before it.
 from __future__ import annotations
 
 import codecs
+import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from jmap.core.errors import JMAPError
 
@@ -216,14 +217,14 @@ def _is_ascii_digits(value: str) -> bool:
     return bool(value) and len(value) <= _MAX_RETRY_DIGITS and value.isascii() and value.isdigit()
 
 
+#: A line ends at CR or LF, whichever comes first. One pattern rather than a
+#: search for each: a search for CR alone runs to the end of the buffer on every
+#: line of a stream that never sends one - any real server's - which made
+#: splitting a large chunk quadratic.
+_LINE_ENDING: Final = re.compile(r"[\r\n]")
+
+
 def _next_terminator(buffer: str, start: int) -> int | None:
     """The index of the first ``\\r`` or ``\\n`` at or after ``start``."""
-    carriage = buffer.find("\r", start)
-    newline = buffer.find("\n", start)
-    if carriage == -1 and newline == -1:
-        return None
-    if carriage == -1:
-        return newline
-    if newline == -1:
-        return carriage
-    return min(carriage, newline)
+    match = _LINE_ENDING.search(buffer, start)
+    return match.start() if match is not None else None
