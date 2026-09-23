@@ -5,6 +5,78 @@ with one deliberate exception: capabilities marked `experimental=True` track IET
 drafts and are excluded from the compatibility promise. See `jmap.SPEC_REVISIONS`
 for exactly which revision of each spec this build implements.
 
+## Unreleased
+
+### Security
+
+- **A redirect could still downgrade the session to cleartext.** 1.1.0 refused an
+  `http://` endpoint in a session fetched over https, but it judged the session by
+  the channel it *arrived* over. A redirect from https to http therefore made it an
+  "http session", whose http endpoints passed: whoever answered the cleartext leg
+  chose the `apiUrl`, and the next call carried the credentials there. The session
+  fetch now refuses any hop onto a weaker channel than the one asked for
+  (`InsecureEndpointError`); loopback stays allowed, as it is for endpoints.
+- **The device-flow poll skipped the token endpoint's protections.** Every other
+  token request is https-only and never follows a redirect. `poll_device_flow` did
+  neither, so the device code - which redeems the grant once the user approves -
+  could travel in cleartext or be re-posted to wherever a 307 pointed. It now takes
+  the same precautions.
+- **The event-stream bound could be walked around.** The per-event cap counted each
+  `data:` value but not the newline joining it to the next, so an endless run of
+  bare `data` lines grew memory at a tally of zero. A line now costs its value plus
+  its newline, which is exactly what the spec's data buffer holds.
+
+### Fixed
+
+- **A `/set` answered with `null` came back as a failure.** RFC 8620 §5.3 makes
+  `created`, `updated`, `destroyed` and the three `not*` maps nullable - null when
+  that category is empty - and §5.4 and §6.3 say the same for `/copy` and
+  `Blob/copy`. The response models refused null, so a conformant server's answer
+  to a write that had succeeded became `MethodError("malformedResult")`, inviting
+  the caller to make it again. Null now reads as empty.
+- **`catch_up()` could lose changes.** It moved the stored cursor page by page,
+  before handing anything over, so a failure on page N discarded pages 1 to N-1
+  while recording them as delivered: the retry resumed after them. The cursor now
+  moves once, after the last page has arrived. `pages()` is unchanged and still
+  delivers at least once, page by page; the README and the sync guide now say
+  which of the two you get.
+- **Refreshing an OAuth token could destroy the grant.** When the authorization
+  server does not rotate refresh tokens - RFC 6749 §6 leaves that optional -
+  `refresh()` returned none, `OAuth2Auth` persisted that, and the next refresh
+  presented nothing and failed with `invalid_grant`. The token presented is now
+  carried forward.
+- **A split batch lost its creation references.** Every request was planned up
+  front with only the caller's seed, so a batch split under `maxCallsInRequest`
+  never passed later requests the ids the server assigned while answering earlier
+  ones, and a `#creationId` there resolved to nothing. Each request now carries
+  every creation id learnt so far.
+- **A back-referenced `ifInState` made a retry unsafe.** It counted as a guard, but
+  a retry re-resolves it against the state the first, already-applied attempt
+  produced, so it always matched and a timed-out write could land twice. Only a
+  literal state guards a retry now; a batch without one is not re-sent after a
+  timeout.
+
+### Added
+
+- `Batch.requests()`, which yields a batch's requests one at a time, each carrying
+  the creation ids learnt so far - the lazy form of `plan()` that both clients now
+  send from.
+- `jmap.core.session.check_session_redirects()`, the redirect half of the endpoint
+  downgrade check, and a `message` argument on `InsecureEndpointError`.
+
+### Changed
+
+- **Releases run the whole CI gate first.** The release workflow checked only
+  `pytest`, which is how 1.1.0 was published from a commit whose CI was red on
+  formatting and coverage. It now calls the CI workflow - lint, both type checkers,
+  every Python with its 100% coverage floor, and the live Stalwart suite - and
+  builds only once that passes.
+- **The deep-nesting tests stopped assuming how deep the interpreter can parse.**
+  Python 3.14 bounds recursion by the stack actually in use, so on a runner with a
+  large stack a 100,000-deep document parses where it used to overflow, and CI's
+  3.14.7 job failed on exactly that. The contract - a typed `NestingLimitError`,
+  never a raw `RecursionError` - is now tested directly, on every interpreter.
+
 ## 1.1.0
 
 ### Security
