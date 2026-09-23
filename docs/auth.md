@@ -159,6 +159,10 @@ jmap = JMAPClient.connect(
 )
 ```
 
+`oauth` and the JMAP connection may share one `httpx.Client`: the OAuth requests
+never carry the client's credential, so the JMAP token goes nowhere near an
+authorization server.
+
 ## Scopes
 
 A token can be valid and still insufficient. When a server answers with a

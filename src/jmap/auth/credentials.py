@@ -189,6 +189,10 @@ class OAuth2Auth(JMAPAuth):
         self._store = store
         self._generation = 0
         self._lock = threading.Lock()
+        #: The thread running a refresh, while one runs. A request it sends
+        #: through this same credential and gets a 401 back would otherwise
+        #: wait on the lock that thread holds, forever.
+        self._refreshing: int | None = None
 
     @property
     def token(self) -> OAuth2Token:
@@ -238,12 +242,22 @@ class OAuth2Auth(JMAPAuth):
         refresh = self._refresh
         if refresh is None:  # pragma: no cover - _should_retry already ruled this out
             return False
+        if self._refreshing == threading.get_ident():
+            raise AuthenticationError(
+                "the refresh callable sent a request authenticated by the token it is "
+                "replacing, and that was refused too; a refresh cannot wait on itself, so "
+                "give the callable a client that does not carry this credential"
+            )
         with self._lock:
             if self._generation != seen_generation:
                 # Someone else refreshed while we waited for the lock; their
                 # token is already newer than the one that just failed.
                 return True
-            self._apply_token(refresh(self._token))
+            self._refreshing = threading.get_ident()
+            try:
+                self._apply_token(refresh(self._token))
+            finally:
+                self._refreshing = None
             return True
 
     def sync_auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:

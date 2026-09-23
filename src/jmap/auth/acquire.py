@@ -326,16 +326,14 @@ class OAuthClient:
         endpoint = _require_https(
             self.metadata.require("registration_endpoint"), purpose="the registration endpoint"
         )
-        response = self._http.post(
+        response = self._post(
             endpoint,
-            follow_redirects=False,
             json=registration_body(
                 client_name=client_name,
                 redirect_uris=redirect_uris,
                 grant_types=grant_types,
                 scope=scope,
             ),
-            headers={"Accept": "application/json"},
         )
         registered = RegisteredClient.of(_json_body(response))
         self.client_id = registered.client_id
@@ -420,11 +418,8 @@ class OAuthClient:
             self.metadata.require("device_authorization_endpoint"),
             purpose="the device authorization endpoint",
         )
-        response = self._http.post(
-            endpoint,
-            follow_redirects=False,
-            data=device_authorization_body(client_id=self.client_id, scope=scope),
-            headers={"Accept": "application/json"},
+        response = self._post(
+            endpoint, form=device_authorization_body(client_id=self.client_id, scope=scope)
         )
         return DeviceAuthorization.of(_json_body(response))
 
@@ -448,12 +443,7 @@ class OAuthClient:
             deadline = time.monotonic() + authorization.expires_in
         body = device_token_body(device_code=authorization.device_code, client_id=self.client_id)
         while True:
-            response = self._http.post(
-                endpoint,
-                follow_redirects=False,
-                data=body,
-                headers={"Accept": "application/json"},
-            )
+            response = self._post(endpoint, form=body)
             result = classify_poll(
                 response.status_code, _json_body(response, strict=False), interval=interval
             )
@@ -512,15 +502,31 @@ class OAuthClient:
         endpoint = _require_https(
             self.metadata.require("token_endpoint"), purpose="the token endpoint"
         )
-        # No redirects: a 307/308 would re-send the form body - code, verifier,
-        # refresh token, client secret - to wherever the Location header points.
-        response = self._http.post(
+        return _as_token(_json_body(self._post(endpoint, form=body)))
+
+    def _post(
+        self, endpoint: str, *, form: Mapping[str, str] | None = None, json: Any = None
+    ) -> httpx.Response:
+        """POST to an OAuth endpoint, the way every one of them is reached.
+
+        Without the borrowed client's credential: that client may be the one
+        that authenticates to the JMAP server, whose secret has no business at
+        a host the server's metadata chose - and a Bearer 401 from one landed
+        in the refresh that sent the request, on the thread holding its lock.
+        Without redirects: a 307/308 would re-send the body - code, verifier,
+        refresh token, client secret - to wherever the Location header points.
+        """
+        # `request` rather than `post`, whose signature leaves out the None
+        # that turns the client's auth off.
+        return self._http.request(
+            "POST",
             endpoint,
+            data=form,
+            json=json,
+            auth=None,
             follow_redirects=False,
-            data=dict(body),
             headers={"Accept": "application/json"},
         )
-        return _as_token(_json_body(response))
 
     def close(self) -> None:
         if self._owns_http:
@@ -549,8 +555,13 @@ def _as_token(document: Any) -> OAuth2Token:
 
 
 def _fetch_json(client: httpx.Client, url: str) -> Any:
+    """GET a discovery document, without the borrowed client's credential.
+
+    The documents live on hosts the server's metadata chose, and the reason
+    that keeps the credential off them is in :meth:`OAuthClient._post`.
+    """
     try:
-        response = client.get(url, headers={"Accept": "application/json"})
+        response = client.get(url, headers={"Accept": "application/json"}, auth=None)
     except httpx.HTTPError as exc:
         raise DiscoveryError(f"could not fetch {url}: {exc}") from exc
     if response.status_code >= httpx.codes.BAD_REQUEST:

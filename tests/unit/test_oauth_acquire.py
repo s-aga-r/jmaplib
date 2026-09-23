@@ -22,6 +22,7 @@ from jmap.auth.acquire import (
     loopback_receiver,
     protected_resource_url,
 )
+from jmap.auth.credentials import BasicAuth, OAuth2Auth, OAuth2Token
 from jmap.auth.flows import DeviceAuthorization, OAuthError, StateMismatchError
 from jmap.auth.metadata import AuthorizationServerMetadata, DiscoveryError, IssuerMismatchError
 
@@ -257,6 +258,80 @@ class TestDiscovery:
         # is the kind of thing nothing notices until a long-running process dies.
         with pytest.raises(DiscoveryError):
             OAuthClient.discover_from_issuer("https://127.0.0.1:1/nowhere", timeout=0.05)
+
+
+PRM_URL = "https://jmap.example.com/.well-known/oauth-protected-resource"
+
+
+class TestBorrowedClient:
+    """``http=`` may be the very client that authenticates to the JMAP server."""
+
+    def test_its_credential_reaches_no_oauth_host(self):
+        # These hosts are whichever the server's documents name, and the shared
+        # client's Basic password went to every one of them.
+        seen: list[str | None] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.headers.get("Authorization"))
+            answers: dict[str, Any] = {
+                "/.well-known/oauth-protected-resource": {
+                    "resource": "https://jmap.example.com",
+                    "authorization_servers": [ISSUER],
+                },
+                "/.well-known/oauth-authorization-server": SERVER_METADATA,
+                "/register": {"client_id": "assigned"},
+                "/device": {
+                    "device_code": "dc",
+                    "user_code": "u",
+                    "verification_uri": f"{ISSUER}/device",
+                    "interval": 0,
+                },
+            }
+            return httpx.Response(200, json=answers.get(request.url.path, {"access_token": "at"}))
+
+        shared = httpx.Client(
+            transport=httpx.MockTransport(handler), auth=BasicAuth("alice@example.com", "hunter2")
+        )
+        found = OAuthClient.discover(PRM_URL, http=shared)
+        with OAuthClient(found, client_id="c", http=shared) as client:
+            client.register("jmaplib test")
+            client.refresh("rt")
+            client.poll_device_flow(client.begin_device_flow())
+            client.exchange_code("code", redirect_uri="http://127.0.0.1:9/cb", verifier="v" * 43)
+        assert seen == [None] * 7
+
+    def test_refreshing_through_it_does_not_deadlock(self):
+        # docs/auth.md's wiring on one shared client. The refresh POST carried
+        # the stale bearer; a token endpoint answering that with a Bearer 401
+        # re-entered the refresh in progress, whose lock this very thread held.
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/token":
+                if "Authorization" in request.headers:
+                    return httpx.Response(
+                        401,
+                        headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
+                        json={"error": "invalid_client"},
+                    )
+                return httpx.Response(200, json={"access_token": "NEW", "refresh_token": "RT-2"})
+            if request.headers.get("Authorization") == "Bearer NEW":
+                return httpx.Response(200, json={})
+            return httpx.Response(401, headers={"WWW-Authenticate": 'Bearer error="invalid_token"'})
+
+        shared = httpx.Client(transport=httpx.MockTransport(handler))
+        client = OAuthClient(metadata(), client_id="c", http=shared)
+        shared.auth = OAuth2Auth(
+            OAuth2Token("STALE", refresh_token="RT-1"),
+            refresh=lambda current: client.refresh(current.refresh_token or ""),
+        )
+        statuses: list[int] = []
+        worker = threading.Thread(
+            target=lambda: statuses.append(shared.get("https://jmap.example.com/api").status_code),
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        assert statuses == [200]
 
 
 class TestAuthorizationCode:

@@ -23,6 +23,7 @@ from jmap.auth import (
     OAuth2Auth,
     OAuth2Token,
 )
+from jmap.core.errors import AuthenticationError
 
 STALWART_CHALLENGES = [
     ('Bearer realm="Stalwart Server", resource_metadata="/.well-known/oauth-protected-resource"'),
@@ -189,6 +190,45 @@ class TestOAuth2Refresh:
 
         assert order == ["refresh", "save:new"]
         assert auth.token.access_token == "new"
+
+    def test_a_refresh_that_reenters_its_own_credential_fails_rather_than_hangs(self):
+        # A refresh callable sending its request through a client carrying this
+        # same credential, and refused with a Bearer 401, landed back in the
+        # refresh in progress - waiting on the lock its own thread held.
+        reentered = {"yet": False}
+        clients: list[httpx.Client] = []
+
+        def refresh(_old: OAuth2Token) -> OAuth2Token:
+            if not reentered["yet"]:
+                reentered["yet"] = True
+                clients[0].get("https://as.example/token")
+            return OAuth2Token("new")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.headers["Authorization"] == "Bearer new":
+                return httpx.Response(200, json={})
+            return unauthorized()
+
+        auth = OAuth2Auth(OAuth2Token("old"), refresh=refresh)
+        clients.append(httpx.Client(transport=httpx.MockTransport(handler), auth=auth))
+        errors: list[BaseException] = []
+
+        def first() -> None:
+            try:
+                clients[0].get("https://x/")
+            except BaseException as exc:  # surfaced via `errors`, not swallowed
+                errors.append(exc)
+
+        worker = threading.Thread(target=first, daemon=True)
+        worker.start()
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+        [error] = errors
+        assert isinstance(error, AuthenticationError)
+        assert "refresh" in str(error)
+        # Nothing is left held: the next request refreshes and gets through.
+        assert clients[0].get("https://x/").status_code == 200
+        clients[0].close()
 
     def test_concurrent_401s_refresh_exactly_once(self):
         # Two threads race a 401. Fastmail revokes the whole grant if a rotated
