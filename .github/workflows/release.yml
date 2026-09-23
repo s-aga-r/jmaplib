@@ -10,7 +10,17 @@ permissions:
   contents: read
 
 jobs:
+  ci:
+    # The whole CI gate on the tagged commit: lint, formatting, both type
+    # checkers, every Python in the matrix with its 100% coverage floor, and the
+    # live Stalwart suite. The gate here used to be a bare `pytest`, which is how
+    # 1.1.0 was published from a commit whose CI was red - formatting and
+    # coverage failed, and `pytest` alone checks neither.
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
   build:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,9 +37,6 @@ jobs:
             exit 1
           fi
 
-      - run: uv sync --all-extras
-      - name: full test suite must pass before publishing
-        run: uv run pytest -m "not integration"
       - run: uv build
 
       - uses: actions/upload-artifact@v4
