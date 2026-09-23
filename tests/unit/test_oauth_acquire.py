@@ -9,7 +9,9 @@ redirect to an ephemeral port actually lands. Everything HTTP goes through
 from __future__ import annotations
 
 import json
+import socket
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +27,7 @@ from jmap.auth.acquire import (
     protected_resource_url,
 )
 from jmap.auth.credentials import BasicAuth, OAuth2Auth, OAuth2Token
-from jmap.auth.flows import DeviceAuthorization, OAuthError, StateMismatchError
+from jmap.auth.flows import DeviceAuthorization, OAuthError
 from jmap.auth.metadata import (
     AuthorizationServerMetadata,
     DiscoveryError,
@@ -135,6 +137,71 @@ class TestLoopbackReceiver:
             _get(f"{base}/favicon.ico")
             _get(f"{receiver.redirect_uri}?code=genuine&state=st")
             assert "genuine" in receiver.wait(timeout=5)
+
+    def test_once_the_state_is_known_nothing_else_takes_the_slot(self):
+        # A stray request for the registered path itself took the one-shot slot,
+        # and the genuine redirect behind it was turned away: the flow failed on
+        # a state mismatch it had no part in.
+        with loopback_receiver() as receiver:
+            receiver.expect_state("REAL")
+            assert b"failed" in _get(receiver.redirect_uri).content
+            _get(f"{receiver.redirect_uri}?code=stray&state=WRONG")
+            _get(f"{receiver.redirect_uri}?code=genuine&state=REAL")
+            assert receiver.wait(timeout=5).endswith("?code=genuine&state=REAL")
+
+    def test_a_capture_made_before_the_state_was_known_is_let_go(self):
+        with loopback_receiver() as receiver:
+            _get(f"{receiver.redirect_uri}?code=early&state=OLD")
+            receiver.expect_state("REAL")
+            with pytest.raises(RedirectTimeoutError):
+                receiver.wait(timeout=0.05)
+            _get(f"{receiver.redirect_uri}?code=genuine&state=REAL")
+            assert "genuine" in receiver.wait(timeout=5)
+
+    def test_a_capture_carrying_the_state_is_kept(self):
+        with loopback_receiver() as receiver:
+            _get(f"{receiver.redirect_uri}?code=quick&state=REAL")
+            receiver.expect_state("REAL")
+            assert "quick" in receiver.wait(timeout=5)
+
+    def test_an_idle_connection_does_not_block_the_redirect(self):
+        # Anything local can connect and send nothing. One listener thread sat
+        # reading that connection, and the redirect was never answered.
+        with loopback_receiver() as receiver:
+            idle = socket.create_connection((LOOPBACK_HOST, receiver.port))
+            try:
+                _get(f"{receiver.redirect_uri}?code=abc&state=xyz")
+                assert receiver.wait(timeout=5).endswith("?code=abc&state=xyz")
+            finally:
+                idle.close()
+
+    def test_closing_does_not_wait_for_an_idle_connection(self):
+        receiver = LoopbackReceiver()
+        receiver.__enter__()
+        idle = socket.create_connection((LOOPBACK_HOST, receiver.port))
+        try:
+            time.sleep(0.2)  # accepted, and its handler reading
+            closer = threading.Thread(target=receiver.__exit__, daemon=True)
+            closer.start()
+            closer.join(timeout=3)
+            assert not closer.is_alive()
+        finally:
+            idle.close()
+
+    def test_an_idle_connection_is_eventually_dropped(self, monkeypatch):
+        # A thread each keeps idle connections from blocking the redirect; a
+        # deadline keeps a pile of them from outliving the flow.
+        from jmap.auth.acquire import _RedirectHandler
+
+        assert _RedirectHandler.timeout is not None
+        monkeypatch.setattr(_RedirectHandler, "timeout", 0.2)
+        with loopback_receiver() as receiver:
+            idle = socket.create_connection((LOOPBACK_HOST, receiver.port))
+            idle.settimeout(5)
+            try:
+                assert idle.recv(1) == b""
+            finally:
+                idle.close()
 
 
 class TestDiscovery:
@@ -584,23 +651,79 @@ class TestAuthorizationCode:
         assert "Open this URL" in capsys.readouterr().out
 
     def test_a_forged_redirect_never_reaches_the_token_endpoint(self, monkeypatch):
-        # The state check happens before the code is looked at, so a redirect from
-        # someone else's flow costs nothing.
+        # The state is checked before the code is looked at, so a redirect from
+        # someone else's flow costs nothing - and no longer ends this one: the
+        # genuine redirect behind it still completes the flow.
+        router = Router()
+        router.add("/token", httpx.Response(200, json={"access_token": "at"}))
+
+        def fake_open(url: str) -> bool:
+            params = httpx.QueryParams(url.split("?", 1)[1])
+
+            def browse() -> None:
+                _get(f"{params['redirect_uri']}?code=forged&state=not-ours")
+                _get(f"{params['redirect_uri']}?code=genuine&state={params['state']}")
+
+            threading.Thread(target=browse, daemon=True).start()
+            return True
+
+        monkeypatch.setattr("webbrowser.open", fake_open)
+        with oauth(router) as client:
+            assert client.authorize(open_browser=True, timeout=5).access_token == "at"
+        [exchange] = [r for r in router.requests if r.url.path == "/token"]
+        assert dict(httpx.QueryParams(exchange.content.decode()))["code"] == "genuine"
+
+    def test_only_forged_redirects_time_the_flow_out(self, monkeypatch):
         router = Router()
 
         def fake_open(url: str) -> bool:
             params = httpx.QueryParams(url.split("?", 1)[1])
+            _get(f"{params['redirect_uri']}?code=forged&state=not-ours")
+            return True
+
+        monkeypatch.setattr("webbrowser.open", fake_open)
+        with oauth(router) as client, pytest.raises(RedirectTimeoutError):
+            client.authorize(open_browser=True, timeout=0.2)
+        assert router.requests == []
+
+    def test_an_idle_connection_does_not_hold_up_the_flow(self, monkeypatch):
+        # Anything local can open a connection to the listener and send nothing.
+        # A single-threaded listener then never read the redirect behind it,
+        # and authorize() hung for as long as that connection stayed open.
+        router = Router()
+        router.add("/token", httpx.Response(200, json={"access_token": "at"}))
+        idle: list[socket.socket] = []
+
+        def fake_open(url: str) -> bool:
+            params = httpx.QueryParams(url.split("?", 1)[1])
+            port = httpx.URL(params["redirect_uri"]).port
+            idle.append(socket.create_connection((LOOPBACK_HOST, port)))
             threading.Thread(
                 target=_get,
-                args=(f"{params['redirect_uri']}?code=abc&state=not-ours",),
+                args=(f"{params['redirect_uri']}?code=abc&state={params['state']}",),
                 daemon=True,
             ).start()
             return True
 
         monkeypatch.setattr("webbrowser.open", fake_open)
-        with oauth(router) as client, pytest.raises(StateMismatchError):
-            client.authorize(open_browser=True, timeout=5)
-        assert not any(r.url.path == "/token" for r in router.requests)
+        tokens: list[str] = []
+        with oauth(router) as client:
+            # On a thread, so a regression fails here rather than hanging: the
+            # idle connection is what kept the flow from ever returning.
+            worker = threading.Thread(
+                target=lambda: tokens.append(
+                    client.authorize(open_browser=True, timeout=5).access_token
+                ),
+                daemon=True,
+            )
+            worker.start()
+            worker.join(timeout=4)
+            held_up = worker.is_alive()
+            for connection in idle:
+                connection.close()
+            worker.join(timeout=10)
+        assert not held_up
+        assert tokens == ["at"]
 
 
 class TestRegistration:

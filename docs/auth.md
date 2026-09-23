@@ -146,7 +146,10 @@ yourself, use `authorization_url` and `exchange_code`.
 
 PKCE is always S256 - never `plain`, which offers no protection. The `state`
 parameter is verified on the way back, and a redirect that carries **no** state
-is rejected rather than accepted: a missing value is not a matching one.
+is rejected rather than accepted: a missing value is not a matching one. The
+listener itself takes only the redirect carrying the flow's `state`; anything else
+reaching the port is answered and ignored, so a stray request - from a web page
+probing loopback ports, say - cannot end the flow.
 
 ### Device flow
 

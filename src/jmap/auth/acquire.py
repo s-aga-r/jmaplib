@@ -16,20 +16,24 @@ means nothing outside this machine can reach the port. The port is ephemeral
 because §7.3 requires the authorization server to accept any port on a loopback
 redirect, which in turn means a client never has to reserve one.
 
-**The listener answers exactly one request and stops.** It exists for the seconds
-between opening a browser and the redirect arriving; leaving it up afterwards is a
-socket accepting unauthenticated requests for no reason.
+**The listener captures exactly one redirect and stops.** It exists for the
+seconds between opening a browser and the redirect arriving; leaving it up
+afterwards is a socket accepting unauthenticated requests for no reason. And
+anything local can reach it, so only the redirect carrying the flow's ``state``
+may be the one, and a connection that never sends a request holds up only its
+own thread.
 """
 
 from __future__ import annotations
 
 import http.server
 import re
+import secrets
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, cast
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 import httpx
 
@@ -132,12 +136,17 @@ class RedirectTimeoutError(OAuthError):
         )
 
 
-class _RedirectServer(http.server.HTTPServer):
+class _RedirectServer(http.server.ThreadingHTTPServer):
     """An HTTPServer carrying the slot its handler writes the redirect into.
 
     Subclassed rather than attribute-assigned so the handler's back-reference has
     a type: ``BaseHTTPRequestHandler.server`` is typed as the base class, and an
     ad-hoc attribute on it is invisible to a type checker.
+
+    Threaded because anything local can open a connection and send nothing. One
+    thread sat reading that connection, the redirect behind it was never
+    answered, and closing the listener waited on it too - for as long as the
+    connection stayed open.
     """
 
     holder: _Redirect
@@ -152,21 +161,21 @@ class _RedirectHandler(http.server.BaseHTTPRequestHandler):
     captured: str | None = None
     server_version = "jmaplib"
     sys_version = ""
+    #: Seconds a connection may take to send its request. A thread each keeps
+    #: idle connections from blocking the redirect; this keeps a pile of them
+    #: from outliving the flow.
+    timeout = 10.0
 
     def do_GET(self) -> None:
         server = cast("_RedirectServer", self.server)
-        holder = server.holder
         # Only the registered path may occupy the one capture slot. Anything can
         # reach a loopback port - a web page port-scanning 127.0.0.1, another
         # local process - and a stray request winning the slot would abort the
         # flow for the genuine redirect arriving a moment later.
-        if holder.url is None and self.path.split("?", 1)[0] == server.expected_path:
-            holder.url = self.path
-            holder.arrived.set()
-            body = _DONE_PAGE
-        else:
-            # A second request on a one-shot listener is not part of the flow.
-            body = _FAILED_PAGE
+        on_path = self.path.split("?", 1)[0] == server.expected_path
+        # Anything else - a second request, or one without the flow's state - is
+        # not part of the flow.
+        body = _DONE_PAGE if on_path and server.holder.offer(self.path) else _FAILED_PAGE
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -183,11 +192,38 @@ class _RedirectHandler(http.server.BaseHTTPRequestHandler):
 
 @dataclass(slots=True)
 class _Redirect:
-    url: str | None = None
-    arrived: threading.Event = None  # type: ignore[assignment]
+    """The one capture slot, shared by the handler threads and the waiting flow."""
 
-    def __post_init__(self) -> None:
-        self.arrived = threading.Event()
+    url: str | None = None
+    #: Once known, only a redirect carrying this ``state`` may take the slot.
+    state: str | None = None
+    arrived: threading.Event = field(default_factory=threading.Event)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def offer(self, path: str) -> bool:
+        """Capture ``path`` if the slot is free and it may be the redirect."""
+        with self._lock:
+            if self.url is not None or not self._may_be_the_redirect(path):
+                return False
+            self.url = path
+            self.arrived.set()
+            return True
+
+    def expect(self, state: str) -> None:
+        with self._lock:
+            self.state = state
+            if self.url is not None and not self._may_be_the_redirect(self.url):
+                # Taken before the flow had a state, so it was not the flow's.
+                self.url = None
+                self.arrived.clear()
+
+    def _may_be_the_redirect(self, path: str) -> bool:
+        if self.state is None:
+            return True
+        # Parsed as parse_redirect parses it, and compared in constant time as
+        # it compares.
+        received = dict(parse_qsl(urlsplit(path).query, keep_blank_values=True)).get("state", "")
+        return secrets.compare_digest(received.encode(), self.state.encode())
 
 
 class LoopbackReceiver:
@@ -224,6 +260,17 @@ class LoopbackReceiver:
         self._httpd.shutdown()
         self._httpd.server_close()
         self._thread.join(timeout=5)
+
+    def expect_state(self, state: str) -> None:
+        """Take only a redirect carrying ``state`` from here on.
+
+        A stray request for the redirect path took the one-shot slot and ended
+        the flow with a state mismatch the genuine redirect behind it had no part
+        in. Once the state is known nothing without it can take the slot, and a
+        capture already made without it is let go - so call this before the
+        browser is sent anywhere.
+        """
+        self._holder.expect(state)
 
     def wait(self, timeout: float = DEFAULT_REDIRECT_TIMEOUT) -> str:
         """Block until the redirect lands, returning its full URL."""
@@ -417,6 +464,7 @@ class OAuthClient:
             url, pkce, state = self.authorization_url(
                 receiver.redirect_uri, scope=scope, extra=extra
             )
+            receiver.expect_state(state)
             if open_browser:
                 import webbrowser
 
