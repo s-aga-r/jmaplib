@@ -420,10 +420,16 @@ class OAuthClient:
         hidden in this object.
         """
         self.metadata.check_pkce()
+        # The one URL handed to a browser - to os.startfile on Windows and
+        # xdg-open elsewhere, where a file: or ms-msdt: URL is no login page. And
+        # a cleartext one is a login page anyone on the path can serve.
+        endpoint = _require_https(
+            self.metadata.require("authorization_endpoint"), purpose="the authorization endpoint"
+        )
         pkce = PKCEPair.generate()
         state = new_state()
         request = AuthorizationRequest(
-            authorization_endpoint=self.metadata.require("authorization_endpoint"),
+            authorization_endpoint=endpoint,
             client_id=self.client_id,
             redirect_uri=redirect_uri,
             pkce=pkce,

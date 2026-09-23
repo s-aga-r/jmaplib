@@ -725,6 +725,42 @@ class TestAuthorizationCode:
         assert not held_up
         assert tokens == ["at"]
 
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "http://login.example.com/authorize",
+            "file:///etc/passwd",
+            "ms-msdt:/id PCWDiagnostic",
+            "javascript:alert(1)",
+        ],
+    )
+    def test_the_authorization_endpoint_must_be_https(self, monkeypatch, endpoint):
+        # The one URL handed to webbrowser.open - which is os.startfile on
+        # Windows and xdg-open elsewhere, so a file: or ms-msdt: URL there is
+        # not a login page. And over cleartext, the login page itself is not
+        # the server's.
+        opened: list[str] = []
+        monkeypatch.setattr("webbrowser.open", opened.append)
+        router = Router()
+        with (
+            OAuthClient(
+                metadata(authorization_endpoint=endpoint), client_id="c", http=router.client()
+            ) as client,
+            pytest.raises(DiscoveryError, match="authorization endpoint must be https"),
+        ):
+            client.authorize(open_browser=True, timeout=0.05)
+        assert opened == []
+
+    def test_a_loopback_authorization_endpoint_stays_usable(self):
+        router = Router()
+        with OAuthClient(
+            metadata(authorization_endpoint="http://127.0.0.1:8080/authorize"),
+            client_id="c",
+            http=router.client(),
+        ) as client:
+            url, _, _ = client.authorization_url("http://127.0.0.1:9/callback")
+        assert url.startswith("http://127.0.0.1:8080/authorize?")
+
 
 class TestRegistration:
     def test_a_client_registers_as_public(self):
