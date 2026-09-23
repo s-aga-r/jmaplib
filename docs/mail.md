@@ -62,9 +62,10 @@ including body structure; naming properties keeps the response small. The
 library folds the property names into `using` derivation, so a property that a
 capability adds pulls that capability in automatically.
 
-Sorting is checked against the server's advertised `emailQuerySortOptions`
-before the request goes out, so an unsupported comparator raises
-`CapabilityFieldError` naming what the server does support.
+Sorting is *not* checked against the server's advertised
+`emailQuerySortOptions`: an unsupported comparator comes back as an
+`unsupportedSort` method error. The list is on the mail capability if you want
+to check first.
 
 ### Paginating
 
@@ -222,8 +223,11 @@ per-recipient results once the server has them.
 
 ### Delayed send
 
-If the server advertises `maxDelayedSend`, an `EmailSubmission` may carry a
-`sendAt`. The value is checked against that limit locally:
+If the server advertises a non-zero `maxDelayedSend`, a submission can ask to be
+held with the SMTP `HOLDFOR` or `HOLDUNTIL` parameter on `mailFrom` (RFC 4865,
+FUTURERELEASE), for up to that many seconds; the server reports the release time
+as the submission's `sendAt`. The delay is not checked against `maxDelayedSend`
+locally - a longer one is the server's to refuse:
 
 ```python
 batch.submission.email_submission.set(

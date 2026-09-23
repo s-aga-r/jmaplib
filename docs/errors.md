@@ -117,7 +117,7 @@ server's own response would not.
 |---|---|
 | Method no advertised capability provides | `UnsupportedMethodError` |
 | Capability needed but not advertised | `CapabilityNotSupportedError` |
-| A capability field forbids it (sort, digest, size, depth…) | `CapabilityFieldError` |
+| A capability field forbids it (digest, lookup type, blob size…) | `CapabilityFieldError` |
 | Mutation aimed at a read-only account | `ReadOnlyAccountError` |
 | No `accountId` and none resolvable | `NoAccountError` |
 | Requesting a property the server never returns | `CapabilityFieldError` |

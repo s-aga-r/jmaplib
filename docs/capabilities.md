@@ -92,7 +92,7 @@ It matters for *values*, too, and more sharply. A real Stalwart leaves most of
 its capability objects empty at session level and puts every actual limit under
 `accountCapabilities`. Read the session-level copy and `maxDelayedSend`,
 `forbiddenNameChars` and `supportedDigestAlgorithms` all come back absent - so
-every check built on them silently stops checking.
+any check built on them silently stops checking.
 
 The library resolves the account for you. If you read a capability value
 yourself, resolve it the same way:
@@ -111,24 +111,36 @@ implies. Both are the server's own statements.
 
 ## Fields gate behaviour, not just presence
 
-A capability object carries limits, and this library enforces them locally
-rather than letting you discover them from an error. Each raises
-`CapabilityFieldError` naming the advertised value:
+A capability object carries limits, and some of them this library enforces
+locally rather than letting you discover them from an error. Each check raises
+`CapabilityFieldError` naming the advertised value. These run on their own:
 
 | Field | Checked before |
 |---|---|
-| `emailQuerySortOptions` | sorting an `Email/query` |
-| `collationAlgorithms` | using a collation |
-| `supportedDigestAlgorithms` | requesting `digest:<alg>` |
-| `supportedTypeNames` | naming types in `Blob/lookup` |
-| `maxDelayedSend` | a delayed `EmailSubmission` |
-| `maxSizeUpload` | uploading |
+| `maxSizeUpload` | `client.upload` |
 | `maxObjectsInSet` | an oversized `/set` |
-| `forbiddenNameChars`, `maxFileNodeDepth` | naming a `FileNode` |
-| `maxExpandedQueryDuration` | expanding a calendar query |
+| `supportedDigestAlgorithms` | requesting `digest:<alg>` through `batch.core.blob.get` |
+| `supportedTypeNames` | naming types in `batch.core.blob.lookup` |
+| `maxDataSources`, `maxSizeBlobSet` | creating a blob with `batch.core.blob.upload` |
 
-This is a real round trip saved, but more importantly it is a better error: the
-exception names the field and the value the server advertised, which a
+The blob checks live in those builders; a call queued with `batch.add` goes out
+unchecked. Others are functions for you to call before queueing the request -
+nothing calls them for you:
+
+| Field | Function |
+|---|---|
+| `collationAlgorithms` | `jmap.core.limits.check_collation` |
+| `forbiddenNameChars`, `forbiddenNodeNames`, `maxSizeFileNodeName` | `jmap.capabilities.files.check_node_name` |
+| `maxFileNodeDepth` | `jmap.capabilities.files.check_depth` |
+| `fileNodeQuerySortOptions` | `jmap.capabilities.files.check_sort` |
+| `maxExpandedQueryDuration` | `jmap.capabilities.calendars.check_expand_window` |
+| `maxAvailabilityDuration` | `jmap.capabilities.calendars.check_availability_window` |
+
+`emailQuerySortOptions` and `maxDelayedSend` are not checked at all; read them
+from the capability when you need them.
+
+A check is a real round trip saved, but more importantly it is a better error:
+the exception names the field and the value the server advertised, which a
 `invalidArguments` response does not.
 
 ## `using` is derived, then intersected
