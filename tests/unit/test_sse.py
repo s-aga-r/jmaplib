@@ -232,6 +232,17 @@ class TestHostileStreams:
         with pytest.raises(EventOverflowError):
             self._flood(parser, "data: " + "x" * (1 << 20) + "\n")
 
+    def test_empty_data_lines_count_toward_the_cap(self, monkeypatch):
+        # Each data line adds its value *and* the newline that joins it to the
+        # next. Counting only the value let an endless run of bare `data` lines
+        # grow _data forever at a tally of zero, behind a bound that looked
+        # enforced. The cap is lowered so the flood is small enough to be quick,
+        # and each chunk stays well under it so only accumulation can trip it.
+        monkeypatch.setattr("jmap.push.sse.MAX_EVENT_CHARS", 1_000)
+        parser = SSEParser()
+        with pytest.raises(EventOverflowError):
+            self._flood(parser, "data\n" * 100)
+
     def test_a_unicode_digit_retry_is_ignored_not_fatal(self):
         # '²'.isdigit() is true but int('²') raises; the crash would kill the
         # listener, so the field is ignored instead.

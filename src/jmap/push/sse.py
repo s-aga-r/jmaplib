@@ -175,7 +175,10 @@ class SSEParser:
             self._event_type = value
         elif name == "data":
             self._data.append(value)
-            self._data_chars += len(value)
+            # The value plus the newline that joins it to the next, which is what
+            # the spec's data buffer holds. Counting the value alone let endless
+            # bare `data` lines grow this list at a tally of zero.
+            self._data_chars += len(value) + 1
         elif name == "id" and _NUL not in value:
             self._last_id_is(value)
         elif name == "retry" and _is_ascii_digits(value):
