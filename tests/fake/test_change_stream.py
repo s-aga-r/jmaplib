@@ -331,3 +331,28 @@ class TestStuckStream:
             stream.seed("s0")
             with pytest.raises(StuckChangeStreamError):
                 stream.catch_up()
+
+    @pytest.mark.parametrize("consume", ["catch_up", "pages"])
+    def test_a_cursor_cycling_between_states_is_refused(self, consume):
+        # s1 -> s2 -> s1 moves on every page, so it passed a check that only
+        # compared each page with the one before - and looped forever, with
+        # catch_up() keeping every page. Returning to any state already visited
+        # is the loop, whatever its length.
+        fake = server()
+        calls = {"n": 0}
+
+        def cycling(arguments: dict[str, Any], _srv: FakeJMAPServer) -> dict[str, Any]:
+            calls["n"] += 1
+            if calls["n"] > 20:  # a valve, so a regression fails instead of hanging
+                return page(newState="done")
+            following = "s2" if arguments["sinceState"] == "s1" else "s1"
+            return page(newState=following, created=["m1"], hasMoreChanges=True)
+
+        fake.handle("Email/changes", cycling)
+        with connect(fake) as client:
+            stream = ChangeStream(client, "Email")
+            stream.seed("s1")
+            walk = stream.catch_up if consume == "catch_up" else lambda: list(stream.pages())
+            with pytest.raises(StuckChangeStreamError, match="s1"):
+                walk()
+        assert calls["n"] == 2

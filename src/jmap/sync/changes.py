@@ -36,10 +36,11 @@ CANNOT_CALCULATE_CHANGES = "cannotCalculateChanges"
 
 
 class StuckChangeStreamError(JMAPError):
-    """The server claims more changes but its state cursor is not moving.
+    """The server claims more changes but its state cursor is going round in circles.
 
     RFC 8620 §5.2 requires ``newState`` to differ from ``sinceState`` whenever
-    ``hasMoreChanges`` is true. A server violating that would loop
+    ``hasMoreChanges`` is true. A server that stays put, or moves back to any
+    state the walk has already resumed from, would loop
     :meth:`ChangeStream.pages` forever - and :meth:`ChangeStream.catch_up`
     accumulates every page, so the loop is also unbounded memory.
     """
@@ -48,8 +49,9 @@ class StuckChangeStreamError(JMAPError):
         self.type_name = type_name
         self.state = state
         super().__init__(
-            f"{type_name}/changes reported hasMoreChanges without advancing from "
-            f"state {state!r}; following it would loop forever"
+            f"{type_name}/changes reported hasMoreChanges while leading back to state "
+            f"{state!r}, which this walk had already resumed from; following it would "
+            f"loop forever"
         )
 
 
@@ -178,13 +180,14 @@ class ChangeStream:
         process each page as it arrives instead of holding every id in memory.
         """
         since = self._cursor()
+        visited = {since}
         while True:
             response = self._fetch(since, max_changes)
             yield response
             # Only reached when the consumer asks for another page, which is what
             # makes delivery at-least-once: abandoning the iterator here leaves
             # the cursor where it was, and this page arrives again next time.
-            since = self._advance(response, since)
+            since = self._advance(response, since, visited)
             self._store.set(self._key, since)
             if not response.has_more_changes:
                 return
@@ -205,10 +208,11 @@ class ChangeStream:
         """
         changes = ChangeSet(self._type_name)
         since = self._cursor()
+        visited = {since}
         while True:
             response = self._fetch(since, max_changes)
             changes.absorb(response)
-            since = self._advance(response, since)
+            since = self._advance(response, since, visited)
             if not response.has_more_changes:
                 break
         self._store.set(self._key, since)
@@ -220,13 +224,18 @@ class ChangeStream:
             raise ResyncRequiredError(self._type_name, "")
         return since
 
-    def _advance(self, response: ChangesResponse, since: str) -> str:
-        """The state to resume from after ``response``."""
+    def _advance(self, response: ChangesResponse, since: str, visited: set[str]) -> str:
+        """The state to resume from after ``response``.
+
+        ``visited`` is every state this walk has resumed from. §5.2 requires
+        newState to move when hasMoreChanges is true, and moving back to *any*
+        of them is the same infinite loop as not moving at all - comparing only
+        with the previous page let ``s1 -> s2 -> s1`` run forever.
+        """
         advanced = response.new_state or since
-        if response.has_more_changes and advanced == since:
-            # §5.2 requires newState to move when hasMoreChanges is true;
-            # following a stuck cursor is an infinite request loop.
-            raise StuckChangeStreamError(self._type_name, since)
+        if response.has_more_changes and advanced in visited:
+            raise StuckChangeStreamError(self._type_name, advanced)
+        visited.add(advanced)
         return advanced
 
     def _fetch(self, since: str, max_changes: int | None) -> ChangesResponse:
