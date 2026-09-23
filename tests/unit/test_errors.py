@@ -7,8 +7,13 @@ set errors kill one object inside one call.
 
 from __future__ import annotations
 
+import importlib
+import inspect
+import pkgutil
+
 import pytest
 
+import jmap
 from jmap.core.errors import (
     URN_LIMIT,
     URN_UNKNOWN_CAPABILITY,
@@ -53,6 +58,56 @@ class TestHierarchy:
         # /set routinely half-succeeds; raising would discard the objects that
         # did change.
         assert not issubclass(SetError, Exception)
+
+
+def library_exceptions() -> dict[str, type[BaseException]]:
+    """Every exception class any module of the library defines."""
+    found: dict[str, type[BaseException]] = {}
+    for info in pkgutil.walk_packages(jmap.__path__, "jmap."):
+        for value in vars(importlib.import_module(info.name)).values():
+            if (
+                inspect.isclass(value)
+                and issubclass(value, BaseException)
+                and value.__module__.startswith("jmap")
+            ):
+                found[f"{value.__module__}.{value.__qualname__}"] = value
+    return found
+
+
+class TestOneExceptCatchesEverything:
+    """docs/errors.md promises one ``except JMAPError`` for the whole library."""
+
+    def test_every_exception_the_library_defines_is_a_jmap_error(self):
+        # 24 did not inherit from it - the I-JSON, template, patch and id errors
+        # among them - so the promised `except` let them all through.
+        strays = sorted(
+            name for name, cls in library_exceptions().items() if not issubclass(cls, JMAPError)
+        )
+        assert strays == []
+
+    def test_the_value_errors_are_still_value_errors(self):
+        # The base was added, not swapped: an `except ValueError` written
+        # against an earlier release still catches every one of them.
+        was_value_error = {
+            "jmap.auth.pkce.InvalidVerifierError",
+            "jmap.capabilities.registry.ConflictingMethodError",
+            "jmap.capabilities.registry.DuplicateCapabilityError",
+            "jmap.core.ids.InvalidIdError",
+            "jmap.core.ijson.IJSONError",
+            "jmap.core.limits.InvalidChunkSizeError",
+            "jmap.core.patch.InvalidKeywordError",
+            "jmap.core.patch.InvalidPatchError",
+            "jmap.core.pointer.PointerError",
+            "jmap.core.request.InvalidReferenceError",
+            "jmap.core.response.MalformedResponseError",
+            "jmap.core.uritemplate.TemplateError",
+            "jmap.models.calendars.InvalidRecurrenceIdError",
+            "jmap.models.mail.create.InvalidEmailCreateError",
+            "jmap.models.mail.headers.InvalidHeaderQueryError",
+        }
+        found = library_exceptions()
+        assert was_value_error <= set(found)
+        assert all(issubclass(found[name], ValueError) for name in was_value_error)
 
 
 class TestAuthenticationError:

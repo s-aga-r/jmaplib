@@ -49,7 +49,7 @@ from typing import (
     cast,
 )
 
-from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler
+from pydantic import BaseModel, ConfigDict, GetCoreSchemaHandler, ValidationError
 from pydantic.alias_generators import to_camel
 from pydantic_core import core_schema
 
@@ -63,9 +63,23 @@ __all__ = [
     "Unset",
     "UnsetType",
     "omit_unset",
+    "validation_summary",
 ]
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+
+def validation_summary(error: ValidationError) -> str:
+    """One line saying where a payload went wrong and how.
+
+    For wrapping a pydantic failure in one of this library's errors, whose
+    message should fit on a line: pydantic's own rendering runs to a paragraph
+    per field, with a documentation link in each.
+    """
+    first = error.errors()[0]
+    where = ".".join(str(part) for part in first["loc"]) or "the top level"
+    others = error.error_count() - 1
+    return f"{where}: {first['msg']}" + (f" (and {others} more)" if others else "")
 
 
 class JMAPModel(BaseModel):

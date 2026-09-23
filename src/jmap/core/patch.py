@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Self
 
+from jmap.core.errors import JMAPError
 from jmap.core.ids import parse_id
 from jmap.core.pointer import escape_token, split_pointer
 
@@ -86,7 +87,7 @@ JSCALENDAR_10: Final = DialectRules("JSCalendar 1.0")
 JSCALENDAR_20: Final = DialectRules("JSCalendar 2.0", allow_array_index=True)
 
 
-class InvalidPatchError(ValueError):
+class InvalidPatchError(JMAPError, ValueError):
     """A patch the server would reject with :data:`INVALID_PATCH`.
 
     ``keys`` holds every key implicated: one for a malformed pointer, two for an
@@ -100,7 +101,7 @@ class InvalidPatchError(ValueError):
         super().__init__(f"invalid patch key {listed}: {reason}")
 
 
-class InvalidKeywordError(ValueError):
+class InvalidKeywordError(JMAPError, ValueError):
     """A string was used as an IMAP keyword but cannot be one (RFC 8621 §4.1.1)."""
 
     def __init__(self, keyword: str, reason: str) -> None:

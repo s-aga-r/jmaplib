@@ -31,10 +31,13 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Self
 
+from pydantic import ValidationError
+
 from jmap.core.errors import JMAPError
 from jmap.core.ijson import loads
 from jmap.core.narrow import as_object, is_object
 from jmap.core.uritemplate import expand
+from jmap.models.base import validation_summary
 from jmap.models.push import StateChange
 from jmap.push.sse import DEFAULT_EVENT_TYPE, SSEParser
 
@@ -137,7 +140,12 @@ def parse_event(event_type: str, data: str) -> StateChange | Ping | None:
     dies on an unknown event cannot be extended without breaking it.
     """
     if event_type == EVENT_STATE:
-        return StateChange.model_validate(_json_object(data))
+        try:
+            return StateChange.model_validate(_json_object(data))
+        except ValidationError as exc:
+            raise EventSourceError(
+                f"state event is not a StateChange: {validation_summary(exc)}"
+            ) from exc
     if event_type == EVENT_PING:
         payload = _json_object(data)
         interval = payload.get("interval")

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from jmap.core.errors import MethodError, ServerPartialFailError
+from jmap.core.errors import JMAPError, MethodError, ServerPartialFailError
 from jmap.core.ids import Id
 from jmap.core.invocation import ParsedInvocation
 from jmap.core.narrow import as_list, as_object, is_list, is_object
@@ -91,8 +91,12 @@ class Response:
                     f"createdIds[{key!r}] must be a string id, got {type(value).__name__}"
                 )
             created_ids[str(key)] = Id(value)
+        try:
+            invocations = [ParsedInvocation.from_wire(triple) for triple in triples]
+        except ValueError as exc:
+            raise MalformedResponseError(str(exc)) from exc
         return cls(
-            [ParsedInvocation.from_wire(triple) for triple in triples],
+            invocations,
             created_ids=created_ids,
             session_state=str(data.get("sessionState", "")),
         )
@@ -102,8 +106,12 @@ class Response:
         return f"Response({names}, sessionState={self.session_state!r})"
 
 
-class MalformedResponseError(ValueError):
-    """The body parsed as JSON but is not a JMAP Response."""
+class MalformedResponseError(JMAPError, ValueError):
+    """The server's answer parsed as JSON but is not the shape JMAP requires.
+
+    A Response without its ``methodResponses`` array, an upload result with a
+    string for its size, a blob whose base64 does not decode.
+    """
 
 
 def _to_method_error(invocation: ParsedInvocation) -> MethodError:

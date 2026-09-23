@@ -28,6 +28,8 @@ import secrets
 from dataclasses import dataclass
 from typing import Final
 
+from jmap.core.errors import JMAPError
+
 #: RFC 7636 §4.1 bounds the verifier at 43-128 characters of the unreserved set.
 #: 32 random bytes base64url-encode to exactly 43, the minimum, which is also
 #: where the entropy stops mattering: 256 bits.
@@ -40,7 +42,7 @@ MAX_VERIFIER_LENGTH: Final = 128
 METHOD_S256: Final = "S256"
 
 
-class InvalidVerifierError(ValueError):
+class InvalidVerifierError(JMAPError, ValueError):
     """A code verifier outside RFC 7636 §4.1's bounds."""
 
     def __init__(self, length: int) -> None:

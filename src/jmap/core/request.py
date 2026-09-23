@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
-from jmap.core.errors import BatchTooLargeError
+from jmap.core.errors import BatchTooLargeError, JMAPError
 
 if TYPE_CHECKING:
     from jmap.core.ids import Id
@@ -43,7 +43,7 @@ UsingResolver = Callable[[Sequence[str], frozenset[str]], frozenset[str]]
 CORE_URN = "urn:ietf:params:jmap:core"
 
 
-class InvalidReferenceError(ValueError):
+class InvalidReferenceError(JMAPError, ValueError):
     """A back-reference targets a call that cannot satisfy it."""
 
     def __init__(self, source_id: str, argument: str, reason: str) -> None:

@@ -28,6 +28,7 @@ from typing import Any, Self
 
 from pydantic import Field, field_validator, model_validator
 
+from jmap.core.response import MalformedResponseError
 from jmap.models.base import JMAPModel
 
 #: The three mutually exclusive octet sources of a DataSourceObject (§4.1).
@@ -169,7 +170,9 @@ class Blob(JMAPModel):
             try:
                 return base64.b64decode(self.as_base64, validate=True)
             except ValueError as exc:  # binascii.Error is a ValueError subclass
-                raise ValueError(f"blob {self.id!r} returned undecodable base64") from exc
+                raise MalformedResponseError(
+                    f"blob {self.id!r} returned undecodable base64"
+                ) from exc
         if self.as_text is not None:
             return self.as_text.encode()
         return None

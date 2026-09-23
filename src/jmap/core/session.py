@@ -63,8 +63,12 @@ class InsecureEndpointError(JMAPError):
         )
 
 
-def _malformed(field: str, value: Any) -> ValueError:
-    return ValueError(
+class MalformedSessionError(JMAPError, ValueError):
+    """The session document is not the shape RFC 8620 requires."""
+
+
+def _malformed(field: str, value: Any) -> MalformedSessionError:
+    return MalformedSessionError(
         f"the session document's {field!r} is not the shape RFC 8620 requires: "
         f"got {type(value).__name__}"
     )

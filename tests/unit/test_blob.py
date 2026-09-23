@@ -20,6 +20,7 @@ from jmap.capabilities.blob import (
 from jmap.capabilities.core import BLOB as CORE_BLOB
 from jmap.capabilities.core import CORE
 from jmap.core.errors import CapabilityFieldError
+from jmap.core.response import MalformedResponseError
 from jmap.models.blob import (
     Blob,
     BlobCopyResponse,
@@ -126,8 +127,10 @@ class TestBlobModel:
         assert Blob.from_wire({"data:asText": ""}).data == b""
 
     def test_undecodable_base64_raises_rather_than_returning_garbage(self):
+        # As a MalformedResponseError: the server sent it, and a plain
+        # ValueError got past the `except JMAPError` the docs promise.
         blob = Blob.from_wire({"id": "G1", "data:asBase64": "not base64!!"})
-        with pytest.raises(ValueError, match="undecodable base64"):
+        with pytest.raises(MalformedResponseError, match="undecodable base64"):
             _ = blob.data
 
     def test_a_digest_is_read_by_its_exact_property_name(self):

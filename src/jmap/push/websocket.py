@@ -30,10 +30,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from jmap.core.errors import JMAPError, RequestError
 from jmap.core.ijson import dumps, loads
 from jmap.core.narrow import as_object, is_object
 from jmap.core.response import Response
+from jmap.models.base import validation_summary
 from jmap.models.push import (
     TYPE_PUSH_DISABLE,
     TYPE_PUSH_ENABLE,
@@ -166,16 +169,28 @@ class WebSocketProtocol:
         Raises :class:`WebSocketProtocolError` for anything the subprotocol does
         not allow, which §4.3.1 lets a client answer with a 1007 close.
         """
-        decoded = loads(text)
+        try:
+            decoded = loads(text)
+        except ValueError as exc:
+            raise WebSocketProtocolError(f"a JMAP WebSocket message must be I-JSON: {exc}") from exc
         if not is_object(decoded):
             raise WebSocketProtocolError("a JMAP WebSocket message must be a JSON object")
         body = as_object(decoded)
         tag = body.get("@type")
 
         if tag == TYPE_RESPONSE:
-            return ResponseMessage(response=Response.from_wire(body), request_id=_identifier(body))
+            try:
+                response = Response.from_wire(body)
+            except ValueError as exc:
+                raise WebSocketProtocolError(f"a malformed Response: {exc}") from exc
+            return ResponseMessage(response=response, request_id=_identifier(body))
         if tag == TYPE_STATE_CHANGE:
-            change = StateChange.model_validate(body)
+            try:
+                change = StateChange.model_validate(body)
+            except ValidationError as exc:
+                raise WebSocketProtocolError(
+                    f"a malformed StateChange: {validation_summary(exc)}"
+                ) from exc
             if change.push_state is not None:
                 self.push_state = change.push_state
             return change

@@ -190,6 +190,21 @@ class TestDecoding:
         with pytest.raises(WebSocketProtocolError, match="JSON object"):
             WebSocketProtocol().decode("42")
 
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            "{",
+            '{"a": 1, "a": 2}',
+            '{"@type":"StateChange","changed":5}',
+            '{"@type":"Response","methodResponses":"none","sessionState":"s"}',
+        ],
+    )
+    def test_a_frame_the_subprotocol_cannot_carry_is_refused(self, frame):
+        # Each escaped as something else - a JSONDecodeError, a pydantic
+        # ValidationError - where the one error a 1007 close answers was due.
+        with pytest.raises(WebSocketProtocolError):
+            WebSocketProtocol().decode(frame)
+
 
 class TestConnectionRules:
     def test_the_subprotocol_name_is_the_one_the_rfc_registers(self):

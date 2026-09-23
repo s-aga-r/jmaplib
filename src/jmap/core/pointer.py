@@ -20,12 +20,13 @@ from __future__ import annotations
 
 from typing import Any, Final
 
+from jmap.core.errors import JMAPError
 from jmap.core.narrow import as_list, as_object, is_list, is_object
 
 WILDCARD: Final = "*"
 
 
-class PointerError(ValueError):
+class PointerError(JMAPError, ValueError):
     """A pointer is malformed, or does not resolve against the document."""
 
     def __init__(self, pointer: str, reason: str) -> None:

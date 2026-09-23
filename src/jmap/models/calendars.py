@@ -39,6 +39,7 @@ from typing import Any, Final
 
 from pydantic import Field
 
+from jmap.core.errors import JMAPError
 from jmap.models.base import JMAPModel
 
 #: draft-27 §5.11. ``expandRecurrences`` on a query whose window is too wide.
@@ -67,7 +68,7 @@ DEFAULT_BUSY_STATUS: Final = "unavailable"
 _LOCAL_DATE_TIME: Final = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\Z")
 
 
-class InvalidRecurrenceIdError(ValueError):
+class InvalidRecurrenceIdError(JMAPError, ValueError):
     """A recurrence override key that is not a bare local date-time.
 
     Almost always an aware ``datetime`` rendered with ``isoformat()``: the

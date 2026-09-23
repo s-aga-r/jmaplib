@@ -30,10 +30,11 @@ from __future__ import annotations
 from typing import Any, ClassVar, Final
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from jmap.core.errors import JMAPError
 from jmap.core.narrow import as_object, is_object
+from jmap.models.base import validation_summary
 
 #: RFC 9728 §3.1 and RFC 8414 §3.1.
 PROTECTED_RESOURCE_SUFFIX: Final = "oauth-protected-resource"
@@ -162,7 +163,12 @@ class ProtectedResourceMetadata(OAuthDocument):
         """
         if not is_object(document):
             raise DiscoveryError("protected resource metadata was not a JSON object")
-        metadata = cls.model_validate(as_object(document))
+        try:
+            metadata = cls.model_validate(as_object(document))
+        except ValidationError as exc:
+            raise DiscoveryError(
+                f"protected resource metadata is malformed: {validation_summary(exc)}"
+            ) from exc
         if fetched_from is not None or requested is not None:
             metadata._check_resource(fetched_from, requested)
         return metadata
@@ -280,7 +286,12 @@ class AuthorizationServerMetadata(OAuthDocument):
         """
         if not is_object(document):
             raise DiscoveryError("authorization server metadata was not a JSON object")
-        metadata = cls.model_validate(as_object(document))
+        try:
+            metadata = cls.model_validate(as_object(document))
+        except ValidationError as exc:
+            raise DiscoveryError(
+                f"authorization server metadata is malformed: {validation_summary(exc)}"
+            ) from exc
         if expected_issuer is not None and metadata.issuer != expected_issuer:
             raise IssuerMismatchError(expected_issuer, metadata.issuer or "")
         return metadata

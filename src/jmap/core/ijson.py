@@ -35,6 +35,7 @@ import re
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from jmap.core.errors import JMAPError
 from jmap.core.pointer import escape_token
 
 if TYPE_CHECKING:
@@ -45,8 +46,17 @@ MAX_SAFE_INT: Final = 2**53 - 1
 MIN_SAFE_INT: Final = -(2**53) + 1
 
 
-class IJSONError(ValueError):
+class IJSONError(JMAPError, ValueError):
     """A value violates an I-JSON or JMAP wire-format constraint."""
+
+
+class MalformedJSONError(IJSONError, json.JSONDecodeError):
+    """The text is not JSON at all.
+
+    Also a :class:`json.JSONDecodeError`, which is what :func:`loads` raised for
+    this before, with the same ``msg``, ``doc`` and ``pos``: an ``except`` written
+    for that still works, and so does ``except JMAPError``.
+    """
 
 
 def _where(field: str | None) -> str:
@@ -349,8 +359,8 @@ def loads(text: str | bytes) -> Any:
     """Parse an I-JSON document.
 
     Unlike :func:`json.loads` this rejects duplicate object members, out-of-range
-    integers and unpaired surrogates. Malformed JSON still raises
-    :class:`json.JSONDecodeError`, which is also a :class:`ValueError`.
+    integers and unpaired surrogates. Malformed JSON raises
+    :class:`MalformedJSONError`, still the :class:`json.JSONDecodeError` it was.
 
     Each of the three constraints is enforced during the parse or ruled out from
     the source text, so a well-formed document is never traversed a second time.
@@ -396,6 +406,8 @@ def loads(text: str | bytes) -> Any:
         # The C parser's own depth limit. Catchable here (the stack has
         # unwound), and the caller was promised a ValueError.
         raise NestingLimitError() from exc
+    except json.JSONDecodeError as exc:
+        raise MalformedJSONError(exc.msg, exc.doc, exc.pos) from None
 
     if _may_hold_surrogate(source, literal_possible=literal_possible):
         try:

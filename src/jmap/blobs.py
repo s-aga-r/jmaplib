@@ -23,9 +23,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError
+
 from jmap.core.errors import CapabilityFieldError
+from jmap.core.response import MalformedResponseError
 from jmap.core.uritemplate import expand
-from jmap.models.base import JMAPModel
+from jmap.models.base import JMAPModel, validation_summary
 
 if TYPE_CHECKING:
     from jmap.core.ids import Id
@@ -102,4 +105,9 @@ def upload_headers(content_type: str | None = None) -> dict[str, str]:
 
 def parse_upload(payload: Any) -> UploadResult:
     """Turn an upload response body into an :class:`UploadResult`."""
-    return UploadResult.model_validate(payload)
+    try:
+        return UploadResult.model_validate(payload)
+    except ValidationError as exc:
+        raise MalformedResponseError(
+            f"the upload endpoint's answer is not an upload result: {validation_summary(exc)}"
+        ) from exc

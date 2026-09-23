@@ -12,12 +12,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from jmap.core.errors import RequestError, TransportError
+from jmap.core.errors import AuthenticationError, JMAPError, RequestError, TransportError
 from jmap.core.ijson import loads
 from jmap.core.retry import Failure, Safety, classify, parse_retry_after
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     from jmap.core.retry import RetryPolicy
     from jmap.core.session import Session
@@ -79,6 +79,22 @@ def problem_of(status: int, headers: Mapping[str, str], body: bytes) -> RequestE
         title=f"HTTP {status}",
         detail=body[:512].decode("utf-8", "replace") or None,
     )
+
+
+def refusal_of(
+    status: int, headers: Mapping[str, str], body: bytes, *, challenges: Sequence[str]
+) -> JMAPError | None:
+    """What a blob endpoint's answer amounts to as an error; ``None`` for a 2xx.
+
+    A 401 is an :class:`AuthenticationError`, as it is on the API path, so one
+    ``except AuthenticationError`` covers every endpoint. Anything else is
+    :func:`problem_of`'s to describe.
+    """
+    if status == 401:
+        return AuthenticationError(
+            "the server rejected these credentials", challenges=tuple(challenges)
+        )
+    return problem_of(status, headers, body)
 
 
 def as_json_object(value: Any, source: str) -> dict[str, Any]:

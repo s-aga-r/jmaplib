@@ -11,11 +11,13 @@ from pathlib import Path
 
 import pytest
 
+from jmap.core.errors import JMAPError
 from jmap.core.ids import Id
 from jmap.core.session import (
     CORE_URN,
     Account,
     InsecureEndpointError,
+    MalformedSessionError,
     Session,
     check_session_redirects,
 )
@@ -188,6 +190,13 @@ class TestHostileSessionShapes:
     def test_a_non_object_account_entry_is_a_value_error(self):
         with pytest.raises(ValueError, match="a1"):
             Session.from_wire({"accounts": {"a1": "not-an-object"}})
+
+    def test_a_malformed_session_is_a_jmap_error_too(self):
+        # A plain ValueError got past the `except JMAPError` the docs promise.
+        with pytest.raises(MalformedSessionError) as excinfo:
+            Session.from_wire({"accounts": "not-an-object"})
+        assert isinstance(excinfo.value, JMAPError)
+        assert isinstance(excinfo.value, ValueError)
 
     def test_a_non_string_primary_account_is_a_value_error(self):
         with pytest.raises(ValueError, match="urn:ietf:params:jmap:mail"):

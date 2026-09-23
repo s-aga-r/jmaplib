@@ -13,7 +13,7 @@ import socket
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -34,6 +34,10 @@ from jmap.auth.metadata import (
     IssuerMismatchError,
     ResourceMismatchError,
 )
+from jmap.core.errors import TransportError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 
@@ -563,6 +567,33 @@ class TestBorrowedClient:
         worker.join(timeout=5)
         assert not worker.is_alive()
         assert statuses == [200]
+
+
+class TestTransportFailures:
+    @pytest.mark.parametrize("operation", ["register", "refresh", "exchange", "device", "poll"])
+    def test_an_unreachable_endpoint_is_a_transport_error(self, operation):
+        # Every other failure in the library is a JMAPError; a raw httpx error
+        # escaped the one `except` the docs tell callers to write.
+        def broken(_request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("no route to host")
+
+        client = OAuthClient(
+            metadata(), client_id="c", http=httpx.Client(transport=httpx.MockTransport(broken))
+        )
+        authorization = DeviceAuthorization(
+            device_code="dc", user_code="u", verification_uri="v", interval=0
+        )
+        calls: dict[str, Callable[[], object]] = {
+            "register": lambda: client.register("jmaplib test"),
+            "refresh": lambda: client.refresh("rt"),
+            "exchange": lambda: client.exchange_code(
+                "c", redirect_uri="http://127.0.0.1:9/cb", verifier="v" * 43
+            ),
+            "device": client.begin_device_flow,
+            "poll": lambda: client.poll_device_flow(authorization),
+        }
+        with pytest.raises(TransportError, match="no route to host"):
+            calls[operation]()
 
 
 class TestAuthorizationCode:

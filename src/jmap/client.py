@@ -24,6 +24,7 @@ from jmap._shell import (
     as_json_object,
     failure_of,
     problem_of,
+    refusal_of,
     request_headers,
     retry_pause,
     session_is_stale,
@@ -320,14 +321,15 @@ class JMAPClient:
         if account is None:
             raise NoAccountError("upload", CORE_URN, reason=NO_BLOB_ACCOUNT)
         check_upload_size(len(content), self.capabilities.limits)
-        response = self._http.post(
-            upload_url(self.session, account),
-            content=content,
-            headers=upload_headers(content_type),
-        )
-        problem = problem_of(response.status_code, response.headers, response.content)
-        if problem is not None:
-            raise problem
+        try:
+            response = self._http.post(
+                upload_url(self.session, account),
+                content=content,
+                headers=upload_headers(content_type),
+            )
+        except httpx.HTTPError as exc:
+            raise _as_error(exc) from exc
+        _refuse(response)
         return parse_upload(as_json_object(loads(response.content), "the upload endpoint"))
 
     def download(
@@ -346,12 +348,13 @@ class JMAPClient:
         account = account_id or self.default_account or self.session.implied_account()
         if account is None:
             raise NoAccountError("download", CORE_URN, reason=NO_BLOB_ACCOUNT)
-        response = self._http.get(
-            download_url(self.session, account, blob_id, name=name, content_type=content_type)
-        )
-        problem = problem_of(response.status_code, response.headers, response.content)
-        if problem is not None:
-            raise problem
+        try:
+            response = self._http.get(
+                download_url(self.session, account, blob_id, name=name, content_type=content_type)
+            )
+        except httpx.HTTPError as exc:
+            raise _as_error(exc) from exc
+        _refuse(response)
         return response.content
 
     # -- transport ---------------------------------------------------------- #
@@ -442,6 +445,17 @@ def _as_error(error: BaseException) -> BaseException:
     if isinstance(error, httpx.HTTPError):
         return TransportError(str(error) or type(error).__name__)
     return error
+
+
+def _refuse(response: httpx.Response) -> None:
+    refused = refusal_of(
+        response.status_code,
+        response.headers,
+        response.content,
+        challenges=response.headers.get_list("www-authenticate"),
+    )
+    if refused is not None:
+        raise refused
 
 
 def _parse_response(body: bytes) -> Response:

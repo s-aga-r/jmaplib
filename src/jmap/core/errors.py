@@ -17,13 +17,21 @@ client that raises on them loses the results of every sibling call.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
-from jmap.core.ids import Id
+if TYPE_CHECKING:
+    # Only for annotations: jmap.core.ids defines InvalidIdError on JMAPError,
+    # so importing it here at run time would be a cycle.
+    from jmap.core.ids import Id
 
 
 class JMAPError(Exception):
-    """Base class for every error this library raises."""
+    """Base class for every error this library raises.
+
+    Including the ones for arguments it refuses - a malformed id, a bad patch -
+    which are :class:`ValueError` subclasses as well, so either ``except``
+    catches them.
+    """
 
 
 # --------------------------------------------------------------------------- #
@@ -177,7 +185,7 @@ class SetError:
             str(body.get("type", "unknown")),
             description=body.get("description"),
             properties=tuple(props) if props is not None else None,
-            existing_id=Id(existing) if existing is not None else None,
+            existing_id=cast("Id | None", existing),
             raw=body,
         )
 

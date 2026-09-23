@@ -256,6 +256,15 @@ class TestParseEvent:
         with pytest.raises(EventSourceError, match="not a JSON object"):
             parse_event("state", "42")
 
+    @pytest.mark.parametrize(
+        "payload",
+        ['{"@type": "StateChange", "changed": 5}', '{"changed": {"a": {"Email": 7}}}'],
+    )
+    def test_a_state_event_of_the_wrong_shape_raises(self, payload):
+        # A pydantic ValidationError escaped from here, and out of listen().
+        with pytest.raises(EventSourceError, match="not a StateChange"):
+            parse_event("state", payload)
+
 
 class TestEventStream:
     def test_state_events_are_yielded(self):

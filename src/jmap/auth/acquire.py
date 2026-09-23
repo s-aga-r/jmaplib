@@ -63,6 +63,7 @@ from jmap.auth.metadata import (
     well_known_url,
 )
 from jmap.auth.pkce import PKCEPair, new_state
+from jmap.core.errors import TransportError
 from jmap.core.ijson import loads
 
 if TYPE_CHECKING:
@@ -588,17 +589,20 @@ class OAuthClient:
         Without redirects: a 307/308 would re-send the body - code, verifier,
         refresh token, client secret - to wherever the Location header points.
         """
-        # `request` rather than `post`, whose signature leaves out the None
-        # that turns the client's auth off.
-        return self._http.request(
-            "POST",
-            endpoint,
-            data=form,
-            json=json,
-            auth=None,
-            follow_redirects=False,
-            headers={"Accept": "application/json"},
-        )
+        try:
+            # `request` rather than `post`, whose signature leaves out the None
+            # that turns the client's auth off.
+            return self._http.request(
+                "POST",
+                endpoint,
+                data=form,
+                json=json,
+                auth=None,
+                follow_redirects=False,
+                headers={"Accept": "application/json"},
+            )
+        except httpx.HTTPError as exc:
+            raise TransportError(f"could not reach {endpoint}: {exc}") from exc
 
     def close(self) -> None:
         if self._owns_http:

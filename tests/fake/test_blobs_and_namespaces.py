@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 import pytest
@@ -23,12 +23,21 @@ from jmap.capabilities.mail import (
 )
 from jmap.capabilities.registry import Registry
 from jmap.client import JMAPClient
-from jmap.core.errors import CapabilityFieldError, RequestError
+from jmap.core.errors import (
+    AuthenticationError,
+    CapabilityFieldError,
+    RequestError,
+    TransportError,
+)
 from jmap.core.ids import Id
 from jmap.core.limits import Limits
+from jmap.core.response import MalformedResponseError
 from jmap.core.session import Session
 from jmap.models.mail.objects import Email
 from jmap.testing import FakeJMAPServer
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 WELL_KNOWN = "https://jmap.example.com/.well-known/jmap"
 ALL_URNS: dict[str, Any] = {CORE_URN: {}, MAIL_URN: {}, SUBMISSION_URN: {}, VACATION_URN: {}}
@@ -222,6 +231,79 @@ class TestBlobTransfer:
             WELL_KNOWN, auth=BasicAuth("u", "p"), http=http, registry=registry()
         ) as client:
             assert (await client.upload(b"x")).account_id == "a"
+
+
+def on_blobs(answer: Callable[[], httpx.Response] | None = None) -> Any:
+    """An intercept that answers - or, with no answer, refuses - every blob transfer.
+
+    ``answer`` builds a fresh response each time: one instance, once read by a
+    sync client, cannot be handed to an async one.
+    """
+
+    def intercept(request: httpx.Request) -> httpx.Response | None:
+        if "/jmap/upload/" not in request.url.path and "/jmap/download/" not in request.url.path:
+            return None
+        if answer is None:
+            raise httpx.ConnectError("no route to host")
+        return answer()
+
+    return intercept
+
+
+def refused() -> httpx.Response:
+    return httpx.Response(401, headers={"WWW-Authenticate": 'Basic realm="x"'})
+
+
+class TestBlobTransferFailures:
+    """A transfer fails the way an API call does, as a JMAPError."""
+
+    def test_an_unreachable_endpoint_is_a_transport_error(self):
+        # The raw httpx error escaped, past the `except JMAPError` the docs promise.
+        fake = server()
+        with connect(fake) as client:
+            fake.intercept = on_blobs()
+            with pytest.raises(TransportError, match="no route to host"):
+                client.upload(b"x")
+            with pytest.raises(TransportError, match="no route to host"):
+                client.download("B1")
+
+    def test_a_refused_credential_is_an_authentication_error(self):
+        # As on the API path: one `except AuthenticationError` is enough.
+        fake = server()
+        with connect(fake) as client:
+            fake.intercept = on_blobs(refused)
+            with pytest.raises(AuthenticationError) as uploading:
+                client.upload(b"x")
+            with pytest.raises(AuthenticationError) as downloading:
+                client.download("B1")
+        assert uploading.value.challenges == downloading.value.challenges == ('Basic realm="x"',)
+
+    def test_an_upload_answer_of_the_wrong_shape_is_a_malformed_response(self):
+        fake = server()
+        with connect(fake) as client:
+            fake.intercept = on_blobs(
+                lambda: httpx.Response(201, json={"blobId": 5, "size": "big"})
+            )
+            with pytest.raises(MalformedResponseError, match="upload"):
+                client.upload(b"x")
+
+    @pytest.mark.asyncio
+    async def test_async_failures_are_the_same(self):
+        fake = server()
+        http = httpx.AsyncClient(**fake.client_kwargs())
+        async with await AsyncJMAPClient.connect(
+            WELL_KNOWN, auth=BasicAuth("u", "p"), http=http, registry=registry()
+        ) as client:
+            fake.intercept = on_blobs()
+            with pytest.raises(TransportError, match="no route to host"):
+                await client.upload(b"x")
+            with pytest.raises(TransportError, match="no route to host"):
+                await client.download("B1")
+            fake.intercept = on_blobs(refused)
+            with pytest.raises(AuthenticationError):
+                await client.upload(b"x")
+            with pytest.raises(AuthenticationError):
+                await client.download("B1")
 
 
 class TestAttributeNames:

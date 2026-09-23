@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final
 
+from jmap.core.errors import JMAPError
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -60,7 +62,7 @@ class HeaderForm(StrEnum):
     URLS = "asURLs"
 
 
-class InvalidHeaderQueryError(ValueError):
+class InvalidHeaderQueryError(JMAPError, ValueError):
     """A header property name that the server would reject."""
 
 

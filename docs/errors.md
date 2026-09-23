@@ -14,8 +14,18 @@ radius**: how much of what you asked for did not happen.
 Only the first two are fatal to a batch. The last two are per-call and
 per-object, and a client that raises on them throws away results it was given.
 
-All of them descend from `JMAPError`, so one `except` catches everything from
-this library.
+All of them descend from `JMAPError`, and so does everything else the server or
+the network can do to a call - a body that is not JSON, a push event of the wrong
+shape, a refused upload - along with every error class this library defines. One
+`except JMAPError` catches them all.
+
+What it lets through is misuse of the API itself: reading a handle before its
+batch has run (`RuntimeError`), passing both `anchor` and `position`
+(`ValueError`), a `bool` where a JMAP `Int` goes (`TypeError`). Those are bugs to
+fix rather than failures to handle, so they raise the builtin any Python code
+would. The library's own argument errors - `InvalidIdError`, `InvalidPatchError`,
+`InvalidEmailCreateError` and the rest - are both: `JMAPError`s, and the
+`ValueError`s they always were.
 
 ## Transport
 

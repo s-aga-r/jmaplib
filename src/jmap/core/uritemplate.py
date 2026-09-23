@@ -28,6 +28,8 @@ import re
 from typing import TYPE_CHECKING, Final, overload
 from urllib.parse import quote
 
+from jmap.core.errors import JMAPError
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -43,7 +45,7 @@ _VARCHAR: Final = r"(?:[A-Za-z0-9_]|%[0-9A-Fa-f]{2})"
 _VARNAME_RE: Final = re.compile(rf"\A{_VARCHAR}+(?:\.{_VARCHAR}+)*\Z")
 
 
-class TemplateError(ValueError):
+class TemplateError(JMAPError, ValueError):
     """Base class for every URI template failure raised here."""
 
 

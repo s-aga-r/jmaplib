@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 import jmap.core.ijson as ijson_module
+from jmap.core.errors import JMAPError
 from jmap.core.ijson import (
     MAX_SAFE_INT,
     MIN_SAFE_INT,
@@ -18,6 +19,7 @@ from jmap.core.ijson import (
     IntegerRangeError,
     InvalidDateError,
     InvalidStringError,
+    MalformedJSONError,
     NestingLimitError,
     NonFiniteNumberError,
     check_int,
@@ -57,6 +59,23 @@ class TestErrorHierarchy:
 
     def test_signed_range_error_names_the_signed_bound(self):
         assert f"[{MIN_SAFE_INT}, {MAX_SAFE_INT}]" in str(IntegerRangeError(-(2**53)))
+
+    @pytest.mark.parametrize("text", [b'{"a": ', '{"a": ', b"<html>", b""])
+    def test_malformed_json_is_one_of_them(self, text):
+        # A bare json.JSONDecodeError escaped here, and so from every response a
+        # server garbled - past the `except JMAPError` the docs promise.
+        with pytest.raises(MalformedJSONError) as excinfo:
+            loads(text)
+        assert isinstance(excinfo.value, IJSONError)
+        assert isinstance(excinfo.value, JMAPError)
+        # Still what an earlier release raised.
+        assert isinstance(excinfo.value, json.JSONDecodeError)
+
+    def test_malformed_json_keeps_where_it_went_wrong(self):
+        with pytest.raises(MalformedJSONError) as excinfo:
+            loads('{"a": ')
+        assert (excinfo.value.lineno, excinfo.value.colno, excinfo.value.pos) == (1, 7, 6)
+        assert excinfo.value.doc == '{"a": '
 
 
 class TestCheckInt:

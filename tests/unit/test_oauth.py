@@ -386,6 +386,18 @@ class TestResourceChecks:
         assert issubclass(ResourceMismatchError, DiscoveryError)
 
 
+class TestDocumentsOfTheWrongShape:
+    """A field of the wrong type is a malformed document, not a pydantic error."""
+
+    def test_protected_resource_metadata(self):
+        with pytest.raises(DiscoveryError, match="protected resource metadata"):
+            ProtectedResourceMetadata.of({"authorization_servers": "https://as.example.com"})
+
+    def test_authorization_server_metadata(self):
+        with pytest.raises(DiscoveryError, match="authorization server metadata"):
+            AuthorizationServerMetadata.of({"issuer": 5})
+
+
 class TestAuthorizationServerMetadata:
     def test_a_document_parses(self):
         metadata = AuthorizationServerMetadata.of(

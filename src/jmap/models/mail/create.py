@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from jmap.core.errors import JMAPError
 from jmap.core.narrow import as_list_of, as_object, is_object
 from jmap.core.patch import InvalidKeywordError, parse_keyword
 
@@ -34,7 +35,7 @@ SERVER_ASSIGNED: Final = frozenset({"id", "blobId", "threadId", "size"})
 STRUCTURED_BODY: Final = frozenset({"textBody", "htmlBody", "attachments"})
 
 
-class InvalidEmailCreateError(ValueError):
+class InvalidEmailCreateError(JMAPError, ValueError):
     """An ``Email`` creation object the server would reject.
 
     ``properties`` names the offending property, mirroring the

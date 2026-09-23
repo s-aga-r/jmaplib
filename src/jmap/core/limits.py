@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final, Protocol, Self, TypeVar, cast, runtime_checkable
 
-from jmap.core.errors import CapabilityFieldError
+from jmap.core.errors import CapabilityFieldError, JMAPError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -71,7 +71,7 @@ KNOWN_COLLATIONS: Final = (
 _UNBOUNDED: Final = sys.maxsize
 
 
-class InvalidChunkSizeError(ValueError):
+class InvalidChunkSizeError(JMAPError, ValueError):
     """A chunk size was not a positive integer."""
 
     def __init__(self, size: int) -> None:

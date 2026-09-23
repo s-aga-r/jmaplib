@@ -204,13 +204,15 @@ class TestHostileResponses:
                 Response.from_wire({"methodResponses": [], "createdIds": {"d": hostile}})
 
     def test_a_non_object_arguments_slot_is_rejected(self):
-        with pytest.raises(ValueError, match="arguments"):
+        # As a MalformedResponseError: a plain ValueError got past the
+        # `except JMAPError` the docs promise, out of every batch it hit.
+        with pytest.raises(MalformedResponseError, match="arguments"):
             Response.from_wire({"methodResponses": [["Email/get", "not-an-object", "c0"]]})
 
     def test_a_three_key_dict_is_not_an_invocation(self):
         # Any length-3 Sized unpacks by iteration - a 3-key dict yields its
         # keys - and the failure then surfaced far from the malformed response.
-        with pytest.raises(ValueError, match="3 elements"):
+        with pytest.raises(MalformedResponseError, match="3 elements"):
             Response.from_wire({"methodResponses": [{"a": 1, "b": 2, "c": 3}]})
 
     def test_a_parse_failure_is_contained_to_its_own_handle(self):

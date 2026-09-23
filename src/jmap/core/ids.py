@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Final, NewType
 
+from jmap.core.errors import JMAPError
+
 #: An opaque server-assigned record identifier.
 #:
 #: ``NewType`` rather than a subclass: ids are compared, hashed and serialised as
@@ -28,7 +30,7 @@ MAX_ID_OCTETS: Final = 255
 CREATION_PREFIX: Final = "#"
 
 
-class InvalidIdError(ValueError):
+class InvalidIdError(JMAPError, ValueError):
     """A string was used as an ``Id`` but cannot be one."""
 
     def __init__(self, value: str, reason: str) -> None:

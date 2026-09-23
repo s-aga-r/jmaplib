@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from jmap.core.errors import CapabilityNotSupportedError
+from jmap.core.errors import CapabilityNotSupportedError, JMAPError
 from jmap.core.limits import Limits
 from jmap.core.request import CORE_URN
 
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
     from jmap.core.session import Session
 
 
-class DuplicateCapabilityError(ValueError):
+class DuplicateCapabilityError(JMAPError, ValueError):
     """Two specs claim one URN without a way to tell them apart."""
 
     def __init__(self, urn: str) -> None:
@@ -52,7 +52,7 @@ class DuplicateCapabilityError(ValueError):
         )
 
 
-class ConflictingMethodError(ValueError):
+class ConflictingMethodError(JMAPError, ValueError):
     """One method name is claimed by two resolved capabilities."""
 
     def __init__(self, method: str, first: str, second: str) -> None:
