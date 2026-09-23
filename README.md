@@ -255,10 +255,12 @@ are dropped — the follow-up is the same `/changes` call, and the client conver
 Push is an optimisation, never a second source of truth.
 
 ```python
-from jmap.push import EventSourceClient
+from jmap.push import EventSourceClient, Ping
 
 source = EventSourceClient(client, types=("Email", "Mailbox"), ping=30)
 for event in source.listen():  # reconnects, resuming each time
+    if isinstance(event, Ping):
+        continue  # a keep-alive; nothing moved
     for account, states in event.outdated(my_cursors).items():
         ...  # only what actually moved
 ```

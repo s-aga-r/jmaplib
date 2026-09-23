@@ -21,16 +21,20 @@ Two transports, and a third for browsers:
 ## Event source
 
 ```python
-from jmap.push import EventSourceClient
+from jmap.push import EventSourceClient, Ping
 
 source = EventSourceClient(client, types=("Email", "Mailbox"), ping=30)
 
 for event in source.listen():
+    if isinstance(event, Ping):
+        continue  # the connection is alive; nothing moved
     for account, states in event.outdated(my_cursors).items():
         ...  # fetch only what actually moved
 ```
 
-`listen()` reconnects on its own, resuming from `Last-Event-ID` each time, so a
+`listen()` yields the keep-alives as well as the changes - a `Ping` carries the
+interval the server settled on - so a loop steps past them before asking what
+moved. It reconnects on its own, resuming from `Last-Event-ID` each time, so a
 dropped connection costs latency rather than data. `events()` is the single-
 connection version if you want to manage reconnection yourself.
 
@@ -45,11 +49,13 @@ event.states_for(account_id)  # {type_name: state}
 event.accounts()  # account ids in this notification
 event.types()  # type names across all accounts
 event.outdated(cursors)  # only what differs from the states you pass
-event.matches(cursors)  # True if this notification is your own write
+event.matches(account_id, type_name, state)  # True if it announces that state
 ```
 
 `matches` exists because RFC 8620 §7.1 notes a notification can arrive while
-your own `/set` is still in flight. Without it you re-fetch what you just wrote.
+your own `/set` is still in flight. Pass the `newState` your `/set` answered
+with: if that is the state announced, the change is your own write. Without it
+you re-fetch what you just wrote.
 
 ### `ping`, and why it decides your timeout
 
