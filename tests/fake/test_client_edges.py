@@ -191,6 +191,16 @@ class TestMutationHelpers:
         assert all_mutations_guarded(batch, active)
         assert guarded_call_ids(batch, active) == ["c1"]
 
+    def test_a_back_referenced_guard_does_not_count(self):
+        # A reference resolves afresh on every attempt, against whatever state
+        # the server is in *then* - so it can never fail a repeat.
+        active = capabilities()
+        batch = Batch(active)
+        got = batch.add("Email/get", {"ids": []})
+        batch.add("Email/set", {"create": {"d": {}}, "ifInState": got.ref("/state")})
+        assert not all_mutations_guarded(batch, active)
+        assert guarded_call_ids(batch, active) == []
+
 
 class TestClientLifecycle:
     def test_a_supplied_http_client_is_not_closed(self):
@@ -293,6 +303,46 @@ class TestTransportFailureClassification:
             result = client.call("Email/set", {"create": {"d": {}}})
         assert result.new_state == "s2"
         assert seen["posts"] == 2
+
+    def test_a_back_referenced_guard_does_not_make_a_retry_safe(self):
+        # The guard points at a /get in the same request, and a retry re-runs
+        # that /get after the first attempt already landed - so the guard matches
+        # the new state, and the write happens twice.
+        fake = server()
+        store = {"state": 0, "created": 0}
+
+        def email_get(_arguments: dict[str, Any], _srv: FakeJMAPServer) -> dict[str, Any]:
+            return {"list": [], "state": str(store["state"])}
+
+        def email_set(arguments: dict[str, Any], _srv: FakeJMAPServer) -> dict[str, Any]:
+            if arguments.get("ifInState") != str(store["state"]):
+                return {"notCreated": {"d": {"type": "stateMismatch"}}}
+            store["created"] += 1
+            store["state"] += 1
+            return {"created": {"d": {"id": f"M{store['created']}"}}}
+
+        fake.handle("Email/get", email_get)
+        fake.handle("Email/set", email_set)
+        posts = {"n": 0}
+
+        def route(request: httpx.Request) -> httpx.Response:
+            response = fake.route(request)  # the server applies it...
+            if request.method == "POST":
+                posts["n"] += 1
+                if posts["n"] == 1:
+                    raise httpx.ReadTimeout("...and the answer never arrives")
+            return response
+
+        http = httpx.Client(**{**fake.client_kwargs(), "transport": httpx.MockTransport(route)})
+        policy = RetryPolicy(max_attempts=3, initial_backoff=0)
+        with connect(fake, http=http, retry_policy=policy) as client:
+            batch = Batch(client.capabilities, default_account=client.default_account)
+            got = batch.add("Email/get", {"ids": []})
+            batch.add("Email/set", {"create": {"d": {}}, "ifInState": got.ref("/state")})
+            with pytest.raises(TransportError):
+                client.execute(batch)
+        assert posts["n"] == 1
+        assert store["created"] == 1
 
     def test_connect_closes_a_client_it_created_when_the_session_fails(self):
         # Only reachable when connect() owns the client, so it cannot leak.

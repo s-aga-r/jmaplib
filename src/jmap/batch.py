@@ -360,7 +360,7 @@ def all_mutations_guarded(batch: Batch, capabilities: ActiveCapabilities) -> boo
         for handle in batch.handles
         if (spec := capabilities.method(handle.call.name)) is not None and spec.mutating
     ]
-    return all(handle.call.arguments.get("ifInState") for handle in mutations)
+    return all(_is_guarded(handle) for handle in mutations)
 
 
 def guarded_call_ids(batch: Batch, capabilities: ActiveCapabilities) -> Sequence[str]:
@@ -370,5 +370,17 @@ def guarded_call_ids(batch: Batch, capabilities: ActiveCapabilities) -> Sequence
         for handle in batch.handles
         if (spec := capabilities.method(handle.call.name)) is not None
         and spec.mutating
-        and handle.call.arguments.get("ifInState")
+        and _is_guarded(handle)
     ]
+
+
+def _is_guarded(handle: Handle[Any]) -> bool:
+    """Whether a call's ``ifInState`` would fail a repeat of it.
+
+    Only a literal state does. A back-reference resolves afresh on every
+    attempt - typically to the ``state`` of a ``/get`` earlier in the same
+    request, which a retry re-runs *after* the first attempt landed - so it
+    matches the new state and lets the write happen twice.
+    """
+    state = handle.call.arguments.get("ifInState")
+    return isinstance(state, str) and bool(state)
