@@ -301,23 +301,26 @@ class TestParseKeyword:
         with pytest.raises(InvalidKeywordError, match="exceeds 255 octets"):
             parse_keyword("x" * 256)
 
-    @pytest.mark.parametrize("keyword", ["$custom", "$Unregistered", "$"])
-    def test_rejects_unregistered_dollar_keywords(self, keyword):
-        with pytest.raises(InvalidKeywordError, match="reserved for IANA"):
-            parse_keyword(keyword)
+    @pytest.mark.parametrize("keyword", ["$mdnsent", "$Important", "$MailFlagBit0", "$custom", "$"])
+    def test_a_dollar_keyword_need_not_be_on_any_list(self, keyword):
+        # RFC 8621 §4.1.1 lets users add arbitrary keywords, and RFC 5788 only
+        # asks that keywords meant for *common use* start with "$" - a naming
+        # convention, not a whitelist. Refusing everything outside eight names
+        # refused the library's own $mdnsent and the rest of the IANA registry.
+        assert parse_keyword(keyword) == keyword.lower()
 
     def test_dollar_is_allowed_away_from_the_start(self):
         assert parse_keyword("a$b") == "a$b"
 
     def test_error_carries_the_original_spelling(self):
         with pytest.raises(InvalidKeywordError) as excinfo:
-            parse_keyword("$Custom")
-        assert excinfo.value.keyword == "$Custom"
+            parse_keyword("$Bad Word")
+        assert excinfo.value.keyword == "$Bad Word"
         assert issubclass(InvalidKeywordError, ValueError)
 
     @pytest.mark.parametrize(
         ("value", "valid"),
-        [("$seen", True), ("todo", True), ("$custom", False), ("", False), ("a b", False)],
+        [("$seen", True), ("todo", True), ("$custom", True), ("", False), ("a b", False)],
     )
     def test_is_valid_keyword(self, value, valid):
         assert is_valid_keyword(value) is valid
@@ -385,9 +388,11 @@ class TestKeywordPatch:
             keyword_patch(add=["$Seen"], remove=["$seen"])
         assert excinfo.value.keys == ("keywords/$seen",)
 
-    def test_rejects_an_unregistered_dollar_keyword(self):
-        with pytest.raises(InvalidKeywordError, match="reserved for IANA"):
-            keyword_patch(add=["$custom"])
+    def test_registered_keywords_beyond_rfc_8621s_examples_are_patchable(self):
+        assert keyword_patch(add=["$mdnsent", "$Important"]) == {
+            "keywords/$mdnsent": True,
+            "keywords/$important": True,
+        }
 
     def test_duplicate_spellings_collapse_to_one_key(self):
         assert keyword_patch(add=["$Seen", "$seen"]) == {"keywords/$seen": True}

@@ -190,6 +190,11 @@ class TestEmailCreateRejects:
         with pytest.raises(InvalidEmailCreateError, match="keyword"):
             validate_email_create({**VALID_CREATE, "keywords": {"has space": True}})
 
+    def test_any_registered_keyword_is_accepted(self):
+        # Importing or copying a message that was already acknowledged carries
+        # $mdnsent, which is registered but not among RFC 8621's examples.
+        validate_email_create({**VALID_CREATE, "keywords": {"$mdnsent": True, "$important": True}})
+
     def test_keywords_must_be_a_map(self):
         with pytest.raises(InvalidEmailCreateError, match="map of keyword"):
             validate_email_create({**VALID_CREATE, "keywords": ["$draft"]})

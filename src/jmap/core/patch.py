@@ -312,9 +312,13 @@ MAILBOX_IDS: Final = "mailboxIds"
 KEYWORDS: Final = "keywords"
 MAX_KEYWORD_OCTETS: Final = 255
 
-#: RFC 8621 §4.1.1 reserves a leading ``$`` for the IANA "IMAP and JMAP Keywords"
-#: registry; a client must not invent one.
+#: RFC 5788 asks keywords meant for common use to start with ``$`` and be
+#: registered with IANA. A naming convention, not a restriction: RFC 8621 §4.1.1
+#: lets users add arbitrary keywords, with or without it.
 IANA_PREFIX: Final = "$"
+#: The registered keywords RFC 8621 §4.1.1 describes. Not a whitelist - the IANA
+#: "IMAP and JMAP Keywords" registry holds many more (``$mdnsent``,
+#: ``$important``, ...) and keeps growing.
 IANA_KEYWORDS: Final = frozenset(
     {
         "$draft",
@@ -343,6 +347,11 @@ def parse_keyword(value: str) -> str:
     case-insensitive but the patch key is not: ``"$Seen"`` and ``"$seen"`` would
     otherwise become two entries addressing one property, which is the
     prefix/duplicate violation in :func:`validate_patch`.
+
+    The charset and length are the whole of the rule. A leading ``$`` is not
+    checked against a list: RFC 8621 §4.1.1 allows arbitrary keywords, and a
+    hard-coded list refused registered ones - ``$mdnsent`` included, which
+    RFC 9007 requires on every acknowledged message.
     """
     keyword = value.lower()
     if not keyword:
@@ -355,8 +364,6 @@ def parse_keyword(value: str) -> str:
     # Checked after the charset, where every character is one octet.
     if len(keyword) > MAX_KEYWORD_OCTETS:
         raise InvalidKeywordError(value, f"exceeds {MAX_KEYWORD_OCTETS} octets")
-    if keyword.startswith(IANA_PREFIX) and keyword not in IANA_KEYWORDS:
-        raise InvalidKeywordError(value, "leading '$' is reserved for IANA-registered keywords")
     return keyword
 
 
