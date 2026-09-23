@@ -13,18 +13,48 @@ rather than quietly handing back a torn read.
 
 A chunked call is still *one* handle to the caller. Splitting is a transport
 detail, and leaking it would mean every caller who might exceed a limit has to
-write the merge themselves.
+write the merge themselves. The one place it cannot be hidden is a
+back-reference: that names a single call, and the chunks are several.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from jmap.core.errors import JMAPError
 from jmap.core.invocation import Handle, MethodCall
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from jmap.core.ids import Id
+    from jmap.core.invocation import ResultRef
+
+#: Paths every chunk answers alike: the account never differs, and the state may
+#: not - :func:`merge_get_results` refuses a torn read. A reference to one of
+#: these can let the first chunk speak for the rest.
+_CHUNK_INVARIANT_PATHS: Final = frozenset({"/accountId", "/state"})
+
+
+class ChunkedReferenceError(JMAPError):
+    """A back-reference was asked of a ``/get`` that was split into chunks.
+
+    A back-reference names one call, and each chunk is its own call, so it could
+    only ever see the first chunk's share of the result. The server resolves it
+    without complaint, which made this a silent truncation: ``ref_list`` over a
+    250-id ``Email/get`` split at 100 fed 100 thread ids to the next call.
+    """
+
+    def __init__(self, method: str, chunks: int, path: str) -> None:
+        self.method = method
+        self.chunks = chunks
+        self.path = path
+        super().__init__(
+            f"{method} named more ids than maxObjectsInGet and was split into {chunks} "
+            f"calls, so a back-reference to {path!r} would see only the first of them; "
+            f"name fewer ids per call, or read the result and pass the ids along in a "
+            f"second batch"
+        )
 
 
 class TornReadError(JMAPError):
@@ -51,9 +81,10 @@ class TornReadError(JMAPError):
 class ChunkedHandle(Handle[Any]):
     """One handle standing in for several ``/get`` calls.
 
-    Presents the same surface as an ordinary handle - including as a
-    back-reference source, which resolves against the *first* chunk, since that
-    is the only one whose call id the server will have seen by then.
+    Presents the same surface as an ordinary handle, except as a back-reference
+    source: only a path every chunk answers alike (``/state``, ``/accountId``)
+    can be referenced, through the first chunk. Anything else raises
+    :class:`ChunkedReferenceError` rather than quietly covering one chunk.
     """
 
     __slots__ = ("_chunks",)
@@ -66,6 +97,29 @@ class ChunkedHandle(Handle[Any]):
     @property
     def chunks(self) -> tuple[Handle[Any], ...]:
         return self._chunks
+
+    def _refuse(self, path: str) -> ChunkedReferenceError:
+        return ChunkedReferenceError(self.call.name, len(self._chunks), path)
+
+    def ref(self, path: str) -> ResultRef[Any]:
+        if path not in _CHUNK_INVARIANT_PATHS:
+            raise self._refuse(path)
+        return super().ref(path)
+
+    def ref_ids(self) -> ResultRef[list[Id]]:
+        raise self._refuse("/ids")
+
+    def ref_list(self, prop: str) -> ResultRef[list[Id]]:
+        raise self._refuse(f"/list/*/{prop}")
+
+    def ref_created(self, creation_key: str, prop: str = "id") -> ResultRef[Any]:
+        raise self._refuse(f"/created/{creation_key}/{prop}")
+
+    def ref_updated(self) -> ResultRef[list[Id]]:
+        raise self._refuse("/updated")
+
+    def ref_updated_properties(self) -> ResultRef[list[str] | None]:
+        raise self._refuse("/updatedProperties")
 
     @property
     def is_resolved(self) -> bool:

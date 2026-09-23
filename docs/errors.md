@@ -124,6 +124,7 @@ server's own response would not.
 | `/set` larger than `maxObjectsInSet` | `CapabilityFieldError` |
 | Reference chain that cannot fit `maxCallsInRequest` | `BatchTooLargeError` |
 | Back-reference nested inside a `create` | `NestedResultRefError` |
+| Back-reference into a `/get` split across requests | `ChunkedReferenceError` |
 | `anchor` and `position` together | `ValueError` |
 | An invalid id, keyword, or patch pointer | `InvalidIdError`, `InvalidKeywordError`, `InvalidPatchError` |
 

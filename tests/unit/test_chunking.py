@@ -12,7 +12,13 @@ from jmap.capabilities.mail import MAIL, MAIL_URN
 from jmap.capabilities.parsing import parser_for
 from jmap.capabilities.registry import ActiveCapabilities, Registry
 from jmap.capabilities.spec import DataTypeSpec, MethodKind, MethodSpec
-from jmap.chunking import ChunkedHandle, TornReadError, chunk_get_call, merge_get_results
+from jmap.chunking import (
+    ChunkedHandle,
+    ChunkedReferenceError,
+    TornReadError,
+    chunk_get_call,
+    merge_get_results,
+)
 from jmap.core.errors import MethodError
 from jmap.core.ids import Id
 from jmap.core.invocation import Handle, MethodCall
@@ -188,11 +194,29 @@ class TestChunkedHandle:
         handle = ChunkedHandle([resolved, pending])
         assert not handle.is_resolved
 
-    def test_it_borrows_the_first_chunks_call_id_for_references(self):
-        # A back-reference can only name a call the server has already answered,
-        # which is the first chunk.
+    def test_a_reference_into_the_split_result_is_refused(self):
+        # A back-reference names one call and each chunk is its own call, so
+        # `ref_list("threadId")` covered the first chunk alone and quietly
+        # dropped the rest - 150 of 250 threads, in the review's repro.
         handle = self._handle([get_response("s", ["m1"]), get_response("s", ["m2"])])
-        assert handle.ref_ids().result_of == handle.chunks[0].call_id
+        for build in (
+            lambda: handle.ref_list("threadId"),
+            lambda: handle.ref_ids(),
+            lambda: handle.ref("/list/0/id"),
+            lambda: handle.ref("/notFound"),
+            lambda: handle.ref_created("k"),
+            lambda: handle.ref_updated(),
+            lambda: handle.ref_updated_properties(),
+        ):
+            with pytest.raises(ChunkedReferenceError, match="maxObjectsInGet"):
+                build()
+
+    def test_a_path_every_chunk_answers_alike_stays_referenceable(self):
+        # The account never differs, and the state may not: merging refuses a
+        # torn read. So the first chunk speaks for all of them.
+        handle = self._handle([get_response("s", ["m1"]), get_response("s", ["m2"])])
+        assert handle.ref("/state").result_of == handle.chunks[0].call_id
+        assert handle.ref("/accountId").path == "/accountId"
 
     def test_a_failed_chunk_surfaces_as_the_handles_error(self):
         ok: Handle[Any] = Handle("c0", MethodCall("Email/get", {}, parse=dict))
