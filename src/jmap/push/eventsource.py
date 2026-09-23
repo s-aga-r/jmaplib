@@ -27,8 +27,9 @@ forever for notifications that were never going to come.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Self
+import re
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Final, Self
 
 from jmap.core.errors import JMAPError
 from jmap.core.ijson import loads
@@ -58,6 +59,11 @@ ALL_TYPES = "*"
 #: therefore honoured verbatim by every conformant server.
 MIN_PORTABLE_PING = 30
 MAX_PORTABLE_PING = 300
+
+#: An id that can go back as the ``Last-Event-ID`` header: an HTTP field value
+#: (RFC 9110 §5.5) - visible characters, with spaces or tabs only between them -
+#: and ASCII, since httpx will not encode anything else.
+_RESUMABLE_ID: Final = re.compile(r"\A(?:[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*)?\Z")
 
 
 class EventSourceError(JMAPError):
@@ -169,6 +175,10 @@ class EventStream:
     closed_after_state: bool = False
     #: Whether the server was asked to end the response after a state event.
     close_after_state: bool = False
+    _cursor: str = field(init=False, default="")
+
+    def __post_init__(self) -> None:
+        self._track()
 
     @classmethod
     def open(cls, *, close_after_state: bool = False, last_event_id: str = "") -> Self:
@@ -181,9 +191,18 @@ class EventStream:
     def last_event_id(self) -> str:
         """What a reconnect should send as ``Last-Event-ID``.
 
-        Unmoved by pings, which is the point - see the module docstring.
+        Unmoved by pings, which is the point - see the module docstring. Also
+        unmoved by an id that cannot be sent as that header at all: adopting one
+        left every later reconnect failing while its request was built, for
+        good. The last id that can be sent is resumed from instead, which costs
+        a short replay of events already seen.
         """
-        return self.parser.last_event_id
+        return self._cursor
+
+    def _track(self) -> None:
+        candidate = self.parser.last_event_id
+        if _RESUMABLE_ID.match(candidate):
+            self._cursor = candidate
 
     @property
     def retry(self) -> int | None:
@@ -193,12 +212,15 @@ class EventStream:
     def feed(self, chunk: bytes) -> Iterator[StateChange | Ping]:
         """Consume transport bytes, yielding whatever events they complete."""
         for event in self.parser.feed_bytes(chunk):
+            self._track()
             parsed = parse_event(event.type or DEFAULT_EVENT_TYPE, event.data)
             if parsed is None:
                 continue
             if isinstance(parsed, StateChange) and self.close_after_state:
                 self.closed_after_state = True
             yield parsed
+        # A bare `id:` checkpoint moves the parser's cursor without yielding.
+        self._track()
 
 
 def resume_headers(last_event_id: str) -> dict[str, str]:

@@ -179,6 +179,18 @@ class TestResumption:
             list(source.events())
         assert fake.event_source_requests[1]["last-event-id"] == "4"
 
+    def test_a_reconnect_survives_an_id_that_is_not_a_legal_header(self):
+        # The second connection used to fail while building its request - the
+        # cursor was an id httpx could not encode - and every later one too.
+        fake = server()
+        fake.push("a", {"Email": "e1"}, event_id="7")
+        fake.push("a", {"Email": "e2"}, event_id="ev日")
+        with connect(fake) as client:
+            source = EventSourceClient(client)
+            list(source.events())
+            list(source.events())
+        assert fake.event_source_requests[1]["last-event-id"] == "7"
+
     def test_the_cursor_survives_a_connection_that_yielded_nothing(self):
         fake = server()
         fake.push("a", {"Email": "e1"}, event_id="9")

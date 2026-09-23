@@ -294,6 +294,34 @@ class TestEventStream:
     def test_a_stream_can_be_opened_at_a_known_cursor(self):
         assert EventStream.open(last_event_id="7").last_event_id == "7"
 
+    @pytest.mark.parametrize(
+        "unsendable",
+        [
+            "ev日",  # not ASCII: httpx raised UnicodeEncodeError building the request
+            " 43",  # leading whitespace: h11 refused the header on every reconnect
+            "43\t",  # trailing whitespace, likewise
+            "a\x0bb",  # a control character, likewise
+        ],
+    )
+    def test_an_id_that_cannot_go_back_as_a_header_does_not_become_the_cursor(self, unsendable):
+        # The cursor returns as Last-Event-ID. An id that cannot be sent there
+        # left listen() unable to reconnect at all, for good, since the cursor
+        # never changed after. Resuming from the last id that *can* be sent
+        # costs a short replay instead.
+        state = b'event: state\ndata: {"changed":{}}\n\n'
+        stream = EventStream.open()
+        list(stream.feed(b"id: 42\n" + state))
+        list(stream.feed(f"id: {unsendable}\n".encode() + state))
+        assert stream.parser.last_event_id == unsendable
+        assert stream.last_event_id == "42"
+        list(stream.feed(b"id: 44\n\n"))  # a bare checkpoint moves it on again
+        assert stream.last_event_id == "44"
+
+    def test_an_id_with_inner_spaces_is_a_legal_header_value(self):
+        stream = EventStream.open()
+        list(stream.feed(b'id: 4 2\nevent: state\ndata: {"changed":{}}\n\n'))
+        assert stream.last_event_id == "4 2"
+
 
 class TestHeaders:
     def test_a_cursor_becomes_a_resume_header(self):
