@@ -191,6 +191,44 @@ class TestOAuth2Refresh:
         assert order == ["refresh", "save:new"]
         assert auth.token.access_token == "new"
 
+    def test_a_token_that_could_not_be_saved_is_still_the_one_used(self):
+        # Against a server that rotates refresh tokens, the old one died the
+        # moment this refresh succeeded. Dropping the new token because the
+        # store failed kept the old one, and the next refresh replayed it -
+        # which Fastmail answers by revoking the whole grant.
+        presented: list[str | None] = []
+
+        def refresh(current: OAuth2Token) -> OAuth2Token:
+            presented.append(current.refresh_token)
+            n = len(presented) + 1
+            return OAuth2Token(f"AT-{n}", refresh_token=f"RT-{n}")
+
+        class LockedOnce:
+            saves = 0
+
+            def save(self, token: OAuth2Token) -> None:
+                self.saves += 1
+                if self.saves == 1:
+                    raise OSError("keyring locked")
+
+        auth = OAuth2Auth(
+            OAuth2Token("AT-1", refresh_token="RT-1"), refresh=refresh, store=LockedOnce()
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.headers["Authorization"] == "Bearer AT-2":
+                return httpx.Response(200, json={})
+            return unauthorized()
+
+        with httpx.Client(transport=httpx.MockTransport(handler), auth=auth) as client:
+            # The failure still reaches the caller: the token is only in memory.
+            with pytest.raises(OSError, match="keyring locked"):
+                client.get("https://x/")
+            assert client.get("https://x/").status_code == 200
+        assert presented == ["RT-1"]
+        assert auth.token.refresh_token == "RT-2"
+        assert auth.generation == 1
+
     def test_a_refresh_that_reenters_its_own_credential_fails_rather_than_hangs(self):
         # A refresh callable sending its request through a client carrying this
         # same credential, and refused with a Bearer 401, landed back in the

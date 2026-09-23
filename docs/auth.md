@@ -66,6 +66,11 @@ class MyStore:
         write_somewhere(token.access_token, token.refresh_token, token.expires_at)
 ```
 
+If `save` raises, the new token is used anyway - the refresh may already have
+retired the old one, and presenting that again is a replay a rotating server
+answers by revoking the grant - and the error reaches the request that set off
+the refresh, so you learn the token is held only in memory.
+
 A retry after a 401 happens exactly once, and only when the response carries a
 real `WWW-Authenticate: Bearer` challenge - not on any 401, because a 401
 without a challenge means something else is wrong and retrying compounds it.

@@ -124,6 +124,11 @@ class TokenStore(Protocol):
     ``save`` must durably store the token before returning. It is called *before*
     the previous refresh token is discarded, because a crash in between, against
     a server that rotates refresh tokens, loses the grant permanently.
+
+    If ``save`` raises, the new token is used all the same - the refresh that
+    produced it may already have killed the old one - and the error propagates
+    from the request that set off the refresh, so the caller learns the token
+    lives only in memory.
     """
 
     def save(self, token: OAuth2Token) -> None: ...
@@ -231,10 +236,15 @@ class OAuth2Auth(JMAPAuth):
         # Persist first. A server that rotates refresh tokens invalidates the old
         # one the moment this succeeds, so a crash after swapping but before
         # saving would strand the grant.
-        if self._store is not None:
-            self._store.save(token)
-        self._token = token
-        self._generation += 1
+        try:
+            if self._store is not None:
+                self._store.save(token)
+        finally:
+            # Adopted even when saving failed. The old refresh token may be dead
+            # already, and presenting it again is a replay - which Fastmail
+            # answers by revoking the grant outright.
+            self._token = token
+            self._generation += 1
 
     def _refresh_once(self, seen_generation: int) -> bool:
         """Refresh unless another caller already did. Returns whether we hold a
