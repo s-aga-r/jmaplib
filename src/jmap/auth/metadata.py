@@ -21,7 +21,8 @@ deployment.
 the returned ``issuer`` MUST be identical to the one the URL was built from, and
 that mismatched metadata MUST NOT be used. Skipping the check turns any server
 that can answer that path into one that can nominate an attacker's token
-endpoint.
+endpoint. RFC 9728 §3.3 asks the same of a protected resource's ``resource``,
+for the same reason.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from jmap.core.narrow import as_object, is_object
 #: RFC 9728 §3.1 and RFC 8414 §3.1.
 PROTECTED_RESOURCE_SUFFIX: Final = "oauth-protected-resource"
 AUTHORIZATION_SERVER_SUFFIX: Final = "oauth-authorization-server"
+_PROTECTED_RESOURCE_PATH: Final = f"/.well-known/{PROTECTED_RESOURCE_SUFFIX}"
 #: OpenID Connect Discovery uses a different suffix, and *appends* it. Plenty of
 #: deployments answer only this one, so it is worth trying as a fallback.
 OPENID_SUFFIX: Final = "openid-configuration"
@@ -83,6 +85,24 @@ class IssuerMismatchError(DiscoveryError):
         )
 
 
+class ResourceMismatchError(DiscoveryError):
+    """Protected resource metadata is about some other resource.
+
+    RFC 9728 §3.3 requires the document to be discarded. The check is what stops
+    a host that merely *answers* the well-known path - or a ``resource_metadata``
+    pointer aimed somewhere else - from choosing the authorization server for a
+    resource it is not.
+    """
+
+    def __init__(self, received: str, *, expected: str, why: str) -> None:
+        self.expected = expected
+        self.received = received
+        super().__init__(
+            f"protected resource metadata names resource {received!r}, {why}; "
+            f"RFC 9728 §3.3 requires discarding it"
+        )
+
+
 def well_known_url(issuer: str, suffix: str) -> str:
     """Build a metadata URL by *inserting* the well-known segment (RFC 8414 §3.1).
 
@@ -123,11 +143,51 @@ class ProtectedResourceMetadata(OAuthDocument):
     resource_documentation: str | None = None
 
     @classmethod
-    def of(cls, document: Any) -> ProtectedResourceMetadata:
-        """Parse a fetched document, rejecting one that is not an object."""
+    def of(
+        cls, document: Any, *, fetched_from: str | None = None, requested: str | None = None
+    ) -> ProtectedResourceMetadata:
+        """Parse a fetched document, rejecting one that is not an object.
+
+        ``fetched_from`` and ``requested`` turn on RFC 9728 §3.3's checks, and
+        are parameters here rather than a method so a caller cannot forget them
+        afterwards. ``fetched_from`` is the URL the document came from: when it
+        is a well-known one, the document must name the resource it was built
+        from. ``requested`` is the URL being signed in to, which the named
+        resource must cover.
+
+        "Cover" rather than §3.3's "identical": servers name their origin rather
+        than every URL under it - Stalwart names ``https://localhost`` for all of
+        them - so the resource must be the requested URL's origin and a run of
+        its leading path segments. Metadata about any other resource still fails.
+        """
         if not is_object(document):
             raise DiscoveryError("protected resource metadata was not a JSON object")
-        return cls.model_validate(as_object(document))
+        metadata = cls.model_validate(as_object(document))
+        if fetched_from is not None or requested is not None:
+            metadata._check_resource(fetched_from, requested)
+        return metadata
+
+    def _check_resource(self, fetched_from: str | None, requested: str | None) -> None:
+        claimed = self.resource
+        if not claimed:
+            raise DiscoveryError(
+                "the protected resource metadata names no resource, which RFC 9728 §2 "
+                "requires; without it nothing ties the document to the server it is for"
+            )
+        if fetched_from is not None and _is_protected_resource_url(fetched_from):
+            published = _protected_resource_location(claimed)
+            if published != _without_fragment(fetched_from):
+                raise ResourceMismatchError(
+                    claimed,
+                    expected=fetched_from,
+                    why=f"whose metadata lives at {published!r}, not {fetched_from!r}",
+                )
+        if requested is not None and not _covers(claimed, requested):
+            raise ResourceMismatchError(
+                claimed,
+                expected=requested,
+                why=f"which does not cover {requested!r}, the URL that was requested",
+            )
 
     def issuer(self) -> str:
         """The single authorization server to use, or an error naming why not.
@@ -148,6 +208,46 @@ class ProtectedResourceMetadata(OAuthDocument):
                 f"{', '.join(self.authorization_servers)}"
             )
         return self.authorization_servers[0]
+
+
+def _is_protected_resource_url(url: str) -> bool:
+    """Whether ``url`` is a well-known location RFC 9728 §3 builds."""
+    path = urlsplit(url).path
+    return path == _PROTECTED_RESOURCE_PATH or path.startswith(f"{_PROTECTED_RESOURCE_PATH}/")
+
+
+def _protected_resource_location(resource: str) -> str:
+    """Where RFC 9728 §3 publishes ``resource``'s metadata.
+
+    The segment goes between the host and the path *and query*, which is why
+    this is not :func:`well_known_url`: that drops a query, and two resources
+    differing only there would share a location.
+    """
+    parts = urlsplit(resource)
+    return urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            f"{_PROTECTED_RESOURCE_PATH}{parts.path.rstrip('/')}",
+            parts.query,
+            "",
+        )
+    )
+
+
+def _without_fragment(url: str) -> str:
+    return urlunsplit(urlsplit(url)._replace(fragment=""))
+
+
+def _covers(resource: str, requested: str) -> bool:
+    """Whether ``resource`` is ``requested``'s origin and leading path segments."""
+    named, target = urlsplit(resource), urlsplit(requested)
+    if (named.scheme, named.netloc.lower()) != (target.scheme, target.netloc.lower()):
+        return False
+    if named.query and named.query != target.query:
+        return False
+    stem = named.path.rstrip("/")
+    return target.path == stem or target.path.startswith(f"{stem}/")
 
 
 class AuthorizationServerMetadata(OAuthDocument):

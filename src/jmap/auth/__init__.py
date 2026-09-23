@@ -55,6 +55,7 @@ from jmap.auth.metadata import (
     DiscoveryError,
     IssuerMismatchError,
     ProtectedResourceMetadata,
+    ResourceMismatchError,
     openid_url,
     well_known_url,
 )
@@ -95,6 +96,7 @@ __all__ = [
     "ProtectedResourceMetadata",
     "RedirectTimeoutError",
     "RegisteredClient",
+    "ResourceMismatchError",
     "StateMismatchError",
     "TokenStore",
     "challenge_for",

@@ -44,6 +44,7 @@ from jmap.auth.metadata import (
     DiscoveryError,
     IssuerMismatchError,
     ProtectedResourceMetadata,
+    ResourceMismatchError,
     openid_url,
     well_known_url,
 )
@@ -310,6 +311,79 @@ class TestProtectedResourceMetadata:
             metadata.issuer()
         assert "https://a.example.com" in str(excinfo.value)
         assert "https://b.example.com" in str(excinfo.value)
+
+
+class TestResourceChecks:
+    """RFC 9728 §3.3, which only a fetched document is held to."""
+
+    @staticmethod
+    def named(resource: str, **where: str) -> ProtectedResourceMetadata:
+        return ProtectedResourceMetadata.of({"resource": resource}, **where)
+
+    def test_an_origin_covers_every_url_on_it(self):
+        self.named("https://jmap.example.com", requested="https://jmap.example.com/jmap/session")
+        self.named("https://jmap.example.com", requested="https://jmap.example.com")
+
+    def test_a_path_covers_what_is_below_it(self):
+        self.named("https://x.example/jmap", requested="https://x.example/jmap/session")
+        self.named("https://x.example/jmap/", requested="https://x.example/jmap")
+
+    def test_a_path_does_not_cover_a_sibling_sharing_its_spelling(self):
+        with pytest.raises(ResourceMismatchError):
+            self.named("https://x.example/jmap", requested="https://x.example/jmapx/session")
+
+    def test_host_case_does_not_matter(self):
+        self.named("https://JMAP.Example.com", requested="https://jmap.example.com/jmap")
+
+    def test_another_scheme_is_another_resource(self):
+        with pytest.raises(ResourceMismatchError):
+            self.named("http://x.example", requested="https://x.example/jmap")
+
+    def test_another_port_is_another_resource(self):
+        with pytest.raises(ResourceMismatchError):
+            self.named("https://x.example:8443", requested="https://x.example/jmap")
+
+    def test_a_query_in_the_resource_must_be_the_requested_one(self):
+        self.named("https://x.example/api?t=a", requested="https://x.example/api?t=a")
+        with pytest.raises(ResourceMismatchError):
+            self.named("https://x.example/api?t=a", requested="https://x.example/api?t=b")
+
+    def test_the_query_is_part_of_where_the_metadata_lives(self):
+        # Inserted before the path *and query*: two tenants differing only in
+        # the query do not share a document.
+        location = "https://x.example/.well-known/oauth-protected-resource/api?t=a"
+        self.named("https://x.example/api?t=a", fetched_from=location)
+        with pytest.raises(ResourceMismatchError):
+            self.named("https://x.example/api?t=b", fetched_from=location)
+
+    def test_a_fragment_on_the_location_is_not_part_of_it(self):
+        self.named(
+            "https://x.example",
+            fetched_from="https://x.example/.well-known/oauth-protected-resource#top",
+        )
+
+    def test_a_location_that_is_not_well_known_proves_nothing(self):
+        # Not built from any resource identifier, so there is nothing to match.
+        self.named("https://x.example", fetched_from="https://x.example/prm.json")
+
+    def test_a_lookalike_well_known_path_is_not_one(self):
+        self.named(
+            "https://x.example",
+            fetched_from="https://x.example/.well-known/oauth-protected-resourcex",
+        )
+
+    def test_the_mismatch_carries_both(self):
+        with pytest.raises(ResourceMismatchError) as excinfo:
+            self.named("https://evil.example", requested="https://jmap.example.com/jmap")
+        assert excinfo.value.received == "https://evil.example"
+        assert excinfo.value.expected == "https://jmap.example.com/jmap"
+
+    def test_naming_no_resource_fails_once_checked(self):
+        with pytest.raises(DiscoveryError, match="names no resource"):
+            ProtectedResourceMetadata.of({}, requested="https://x.example/jmap")
+
+    def test_a_mismatch_is_a_discovery_error(self):
+        assert issubclass(ResourceMismatchError, DiscoveryError)
 
 
 class TestAuthorizationServerMetadata:

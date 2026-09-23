@@ -8,7 +8,9 @@ redirect to an ephemeral port actually lands. Everything HTTP goes through
 
 from __future__ import annotations
 
+import json
 import threading
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -24,7 +26,14 @@ from jmap.auth.acquire import (
 )
 from jmap.auth.credentials import BasicAuth, OAuth2Auth, OAuth2Token
 from jmap.auth.flows import DeviceAuthorization, OAuthError, StateMismatchError
-from jmap.auth.metadata import AuthorizationServerMetadata, DiscoveryError, IssuerMismatchError
+from jmap.auth.metadata import (
+    AuthorizationServerMetadata,
+    DiscoveryError,
+    IssuerMismatchError,
+    ResourceMismatchError,
+)
+
+FIXTURES = Path(__file__).parents[1] / "fixtures"
 
 ISSUER = "https://auth.example.com"
 
@@ -151,7 +160,13 @@ class TestDiscovery:
         router = Router()
         router.add(
             "/.well-known/oauth-protected-resource",
-            httpx.Response(200, json={"authorization_servers": [ISSUER, "https://other.example"]}),
+            httpx.Response(
+                200,
+                json={
+                    "resource": "https://jmap.example.com",
+                    "authorization_servers": [ISSUER, "https://other.example"],
+                },
+            ),
         )
         router.add(
             "/.well-known/oauth-authorization-server", httpx.Response(200, json=SERVER_METADATA)
@@ -263,6 +278,16 @@ class TestDiscovery:
 PRM_URL = "https://jmap.example.com/.well-known/oauth-protected-resource"
 
 
+def prm_router(
+    document: dict[str, Any], *, path: str = "/.well-known/oauth-protected-resource"
+) -> Router:
+    """A resource answering at ``path``, and the authorization server it names."""
+    router = Router()
+    router.add(path, httpx.Response(200, json={"authorization_servers": [ISSUER], **document}))
+    router.add("/.well-known/oauth-authorization-server", httpx.Response(200, json=SERVER_METADATA))
+    return router
+
+
 class TestDiscoveryRedirects:
     def test_a_redirect_to_cleartext_is_refused_before_it_is_fetched(self):
         # One cleartext hop, and whoever is on the path serves self-consistent
@@ -312,6 +337,94 @@ class TestDiscoveryRedirects:
         client = httpx.Client(transport=httpx.MockTransport(handler))
         with pytest.raises(DiscoveryError, match="redirected more than"):
             OAuthClient.discover_from_issuer(ISSUER, http=client)
+
+
+class TestResourceValidation:
+    """RFC 9728 §3.3: metadata about another resource MUST NOT be used."""
+
+    def test_metadata_naming_another_resource_is_refused(self):
+        router = prm_router({"resource": "https://some-other-resource.example/"})
+        with pytest.raises(ResourceMismatchError, match="some-other-resource"):
+            OAuthClient.discover(PRM_URL, http=router.client())
+        assert [r.url.path for r in router.requests] == ["/.well-known/oauth-protected-resource"]
+
+    def test_metadata_naming_no_resource_is_refused(self):
+        # RFC 9728 §2 makes it REQUIRED; without it nothing ties the document to
+        # the server being signed in to.
+        with pytest.raises(DiscoveryError, match="names no resource"):
+            OAuthClient.discover(PRM_URL, http=prm_router({}).client())
+
+    @pytest.mark.parametrize("resource", ["https://jmap.example.com", "https://jmap.example.com/"])
+    def test_a_trailing_slash_names_the_same_resource(self, resource):
+        # RFC 9728 §3.1 drops it before inserting the well-known segment, so
+        # the URL cannot tell the two spellings apart and neither may the check.
+        found = OAuthClient.discover(PRM_URL, http=prm_router({"resource": resource}).client())
+        assert found.issuer == ISSUER
+
+    def test_a_resource_with_a_path_is_published_under_it(self):
+        tenant = "/.well-known/oauth-protected-resource/tenant"
+        router = prm_router({"resource": "https://jmap.example.com/tenant"}, path=tenant)
+        assert OAuthClient.discover(f"{PRM_URL}/tenant", http=router.client()).issuer == ISSUER
+        # The host's own metadata, served at a tenant's path, speaks for the host.
+        router = prm_router({"resource": "https://jmap.example.com"}, path=tenant)
+        with pytest.raises(ResourceMismatchError):
+            OAuthClient.discover(f"{PRM_URL}/tenant", http=router.client())
+
+    def test_stalwarts_relative_pointer_resolves_against_the_requested_url(self):
+        # Stalwart's challenge says resource_metadata="/.well-known/...", which
+        # could not be fetched at all, and names its origin as the resource.
+        router = Router()
+        for path, fixture in (
+            ("/.well-known/oauth-protected-resource", "stalwart-0.16.17-prm.json"),
+            ("/.well-known/oauth-authorization-server", "stalwart-0.16.17-as-metadata.json"),
+        ):
+            document = json.loads((FIXTURES / fixture).read_text())
+            router.add(path, httpx.Response(200, json=document))
+        found = OAuthClient.discover(
+            "/.well-known/oauth-protected-resource",
+            resource="https://localhost/.well-known/jmap",
+            http=router.client(),
+        )
+        assert found.issuer == "https://localhost"
+        assert (
+            str(router.requests[0].url) == "https://localhost/.well-known/oauth-protected-resource"
+        )
+
+    def test_a_relative_pointer_needs_the_requested_url(self):
+        router = Router()
+        with pytest.raises(DiscoveryError, match="relative"):
+            OAuthClient.discover("/.well-known/oauth-protected-resource", http=router.client())
+        assert router.requests == []
+
+    def test_the_resource_must_cover_the_url_requested(self):
+        # Correctly published, and still about some other resource on the host.
+        other = "/.well-known/oauth-protected-resource/other"
+        router = prm_router({"resource": "https://jmap.example.com/other"}, path=other)
+        with pytest.raises(ResourceMismatchError, match="jmap/session"):
+            OAuthClient.discover(
+                f"{PRM_URL}/other",
+                resource="https://jmap.example.com/jmap/session",
+                http=router.client(),
+            )
+
+    def test_another_origins_metadata_is_refused(self):
+        # A pointer aimed at another host, whose own document is in order.
+        router = prm_router({"resource": "https://evil.example"})
+        with pytest.raises(ResourceMismatchError):
+            OAuthClient.discover(
+                "https://evil.example/.well-known/oauth-protected-resource",
+                resource="https://jmap.example.com/jmap",
+                http=router.client(),
+            )
+
+    def test_a_pointer_elsewhere_is_checked_against_the_requested_url(self):
+        router = prm_router({"resource": "https://jmap.example.com"}, path="/prm.json")
+        found = OAuthClient.discover(
+            "https://jmap.example.com/prm.json",
+            resource="https://jmap.example.com/jmap",
+            http=router.client(),
+        )
+        assert found.issuer == ISSUER
 
 
 class TestBorrowedClient:

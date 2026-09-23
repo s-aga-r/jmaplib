@@ -314,7 +314,8 @@ find out.
 ```python
 from jmap.auth import OAuthClient
 
-metadata = OAuthClient.discover(challenge.resource_metadata)  # RFC 9728 → RFC 8414
+# `challenge` is the Bearer challenge on a 401, and `url` the URL that drew it.
+metadata = OAuthClient.discover(challenge.resource_metadata, resource=url)  # RFC 9728 → RFC 8414
 with OAuthClient(metadata, client_id="...") as oauth:
     token = oauth.authorize(scope="urn:ietf:params:jmap:core")  # PKCE, loopback
 client = JMAPClient.discover("alice@example.com", auth=BearerAuth(token.access_token))
@@ -326,8 +327,8 @@ enough — Fastmail answers 404 there. A record naming a host outside the addres
 domain is tried only once `confirm_srv_target` accepts it: without DNSSEC the
 answer can be forged, and whoever it names receives the credentials (RFC 6186 §6).
 
-Two things in the OAuth path are security properties rather than conveniences,
-and both are the kind that work fine against a cooperative server:
+Three things in the OAuth path are security properties rather than conveniences,
+and all are the kind that work fine against a cooperative server:
 
 - **The well-known segment is inserted, not appended.** RFC 8414 §3.1 puts
   `/.well-known/oauth-authorization-server` *between* host and path. Appending
@@ -336,6 +337,10 @@ and both are the kind that work fine against a cooperative server:
 - **The returned `issuer` is checked against the one the URL was built from**
   (§3.3). Without it, any host that merely answers that path can nominate
   whichever token endpoint it likes.
+- **The resource metadata must be about this resource.** RFC 9728 §3.3: the
+  `resource` it names must be the one its well-known URL was built from, and must
+  cover the URL whose 401 pointed there. Otherwise a pointer aimed anywhere picks
+  the authorization server.
 
 Only S256 PKCE is used. RFC 7636 also defines `plain`, where the challenge *is*
 the verifier — which defeats the point for precisely the clients that need it, so

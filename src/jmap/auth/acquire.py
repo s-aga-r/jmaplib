@@ -29,7 +29,7 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -282,20 +282,34 @@ class OAuthClient:
     def discover(
         resource_metadata_url: str,
         *,
+        resource: str | None = None,
         http: httpx.Client | None = None,
         issuer: str | None = None,
         timeout: float = 30.0,
     ) -> AuthorizationServerMetadata:
         """Walk RFC 9728 -> RFC 8414 from a challenge's ``resource_metadata``.
 
+        Or from :func:`protected_resource_url`, when no challenge named one.
+        ``resource`` is the URL being signed in to - the one whose request drew
+        the challenge, if there was one. A relative pointer - which is what
+        Stalwart sends - resolves against it, and the document found must name
+        it, or an origin and path above it, as the resource (RFC 9728 §3.3):
+        otherwise a pointer aimed anywhere could pick the authorization server
+        for a resource that document is not about. A document fetched from a
+        well-known URL must name the resource that URL was built from, which
+        §3.3 requires with or without ``resource``.
+
         ``issuer`` overrides the one the resource names, for the case where a
         resource lists several and the caller has chosen.
         """
+        url = _absolute(resource_metadata_url, resource)
+        _require_https(url, purpose="the resource metadata URL")
         client = http or httpx.Client(timeout=timeout)
         try:
-            _require_https(resource_metadata_url, purpose="the resource metadata URL")
-            resource = ProtectedResourceMetadata.of(_fetch_json(client, resource_metadata_url))
-            chosen = issuer or resource.issuer()
+            found = ProtectedResourceMetadata.of(
+                _fetch_json(client, url), fetched_from=url, requested=resource
+            )
+            chosen = issuer or found.issuer()
             return _fetch_server_metadata(client, chosen)
         finally:
             if http is None:
@@ -620,6 +634,18 @@ def _decode(content: bytes, url: str) -> Any:
         return loads(content)
     except ValueError as exc:
         raise DiscoveryError(f"{url} did not return JSON") from exc
+
+
+def _absolute(pointer: str, resource: str | None) -> str:
+    """A ``resource_metadata`` pointer made absolute against the URL it came from."""
+    if urlsplit(pointer).scheme:
+        return pointer
+    if resource is None:
+        raise DiscoveryError(
+            f"resource_metadata {pointer!r} is relative; pass resource=, the URL whose "
+            f"401 carried it, to resolve it against"
+        )
+    return urljoin(resource, pointer)
 
 
 def protected_resource_url(resource: str) -> str:

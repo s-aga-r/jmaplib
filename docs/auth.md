@@ -86,9 +86,10 @@ decision stays testable.
 it is automatic:
 
 ```python
-from jmap.auth import OAuthClient
+from jmap.auth import OAuthClient, protected_resource_url
 
-metadata = OAuthClient.discover("https://mail.example.com/.well-known/jmap")
+url = "https://mail.example.com/.well-known/jmap"
+metadata = OAuthClient.discover(protected_resource_url("https://mail.example.com"), resource=url)
 oauth = OAuthClient(metadata, client_id="...")
 ```
 
@@ -96,6 +97,26 @@ oauth = OAuthClient(metadata, client_id="...")
 server, then RFC 8414 to describe it; it returns the *metadata*, which you hand
 to the client. `discover_from_issuer` skips to the second step when you already
 know the issuer.
+
+It starts from the metadata's URL. With nothing else to go on, that is the
+well-known one for the server's origin, which `protected_resource_url` builds. A
+401 names it outright, in its Bearer challenge - relative, in Stalwart's case:
+
+```python
+from jmap.auth import find_challenge, parse_challenges
+
+# `error` is the AuthenticationError, and `url` the URL that drew it.
+bearer = find_challenge(parse_challenges(error.challenges), "bearer")
+metadata = OAuthClient.discover(bearer.resource_metadata, resource=url)
+```
+
+`resource` is the URL you were talking to. A relative pointer resolves against
+it, and the document found must name it, or its origin and a path above it, as
+the resource it describes (RFC 9728 §3.3). Anything else raises
+`ResourceMismatchError`: a pointer is only as trustworthy as the document it
+leads to. Every fetch in the chain is https, hop by hop through any redirect.
+Stalwart answers an unauthenticated session request with a 200 and no accounts,
+not a 401, so do not wait for a challenge to begin.
 
 With no client id and a server supporting RFC 7591 dynamic registration:
 
