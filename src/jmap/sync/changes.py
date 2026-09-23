@@ -130,11 +130,14 @@ class ChangeStream:
     The cursor is read from and written back to a :class:`StateStore`, so a
     process that stops halfway resumes rather than starting over.
 
-    Delivery is **at least once**, deliberately. The cursor advances only once the
-    consumer comes back for the *next* page, so a page being processed when the
-    process dies is delivered again on the next run. Writing the cursor before
-    handing the page over would make it at-most-once and lose changes on a crash;
-    duplicates a caller can absorb, missing changes it cannot.
+    :meth:`pages` delivers **at least once**, deliberately. The cursor advances
+    only once the consumer comes back for the *next* page, so a page being
+    processed when the process dies is delivered again on the next run. Writing
+    the cursor before handing the page over would make it at-most-once and lose
+    changes on a crash; duplicates a caller can absorb, missing changes it cannot.
+
+    :meth:`catch_up` hands everything over at once, so it is all or nothing
+    instead: the cursor moves a single time, after the last page has arrived.
     """
 
     __slots__ = ("_account_id", "_client", "_key", "_store", "_type_name")
@@ -174,32 +177,57 @@ class ChangeStream:
         Yields rather than accumulating so a caller syncing a large mailbox can
         process each page as it arrives instead of holding every id in memory.
         """
-        since = self._store.get(self._key)
-        if since is None:
-            raise ResyncRequiredError(self._type_name, "")
-
+        since = self._cursor()
         while True:
             response = self._fetch(since, max_changes)
             yield response
             # Only reached when the consumer asks for another page, which is what
             # makes delivery at-least-once: abandoning the iterator here leaves
             # the cursor where it was, and this page arrives again next time.
-            advanced = response.new_state or since
-            if response.has_more_changes and advanced == since:
-                # §5.2 requires newState to move when hasMoreChanges is true;
-                # following a stuck cursor is an infinite request loop.
-                raise StuckChangeStreamError(self._type_name, since)
-            since = advanced
+            since = self._advance(response, since)
             self._store.set(self._key, since)
             if not response.has_more_changes:
                 return
 
     def catch_up(self, *, max_changes: int | None = None) -> ChangeSet:
-        """Collect every outstanding change into one :class:`ChangeSet`."""
+        """Collect every outstanding change into one :class:`ChangeSet`.
+
+        The stored cursor moves once, after the last page has arrived. It used
+        to follow :meth:`pages` and move page by page, which is right for a
+        consumer that has *processed* each page but not for this method, which
+        hands none over until it has them all: a failure on page N discarded
+        pages 1 to N-1 while recording them as delivered, so the retry resumed
+        after them and their changes were lost. Now a failure anywhere leaves
+        the cursor where it was, and the retry starts again from there.
+
+        Once this returns, the cursor has moved. A caller that must survive a
+        crash *while applying* the result should consume :meth:`pages` instead.
+        """
         changes = ChangeSet(self._type_name)
-        for page in self.pages(max_changes=max_changes):
-            changes.absorb(page)
+        since = self._cursor()
+        while True:
+            response = self._fetch(since, max_changes)
+            changes.absorb(response)
+            since = self._advance(response, since)
+            if not response.has_more_changes:
+                break
+        self._store.set(self._key, since)
         return changes
+
+    def _cursor(self) -> str:
+        since = self._store.get(self._key)
+        if since is None:
+            raise ResyncRequiredError(self._type_name, "")
+        return since
+
+    def _advance(self, response: ChangesResponse, since: str) -> str:
+        """The state to resume from after ``response``."""
+        advanced = response.new_state or since
+        if response.has_more_changes and advanced == since:
+            # §5.2 requires newState to move when hasMoreChanges is true;
+            # following a stuck cursor is an infinite request loop.
+            raise StuckChangeStreamError(self._type_name, since)
+        return advanced
 
     def _fetch(self, since: str, max_changes: int | None) -> ChangesResponse:
         arguments: dict[str, Any] = {"sinceState": since}

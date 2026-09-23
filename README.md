@@ -225,9 +225,12 @@ Two things this gets right that are easy to get wrong:
   to be invalidated and re-downloaded, so it raises `ResyncRequiredError` rather
   than passing through as a generic method error — the recovery is different.
 
-Delivery is **at least once**: the cursor advances only when you come back for the
-next page, so a page being processed when the process dies arrives again. A caller
-can absorb duplicates; it cannot recover changes it never saw.
+Through `pages()`, delivery is **at least once**: the cursor advances only when you
+come back for the next page, so a page being processed when the process dies
+arrives again. A caller can absorb duplicates; it cannot recover changes it never
+saw. `catch_up()` hands everything over at once, so it is all or nothing instead:
+the cursor moves once, when the whole set is returned, and a failure part-way
+through leaves it where it was.
 
 `QueryView` keeps a cached result list current via `Foo/queryChanges`:
 

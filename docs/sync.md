@@ -33,6 +33,12 @@ for page in stream.pages(max_changes=100):
     process(page.created, page.updated, page.destroyed)
 ```
 
+The two differ in when the stored cursor moves. `pages()` moves it only when you
+ask for the next page, so a page you were processing when the process died
+arrives again. `catch_up()` moves it once, when it returns the whole set: a
+failure part-way through leaves it untouched, but a crash while you are applying
+the result will not deliver it again. Use `pages()` when that matters.
+
 A `ChangeSet` has `.created`, `.updated`, `.destroyed`, `.new_state`, `.pages`,
 and two conveniences: `.is_empty` and `.touched` (created plus updated - the ids
 worth re-fetching).

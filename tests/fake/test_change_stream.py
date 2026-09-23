@@ -188,6 +188,55 @@ class TestCursorPersistence:
             next(iterator)
         assert store.get("a/Email") == "s1"
 
+    def test_a_loop_over_every_page_stores_the_final_cursor(self):
+        # The loop asking for the page after the last one is the consumer saying
+        # it processed that last one, so the final state is committed then.
+        fake = server()
+        pages = iter(
+            [
+                page(newState="s1", created=["m1"], hasMoreChanges=True),
+                page(newState="s2", created=["m2"]),
+            ]
+        )
+        fake.handle("Email/changes", lambda _args, _srv: next(pages))
+        store = InMemoryStateStore()
+        with connect(fake) as client:
+            stream = ChangeStream(client, "Email", store=store)
+            stream.seed("s0")
+            seen = [changed for each in stream.pages() for changed in each.created]
+        assert seen == ["m1", "m2"]
+        assert store.get("a/Email") == "s2"
+
+    def test_a_failure_part_way_through_catch_up_loses_nothing(self):
+        # catch_up() hands nothing over until it holds every page. Moving the
+        # stored cursor past a page before that meant a transient error on the
+        # next one discarded the page *and* recorded it as delivered: the retry
+        # resumed after it, and its changes were never seen by anyone.
+        fake = server()
+        outage = {"armed": True}
+
+        def handler(arguments: dict[str, Any], srv: FakeJMAPServer) -> dict[str, Any]:
+            if arguments["sinceState"] == "s0":
+                if outage["armed"]:
+                    srv.fail("Email/changes", "serverFail")  # so the next page fails
+                    outage["armed"] = False
+                return page(newState="s1", created=["m1"], hasMoreChanges=True)
+            return page(newState="s2", updated=["m2"])
+
+        fake.handle("Email/changes", handler)
+        store = InMemoryStateStore()
+        with connect(fake) as client:
+            stream = ChangeStream(client, "Email", store=store)
+            stream.seed("s0")
+            with pytest.raises(MethodError, match="serverFail"):
+                stream.catch_up()
+            assert store.get("a/Email") == "s0"
+            fake.errors.clear()  # the server recovers
+            changes = stream.catch_up()
+        assert changes.created == ["m1"]
+        assert changes.updated == ["m2"]
+        assert store.get("a/Email") == "s2"
+
     def test_reset_forces_a_full_resync_next_time(self):
         fake = server()
         with connect(fake) as client:
