@@ -215,10 +215,12 @@ from the session and plans around them:
 - **`/get` with too many ids** is split automatically, and the responses are
   recombined. The `state` of each chunk is compared, so a mutation racing your
   read is detected rather than silently producing a mixed answer.
-- **A batch with too many calls** is split into several requests - without ever
-  cutting a reference edge. Calls that reference each other stay together. If
-  one connected group cannot fit on its own, `BatchTooLargeError` names the
-  calls rather than sending something that will fail.
+- **A batch with too many calls** is split into several requests, cut only
+  between consecutive calls - so they still run in the order you queued them -
+  and never between a call and one it references. If no such cut fits under the
+  limit, `BatchTooLargeError` names the stretch of calls that has to travel
+  together, rather than sending something that will fail or quietly running
+  your calls in a different order.
 - **A `/set` over `maxObjectsInSet` raises** instead of being split, because
   splitting it would break the single `if_in_state` that makes it atomic. That
   is a decision you have to make, not one the library can make for you.

@@ -12,11 +12,13 @@ destroying every unrelated call batched alongside it. So the set is computed fro
 the calls, then intersected with what the session advertises, and anything
 missing raises locally.
 
-**Splitting must not cut a reference edge.** A back-reference can only target a
-call in the *same* request, so calls joined by references form a connected
-component that must travel together. If one such component alone exceeds
-``maxCallsInRequest`` the batch is unsendable, and saying so by name beats a
-server-side ``invalidResultReference``.
+**Splitting must neither cut a reference edge nor reorder calls.** A
+back-reference can only target a call in the *same* request, so no cut may fall
+between a call and one it references. And JMAP executes calls in order, which is
+observable whenever two calls touch the same objects - so a split may only cut
+between consecutive calls, never regroup them. When no such cut fits under
+``maxCallsInRequest`` the batch is unsendable as queued, and saying so by name
+beats both a server-side ``invalidResultReference`` and a quiet reordering.
 
 **Creation ids cross requests only via `createdIds`.** ``#foo`` is scoped to one
 request. RFC 8620 §3.3's ``createdIds`` map is the mechanism for carrying those
@@ -113,40 +115,24 @@ def validate_references(calls: Sequence[tuple[str, MethodCall[Any]]]) -> None:
         seen[call_id] = call.name
 
 
-def _reference_components(
-    calls: Sequence[tuple[str, MethodCall[Any]]],
-) -> list[list[int]]:
-    """Group call indices into connected components joined by references.
+def _cut_points(calls: Sequence[tuple[str, MethodCall[Any]]]) -> list[bool]:
+    """Where a request may end: ``result[i]`` says whether one may end before call ``i``.
 
-    Union-find over the reference edges. Components are returned ordered by their
-    earliest member so that packing them preserves the caller's original call
-    order, which JMAP executes in sequence and which can be observable when two
-    calls touch the same objects.
+    A cut before ``i`` is legal unless some call at or after ``i`` references a
+    call before it, which the cut would strand in an earlier request. One pass
+    from the end, carrying the lowest index referenced by anything so far.
     """
     index_of = {call_id: i for i, (call_id, _) in enumerate(calls)}
-    parent = list(range(len(calls)))
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: int, b: int) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            # Keep the lower index as the root so component ordering stays stable.
-            parent[max(ra, rb)] = min(ra, rb)
-
+    lowest: list[int] = []
     for i, (_, call) in enumerate(calls):
         _, refs = call.split_arguments()
-        for ref in refs.values():
-            union(i, index_of[ref.result_of])
-
-    groups: dict[int, list[int]] = {}
-    for i in range(len(calls)):
-        groups.setdefault(find(i), []).append(i)
-    return [groups[root] for root in sorted(groups)]
+        lowest.append(min((index_of[ref.result_of] for ref in refs.values()), default=i))
+    legal = [True] * (len(calls) + 1)
+    reach = len(calls)
+    for i in range(len(calls) - 1, -1, -1):
+        reach = min(reach, lowest[i])
+        legal[i] = reach >= i
+    return legal
 
 
 def plan_requests(
@@ -158,9 +144,14 @@ def plan_requests(
 ) -> list[Request]:
     """Split ``calls`` into requests that respect ``maxCallsInRequest``.
 
-    Components are packed greedily in order. Only the first request carries the
-    incoming ``createdIds``; the caller threads each response's ``createdIds``
-    into the next request, because the server assigns them as it goes.
+    Each request takes as many of the next calls, in order, as fit before a
+    legal cut - see :func:`_cut_points`. Packing whole reference groups instead
+    kept every reference intact but could run a call queued after a write ahead
+    of it, whenever one group's calls were interleaved with another's.
+
+    Only the first request carries the incoming ``createdIds``; the caller
+    threads each response's ``createdIds`` into the next request, because the
+    server assigns them as it goes.
     """
     if max_calls_in_request < 1:
         raise ValueError(f"maxCallsInRequest must be >= 1, got {max_calls_in_request}")
@@ -168,31 +159,24 @@ def plan_requests(
         return []
 
     validate_references(calls)
-    components = _reference_components(calls)
+    legal = _cut_points(calls)
 
-    for component in components:
-        if len(component) > max_calls_in_request:
-            raise BatchTooLargeError(tuple(calls[i][0] for i in component), max_calls_in_request)
-
-    batches: list[list[int]] = []
-    current: list[int] = []
-    for component in components:
-        if current and len(current) + len(component) > max_calls_in_request:
-            batches.append(current)
-            current = []
-        current.extend(component)
-    # No `if current` guard: every component is non-empty and every iteration
-    # extends `current`, so after the loop it always holds the final batch.
-    batches.append(current)
-
-    return [
-        Request(
-            using,
-            [calls[i] for i in sorted(batch)],
-            created_ids if position == 0 else None,
-        )
-        for position, batch in enumerate(batches)
-    ]
+    requests: list[Request] = []
+    start = 0
+    while start < len(calls):
+        end = min(start + max_calls_in_request, len(calls))
+        while end > start and not legal[end]:
+            end -= 1
+        if end == start:
+            # Nothing from here fits: name the stretch up to the next legal cut,
+            # which is the smallest run of calls that has to travel together.
+            span = next(i for i in range(start + 1, len(calls) + 1) if legal[i])
+            raise BatchTooLargeError(
+                tuple(call_id for call_id, _ in calls[start:span]), max_calls_in_request
+            )
+        requests.append(Request(using, calls[start:end], None if requests else created_ids))
+        start = end
+    return requests
 
 
 def derive_using(

@@ -148,6 +148,35 @@ class TestSplitting:
         flattened = [cid for p in plans for cid, _ in p.method_calls]
         assert flattened == [f"c{i}" for i in range(6)]
 
+    def test_interleaved_references_are_refused_rather_than_reordered(self):
+        # c3 references c0 across c1 and c2. Packing the pair together meant
+        # sending c3 in the first request and c1 (a destroy) in the second - so
+        # a read queued after a write ran before it. JMAP executes calls in
+        # order, so that silently changes what the read sees.
+        calls = pairs(
+            ("c0", call("Email/query")),
+            ("c1", call("Email/set", destroy=["m9"])),
+            ("c2", call("Email/set", create={"d": {}})),
+            ("c3", call("Email/get", ids=ResultRef("c0", "Email/query", "/ids"))),
+        )
+        with pytest.raises(BatchTooLargeError) as excinfo:
+            plan_requests(calls, using=USING, max_calls_in_request=2)
+        assert excinfo.value.call_ids == ("c0", "c1", "c2", "c3")
+
+    def test_a_split_only_ever_cuts_between_calls_in_order(self):
+        calls = pairs(
+            ("c0", call("Email/query")),
+            ("c1", call("Email/get", ids=ResultRef("c0", "Email/query", "/ids"))),
+            ("c2", call("Core/echo")),
+            ("c3", call("Mailbox/query")),
+            ("c4", call("Mailbox/get", ids=ResultRef("c3", "Mailbox/query", "/ids"))),
+        )
+        plans = plan_requests(calls, using=USING, max_calls_in_request=3)
+        assert [[cid for cid, _ in p.method_calls] for p in plans] == [
+            ["c0", "c1", "c2"],
+            ["c3", "c4"],
+        ]
+
     def test_created_ids_only_on_the_first_request(self):
         calls = pairs(*[(f"c{i}", call("Core/echo")) for i in range(4)])
         plans = plan_requests(
@@ -196,12 +225,12 @@ class TestDeriveUsing:
         }
 
 
-class TestComponentMerging:
-    """Union-find edge cases in the reference-component grouping."""
+class TestSeveralReferences:
+    """Calls whose references overlap, which the cut points must all respect."""
 
-    def test_redundant_union_when_two_calls_share_a_target(self):
-        # c2 references both c0 and c1, and c1 already references c0, so the
-        # second union finds them already merged. All three must land together.
+    def test_two_calls_sharing_a_target(self):
+        # c2 references both c0 and c1, and c1 already references c0. All three
+        # must land together.
         calls = pairs(
             ("c0", call("Email/query")),
             ("c1", call("Email/get", ids=ResultRef("c0", "Email/query", "/ids"))),
