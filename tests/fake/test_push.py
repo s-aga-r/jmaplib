@@ -265,6 +265,33 @@ class TestFailures:
             with pytest.raises(TransportError, match="no route"):
                 list(EventSourceClient(client).events())
 
+    @pytest.mark.parametrize(
+        ("answer", "named"),
+        [
+            # A portal, or a proxy's error page, answering 200 with HTML.
+            (
+                httpx.Response(200, text="<p>portal</p>", headers={"Content-Type": "text/html"}),
+                "text/html",
+            ),
+            # A session with no eventSourceUrl resolves it to the session URL.
+            (httpx.Response(200, json={"capabilities": {}}), "application/json"),
+            (httpx.Response(204), "HTTP 204"),
+        ],
+    )
+    def test_an_answer_that_is_not_an_event_stream_is_a_failed_connection(self, answer, named):
+        # WHATWG's EventSource requires a 200 carrying text/event-stream. Taken
+        # as a quiet stream instead, each of these was redialled forever at the
+        # base delay, never backing off.
+        fake = server()
+
+        def not_a_stream(request: httpx.Request) -> httpx.Response | None:
+            return answer if "/jmap/eventsource/" in request.url.path else None
+
+        with connect(fake) as client:
+            fake.intercept = not_a_stream
+            with pytest.raises(TransportError, match=named):
+                list(EventSourceClient(client).events())
+
     def test_an_endless_error_body_is_not_read_to_the_end(self):
         # Only a hostile server answers the event source with an error and then
         # keeps streaming; the problem parser needs a fraction of the limit, and
@@ -655,6 +682,32 @@ class TestListenReconnects:
             await stream.aclose()
         assert isinstance(event, StateChange)
         assert naps, "the redial should have waited out the reconnect delay"
+
+    def test_connections_that_end_at_once_with_nothing_back_off(self, monkeypatch):
+        # After `retry: 100` every empty reconnect used to wait the same 0.1s:
+        # ten requests a second, forever. Now each one doubles the wait until a
+        # connection delivers again.
+        fake = server()
+        fake.push("a", {"Email": "e1"}, event_id="1", retry=100)
+        dialled = {"n": 0}
+
+        def count(request: httpx.Request) -> httpx.Response | None:
+            if "/jmap/eventsource/" in request.url.path:
+                dialled["n"] += 1
+                if dialled["n"] == 6:
+                    fake.push("a", {"Email": "e2"}, event_id="2")
+            return None
+
+        naps: list[float] = []
+        monkeypatch.setattr("jmap.push.listener.time.sleep", naps.append)
+        with connect(fake) as client:
+            fake.intercept = count
+            stream = EventSourceClient(client).listen()
+            next(stream)
+            second = next(stream)
+            stream.close()
+        assert isinstance(second, StateChange)
+        assert naps == [0.1, 0.2, 0.4, 0.8, 1.6]
 
     def test_an_authentication_failure_still_escapes(self, monkeypatch):
         # Retrying a 401 loops on an answer that will not change.

@@ -74,6 +74,12 @@ ERROR_BODY_LIMIT = 64 * 1024
 #: connection, too short kills a healthy one.
 PING_TIMEOUT_SLACK = 10.0
 
+#: A connection that stays open this long before ending cleanly has shown it
+#: works, even with nothing to deliver - a quiet mailbox, or a proxy closing an
+#: idle connection. One that ends sooner, empty, has not; see
+#: :meth:`PushListener.note_end`.
+HEALTHY_CONNECTION_SECONDS = 5.0
+
 
 class PushListener:
     """I/O-free connection state, shared by both shells.
@@ -157,6 +163,20 @@ class PushListener:
         """A connection died without proving itself; the next delay doubles."""
         self._failures += 1
 
+    def note_end(self, *, delivered: bool, lasted: float) -> None:
+        """A connection ended cleanly - which proves it worked only sometimes.
+
+        Delivering an event does, and so does staying open a while: that is a
+        quiet mailbox, or a proxy closing an idle connection. Ending at once
+        with nothing does not - it is what a server that answers and hangs up
+        looks like - and counting it as success redialled such a server at the
+        base delay forever: ten times a second, after one ``retry: 100``.
+        """
+        if delivered or lasted >= HEALTHY_CONNECTION_SECONDS:
+            self.note_delivery()
+        else:
+            self.note_failure()
+
     def delay(self) -> float:
         """How long to wait before redialling.
 
@@ -230,6 +250,23 @@ async def _limited_body_async(chunks: AsyncIterator[bytes]) -> bytes:
     return bytes(collected[:ERROR_BODY_LIMIT])
 
 
+def _require_event_stream(response: httpx.Response) -> None:
+    """Refuse an answer that is not the stream asked for, as WHATWG's EventSource does.
+
+    Short of a 200 carrying ``text/event-stream`` it is something else: a
+    portal's HTML page, the session document a missing ``eventSourceUrl``
+    resolves to, a 204. Read as a quiet stream, each was reconnected to forever
+    without backing off; as a :class:`TransportError` it gets the backoff any
+    other connection that did not work gets.
+    """
+    media_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if response.status_code != 200 or media_type != "text/event-stream":
+        raise TransportError(
+            f"the event source answered HTTP {response.status_code} with "
+            f"{media_type or 'no content type'}, not text/event-stream"
+        )
+
+
 def _check(response: httpx.Response, body: bytes) -> None:
     """Turn a failed connection attempt into the errors the API path raises.
 
@@ -291,6 +328,7 @@ class EventSourceClient:
             ) as response:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
                     _check(response, _limited_body(response.iter_bytes()))
+                _require_event_stream(response)
                 for chunk in response.iter_bytes():
                     yield from stream.feed(chunk)
         except httpx.HTTPError as exc:
@@ -320,16 +358,20 @@ class EventSourceClient:
         iterator with no way to stop it is a leak.
         """
         while True:
+            opened = time.monotonic()
+            delivered = False
             try:
                 for event in self.events():
+                    delivered = True
                     self._listener.note_delivery()
                     yield event
             except TransportError:
                 self._listener.note_failure()
             else:
-                # A clean end (closeafter=state, server shutdown) is the
-                # connection working as designed, not a failure.
-                self._listener.note_delivery()
+                # A clean end is the connection working as designed - after
+                # closeafter=state, or an idle close - unless it ended at once
+                # having delivered nothing.
+                self._listener.note_end(delivered=delivered, lasted=time.monotonic() - opened)
             time.sleep(self._listener.delay())
 
 
@@ -371,6 +413,7 @@ class AsyncEventSourceClient:
             ) as response:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
                     _check(response, await _limited_body_async(response.aiter_bytes()))
+                _require_event_stream(response)
                 async for chunk in response.aiter_bytes():
                     for event in stream.feed(chunk):
                         yield event
@@ -386,13 +429,16 @@ class AsyncEventSourceClient:
         sync twin for the reasoning.
         """
         while True:
+            opened = time.monotonic()
+            delivered = False
             try:
                 async for event in self.events():
+                    delivered = True
                     self._listener.note_delivery()
                     yield event
             except TransportError:
                 self._listener.note_failure()
             else:
-                self._listener.note_delivery()
+                self._listener.note_end(delivered=delivered, lasted=time.monotonic() - opened)
             # anyio rather than asyncio.sleep, so this works under trio too.
             await anyio.sleep(self._listener.delay())

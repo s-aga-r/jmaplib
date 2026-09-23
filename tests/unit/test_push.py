@@ -41,7 +41,12 @@ from jmap.push.eventsource import (
     resume_headers,
     stream_headers,
 )
-from jmap.push.listener import PING_TIMEOUT_SLACK, PushListener, stream_timeout
+from jmap.push.listener import (
+    HEALTHY_CONNECTION_SECONDS,
+    PING_TIMEOUT_SLACK,
+    PushListener,
+    stream_timeout,
+)
 from jmap.push.subscription import (
     InsecurePushUrlError,
     PendingVerification,
@@ -532,6 +537,30 @@ class TestReconnectDelay:
         listener.note_failure()
         listener.note_delivery()
         assert listener.delay() == resting
+
+    def test_a_clean_end_that_delivered_resets_the_backoff(self):
+        listener = PushListener("https://x/es", close_after_state=False)
+        resting = listener.delay()
+        listener.note_failure()
+        listener.note_end(delivered=True, lasted=0.0)
+        assert listener.delay() == resting
+
+    def test_a_long_quiet_connection_that_ends_resets_it_too(self):
+        # A quiet mailbox, or a proxy closing idle connections: that connection
+        # worked, it just had nothing to say.
+        listener = PushListener("https://x/es", close_after_state=False)
+        resting = listener.delay()
+        listener.note_failure()
+        listener.note_end(delivered=False, lasted=HEALTHY_CONNECTION_SECONDS)
+        assert listener.delay() == resting
+
+    def test_an_immediate_empty_end_counts_as_a_failure(self):
+        # A server that answers and hangs up at once was redialled at the base
+        # delay forever - ten times a second after a single `retry: 100`.
+        listener = PushListener("https://x/es", close_after_state=False)
+        resting = listener.delay()
+        listener.note_end(delivered=False, lasted=0.01)
+        assert listener.delay() > resting
 
 
 class TestTheEventSourceDeadline:
