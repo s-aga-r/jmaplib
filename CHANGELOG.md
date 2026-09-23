@@ -26,6 +26,43 @@ for exactly which revision of each spec this build implements.
   bare `data` lines grew memory at a tally of zero. A line now costs its value plus
   its newline, which is exactly what the spec's data buffer holds.
 
+- **OAuth requests carried a shared client's credential.** Given the `httpx.Client`
+  that authenticates to the JMAP server - which `http=` invites - every discovery
+  fetch and token request went out with its `Authorization`, handing a Basic
+  password or bearer token to whichever hosts the server's documents named. With
+  `OAuth2Auth` on that client, a token endpoint answering the stale bearer with a
+  Bearer 401 re-entered the refresh on the thread holding its lock, and every
+  request after it hung for good. OAuth requests are now sent without the client's
+  credential, and a refresh that re-enters its own credential fails with
+  `AuthenticationError` rather than deadlocking.
+- **OAuth discovery followed redirects into cleartext.** The https check covered
+  the first URL only; a redirect to `http://` was followed, and whoever answered
+  that leg served self-consistent metadata naming its own endpoints. Every hop is
+  now checked before it is fetched.
+- **The RFC 9728 `resource` was never checked.** Metadata about another resource -
+  or about none - chose the authorization server all the same. It must now name a
+  resource, match the well-known URL it came from, and cover the URL that drew the
+  challenge when `discover(..., resource=url)` is given (§3.3). "Cover" rather than
+  "equal": Stalwart names its origin for every URL beneath it. `resource` also
+  resolves a relative `resource_metadata`, which is what Stalwart sends and which
+  could not be fetched before.
+- **An SRV record could steer the credentials.** `JMAPClient.discover` tried SRV
+  targets first, wherever they pointed, and the first candidate receives the
+  credentials - so an unsigned DNS answer chose who got them, and TLS vouched only
+  for the host it named. A target outside the address's domain is now tried only
+  when `confirm_srv_target` accepts it (RFC 6186 §6); when nothing else answers,
+  `UnconfirmedSRVTargetError` names it so the user can be asked.
+- **The authorization endpoint's scheme went unchecked.** `authorize(open_browser=True)`
+  handed it to `webbrowser.open` - `os.startfile` on Windows - as it came, so
+  `file:` and `ms-msdt:` URLs went through, as did a cleartext login page. It must
+  now be https, or http on loopback.
+- **The loopback listener could be held or hijacked from the same machine.** It
+  served one connection at a time, so a connection that sent nothing hung
+  `authorize()` for as long as it stayed open, closing included; and any request for
+  the redirect path took the one-shot slot, ending the flow on a state mismatch.
+  It now serves each connection on its own thread with a 10-second deadline, and
+  takes only the redirect carrying the flow's `state`.
+
 ### Fixed
 
 - **A `/set` answered with `null` came back as a failure.** RFC 8620 §5.3 makes
@@ -56,6 +93,75 @@ for exactly which revision of each spec this build implements.
   literal state guards a retry now; a batch without one is not re-sent after a
   timeout.
 
+- **Registered keywords were refused.** `keyword_patch` and
+  `validate_email_create` held `$`-prefixed keywords to a short list, which left
+  out `$mdnsent` - the library's own MDN keyword - and most of the IANA registry.
+  Any keyword of legal characters and length is accepted now.
+- **`refresh_session()` forgot `experimental=True`.** The capabilities were
+  resolved again without the opt-in, so Calendars and FileNode vanished on the first
+  refresh. The client keeps it as `experimental`.
+- **S/MIME filters never declared their capability.** `using` came from the
+  methods and properties in a batch, not its filter conditions or sort
+  comparators, so `hasSmime` and friends went out without
+  `urn:ietf:params:jmap:smimeverify` and the server ignored them. Filters and sorts
+  now count, `SearchSnippet/get`'s as `Email`'s.
+- **Splitting a batch could reorder it.** Calls tied by back-references were
+  packed together wherever they sat, so a `get` queued after a `destroy` could run
+  first. Requests are now cut only between calls, in order, where no
+  back-reference crosses the cut; a run too long to fit between two such cuts
+  raises `BatchTooLargeError`.
+- **`Retry-After` had no ceiling.** One 503 could park a call for as long as the
+  server said - a year, if it said so - and a large enough value raised
+  `OverflowError`. `RetryPolicy.max_retry_after` (120 s) is the ceiling now; past
+  it the `RequestError` is raised at once, carrying the wait as `retry_after`.
+- **`JMAPClient.discover` stopped at the first page that was not a session.** A
+  parked domain's HTML or JSON of the wrong shape ended the search instead of
+  moving it to the next candidate. A 401 or a downgrade still ends it.
+- **A back-reference into a chunked `/get` covered its first chunk.** One call's
+  result can be referenced, and a `/get` over `maxObjectsInGet` is several calls,
+  so the reference quietly saw 100 of 250 ids. It raises `ChunkedReferenceError`
+  now; `/accountId` and `/state`, the same in every chunk, still resolve.
+- **A change stream could loop forever.** A server whose state walked back to one
+  already resumed from (`s1`, `s2`, `s1`, all with `hasMoreChanges`) kept the walk
+  going indefinitely. That is `StuckChangeStreamError` now.
+- **`QueryView` refused large queries.** It allocated a slot per position up to
+  `total`, and capped that at a million to stay alive. The unfetched tail is now
+  implied rather than stored: `len()` still reports the total, at no cost, and a
+  negative total is refused.
+- **Parsing an event stream was quadratic.** Each line searched for a CR that an
+  LF-only stream - every real server's - never sends, to the end of the buffer;
+  a 6 KB gzipped response cost about 30 s of CPU. Lines are found in one scan now.
+- **A dropped connection could skip an event.** The resume cursor moved when an
+  `id:` line was read rather than when its event was complete, so a drop mid-event
+  resumed after an event never delivered. It moves at dispatch, as WHATWG's does.
+- **An event id could jam `listen()` for good.** An id that cannot be sent back as
+  `Last-Event-ID` - non-ASCII, or with leading whitespace - became the cursor, and
+  every reconnect then failed while building its request. Only an id that can be
+  sent becomes the cursor.
+- **An answer that was not an event stream reset the backoff.** A 204, a portal's
+  HTML or a session document read as a quiet stream that ended cleanly, so
+  `listen()` redialled forever at the base delay. Anything but a 200 carrying
+  `text/event-stream` is now a failed connection, and a connection that ends
+  within `HEALTHY_CONNECTION_SECONDS` having delivered nothing backs off.
+- **A token that could not be saved was thrown away.** When `TokenStore.save`
+  raised, the new token was dropped and the old refresh token kept - which a
+  rotating server had already retired, so the next refresh replayed it and
+  Fastmail revoked the grant. The new token is used either way, and the error
+  still reaches the caller.
+- **`except JMAPError` did not catch everything.** 24 of the library's exception
+  classes were plain `ValueError`s; malformed JSON raised `json.JSONDecodeError`;
+  push events, WebSocket frames, upload answers and OAuth documents of the wrong
+  shape leaked pydantic's `ValidationError`; blob transfers and OAuth requests
+  leaked httpx's errors. All of them are `JMAPError`s now, keeping the bases they
+  had, so no existing `except` stops matching.
+- **Docs that promised what the code does not do.** The capabilities guide listed
+  nine limits as checked before sending, five of which were not; the mail guide
+  said the same of sort options and `maxDelayedSend`. The push guide's loop
+  crashed on the first ping and called `matches` wrongly; the sync guide never
+  fetched created records and left its reset without a cursor; getting-started had
+  the discovery order backwards; and the OAuth example passed a URL `discover`
+  could never use. Each now describes the library as it is.
+
 ### Added
 
 - `Batch.requests()`, which yields a batch's requests one at a time, each carrying
@@ -63,6 +169,20 @@ for exactly which revision of each spec this build implements.
   send from.
 - `jmap.core.session.check_session_redirects()`, the redirect half of the endpoint
   downgrade check, and a `message` argument on `InsecureEndpointError`.
+
+- `RetryPolicy.max_retry_after` and `RetryPolicy.pause()`, and `retry_after` on
+  `RequestError`.
+- `JMAPClient.experimental` and `AsyncJMAPClient.experimental`.
+- `MethodSpec.filter_type`, for a method that filters another type's properties.
+- `jmap.chunking.ChunkedReferenceError`.
+- `jmap.push.listener.HEALTHY_CONNECTION_SECONDS` and `PushListener.note_end()`.
+- `OAuthClient.discover(resource=...)`, `ResourceMismatchError`, and the
+  `fetched_from` and `requested` checks on `ProtectedResourceMetadata.of()`.
+- `LoopbackReceiver.expect_state()`.
+- `confirm_srv_target` on `JMAPClient.discover` and `candidate_urls`, and
+  `jmap.discovery.UnconfirmedSRVTargetError`.
+- `jmap.core.ijson.MalformedJSONError`, `jmap.core.session.MalformedSessionError`
+  and `jmap.models.base.validation_summary()`.
 
 ### Changed
 
@@ -76,6 +196,12 @@ for exactly which revision of each spec this build implements.
   large stack a 100,000-deep document parses where it used to overflow, and CI's
   3.14.7 job failed on exactly that. The contract - a typed `NestingLimitError`,
   never a raw `RecursionError` - is now tested directly, on every interpreter.
+- **Every exception class the library defines descends from `JMAPError`.** The
+  ones that were `ValueError`s still are; malformed JSON is still a
+  `json.JSONDecodeError`.
+- **Blob transfers fail as API calls do.** A 401 from the upload or download
+  endpoint is an `AuthenticationError` rather than a `RequestError`, and a failed
+  connection a `TransportError` rather than httpx's own.
 
 ## 1.1.0
 
