@@ -23,12 +23,15 @@ answer on a real server.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Final, Self, cast
+from typing import TYPE_CHECKING, Any, Final, Self, cast
 from urllib.parse import urljoin, urlsplit
 
 from jmap.core.errors import JMAPError
 from jmap.core.ids import Id
 from jmap.core.limits import Limits
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 CORE_URN: Final = "urn:ietf:params:jmap:core"
 
@@ -48,12 +51,15 @@ class InsecureEndpointError(JMAPError):
     providers serve upload and download from separate hosts.
     """
 
-    def __init__(self, field: str, url: str, *, base_url: str) -> None:
+    def __init__(self, field: str, url: str, *, base_url: str, message: str | None = None) -> None:
         self.field = field
         self.url = url
         super().__init__(
-            f"the session document ({base_url}) names {url!r} as its {field}; refusing "
-            f"to send credentials over a weaker scheme than the session itself came over"
+            message
+            or (
+                f"the session document ({base_url}) names {url!r} as its {field}; refusing "
+                f"to send credentials over a weaker scheme than the session itself came over"
+            )
         )
 
 
@@ -64,24 +70,58 @@ def _malformed(field: str, value: Any) -> ValueError:
     )
 
 
+def _is_downgrade(url: str, base_scheme: str) -> bool:
+    """Whether ``url`` is a weaker channel than one reached over ``base_scheme``.
+
+    A channel that has already accepted cleartext may stay on it - which is what
+    keeps an internal-network deployment working - and loopback never leaves
+    the machine, so both are allowed. ``wss``/``ws`` follow the same rule for
+    the WebSocket URL a capability may carry. Any other scheme is refused.
+    """
+    split = urlsplit(url)
+    scheme = split.scheme
+    if scheme in ("https", "wss") or not scheme:
+        return False
+    downgraded = base_scheme == "https" and scheme in ("http", "ws")
+    foreign = scheme not in ("http", "ws")
+    return foreign or (downgraded and (split.hostname or "").lower() not in _LOOPBACK_HOSTS)
+
+
 def _check_endpoint_scheme(field: str, url: str, base_scheme: str, *, base_url: str) -> None:
     """Refuse an endpoint on a weaker scheme than the session's own channel.
 
     Only enforced when the fetch context is known (``base_url`` given): parsing
     a cached document offline is the caller's own input, and a session fetched
-    over http has already accepted cleartext, so its endpoints may stay http -
-    which is what keeps an internal-network deployment working. Loopback is
-    always allowed; ``wss``/``ws`` follow the same rule for the WebSocket URL a
-    capability may carry a client through here.
+    over http has already accepted cleartext, so its endpoints may stay http.
     """
-    split = urlsplit(url)
-    scheme = split.scheme
-    if scheme in ("https", "wss") or not scheme:
-        return
-    downgraded = base_scheme == "https" and scheme in ("http", "ws")
-    foreign = scheme not in ("http", "ws")
-    if foreign or (downgraded and (split.hostname or "").lower() not in _LOOPBACK_HOSTS):
+    if _is_downgrade(url, base_scheme):
         raise InsecureEndpointError(field, url, base_url=base_url)
+
+
+def check_session_redirects(requested_url: str, hops: Iterable[str]) -> None:
+    """Refuse a session fetch that a redirect moved onto a weaker channel.
+
+    The endpoint check judges a session document by the channel it arrived
+    over, which is only sound if that is the channel the caller asked for. An
+    https fetch redirected to http becomes an "http session", whose http
+    endpoints then pass - so whoever answers the cleartext leg chooses the
+    ``apiUrl``, and every request after it carries the credentials there in the
+    clear. ``hops`` is every URL the fetch visited, in order.
+    """
+    scheme = urlsplit(requested_url).scheme
+    for hop in hops:
+        if _is_downgrade(hop, scheme):
+            raise InsecureEndpointError(
+                "redirect target",
+                hop,
+                base_url=requested_url,
+                message=(
+                    f"fetching the session from {requested_url} was redirected to {hop!r}; "
+                    f"refusing a weaker channel than the one asked for, since whoever "
+                    f"answers it chooses where every later request - and its credentials "
+                    f"- is sent"
+                ),
+            )
 
 
 class Account:

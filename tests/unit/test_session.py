@@ -12,7 +12,13 @@ from pathlib import Path
 import pytest
 
 from jmap.core.ids import Id
-from jmap.core.session import CORE_URN, Account, InsecureEndpointError, Session
+from jmap.core.session import (
+    CORE_URN,
+    Account,
+    InsecureEndpointError,
+    Session,
+    check_session_redirects,
+)
 
 FIXTURE = Path(__file__).parents[1] / "fixtures" / "stalwart-0.16.17-session-bootstrap.json"
 
@@ -136,6 +142,39 @@ class TestEndpointDowngradeRefusal:
         # caller's own input, not a network response.
         session = Session.from_wire({"apiUrl": "http://mail.internal:8080/jmap/"})
         assert session.api_url == "http://mail.internal:8080/jmap/"
+
+
+class TestRedirectDowngradeRefusal:
+    """Endpoints are judged by the channel the document came over - which is
+    only sound if that is the channel the caller asked for."""
+
+    WELL_KNOWN = "https://mail.example.com/.well-known/jmap"
+
+    def test_a_redirect_onto_cleartext_is_refused(self):
+        # An https fetch redirected to http becomes an "http session", whose http
+        # endpoints then pass - so whoever answers the cleartext leg chooses
+        # where the credentials go next.
+        hops = [self.WELL_KNOWN, "http://mail.example.com/jmap/session"]
+        with pytest.raises(InsecureEndpointError, match="redirected"):
+            check_session_redirects(self.WELL_KNOWN, hops)
+
+    def test_a_downgrade_anywhere_in_the_chain_counts(self):
+        hops = [self.WELL_KNOWN, "https://cdn.example.net/x", "http://mail.example.com/s"]
+        with pytest.raises(InsecureEndpointError):
+            check_session_redirects(self.WELL_KNOWN, hops)
+
+    def test_a_cross_host_https_redirect_stays_legal(self):
+        # Fastmail's well-known URL redirects to a different host.
+        check_session_redirects(self.WELL_KNOWN, [self.WELL_KNOWN, "https://api.example.net/s"])
+
+    def test_an_http_fetch_may_stay_on_http(self):
+        # The caller asked for cleartext; this is how CI reaches its container.
+        check_session_redirects(
+            "http://localhost:8080/.well-known/jmap", ["http://localhost:8080/jmap/session"]
+        )
+
+    def test_loopback_is_allowed_as_for_endpoints(self):
+        check_session_redirects(self.WELL_KNOWN, ["http://127.0.0.1:8080/jmap/session"])
 
 
 class TestHostileSessionShapes:

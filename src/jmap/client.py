@@ -43,7 +43,7 @@ from jmap.core.errors import AuthenticationError, RequestError, TransportError
 from jmap.core.ijson import dumps, loads
 from jmap.core.response import Response
 from jmap.core.retry import Failure, RetryPolicy, Safety, classify, should_retry
-from jmap.core.session import Session
+from jmap.core.session import Session, check_session_redirects
 from jmap.defaults import default_registry
 
 if TYPE_CHECKING:
@@ -415,6 +415,9 @@ def _fetch_session(http: httpx.Client, url: str, *, auth: httpx.Auth | None) -> 
         response = http.get(url, **kwargs)
     except httpx.HTTPError as exc:
         raise _as_error(exc) from exc
+    # Before anything in the answer is trusted: a hop onto a weaker channel
+    # hands the choice of apiUrl to whoever answered it.
+    check_session_redirects(url, [*(str(hop.url) for hop in response.history), str(response.url)])
     if response.status_code == 401:
         raise AuthenticationError(
             "the server rejected these credentials",

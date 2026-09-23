@@ -27,7 +27,7 @@ from jmap.core.errors import (
 )
 from jmap.core.ids import CreationRef, Id
 from jmap.core.retry import RetryPolicy
-from jmap.core.session import Session
+from jmap.core.session import InsecureEndpointError, Session
 from jmap.testing import FakeJMAPServer, ServerQuirks
 
 MAIL_URN = "urn:ietf:params:jmap:mail"
@@ -725,6 +725,46 @@ class TestOwnedHttpClients:
             await AsyncJMAPClient.connect(
                 "http://127.0.0.1:1/.well-known/jmap", auth=BasicAuth("u", "p")
             )
+
+
+class TestSessionRedirectDowngrade:
+    """An https session fetch redirected onto http is refused, in both shells.
+
+    The 1.1.0 endpoint check judges the document by the channel it arrived
+    over, so without this the redirect itself was the way around it: the
+    cleartext leg served an http ``apiUrl``, which an "http session" may name,
+    and the next call carried the credentials there in the clear.
+    """
+
+    CLEARTEXT = "http://jmap.example.com"
+
+    def _downgrading(self) -> FakeJMAPServer:
+        fake = server()
+
+        def downgrade(request: httpx.Request) -> httpx.Response | None:
+            if request.url.scheme == "https" and request.url.path == "/.well-known/jmap":
+                return httpx.Response(307, headers={"Location": f"{self.CLEARTEXT}/jmap/session"})
+            if request.url.scheme == "http" and request.url.path == "/jmap/session":
+                document = {**fake.session_document, "apiUrl": f"{self.CLEARTEXT}/jmap/"}
+                return httpx.Response(200, json=document)
+            return None
+
+        fake.intercept = downgrade
+        return fake
+
+    def test_the_sync_client_refuses_it(self):
+        with pytest.raises(InsecureEndpointError, match="redirected"):
+            connect(self._downgrading())
+
+    @pytest.mark.asyncio
+    async def test_the_async_client_refuses_it(self):
+        fake = self._downgrading()
+        http = httpx.AsyncClient(**fake.client_kwargs())
+        with pytest.raises(InsecureEndpointError, match="redirected"):
+            await AsyncJMAPClient.connect(
+                WELL_KNOWN, auth=BasicAuth("u", "p"), http=http, registry=registry()
+            )
+        await http.aclose()
 
 
 class TestSplitBatchesCarryCreationIds:
