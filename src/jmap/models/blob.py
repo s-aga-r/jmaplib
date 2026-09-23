@@ -26,7 +26,7 @@ from __future__ import annotations
 import base64
 from typing import Any, Self
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from jmap.models.base import JMAPModel
 
@@ -221,3 +221,9 @@ class BlobCopyResponse(JMAPModel):
     #: Source blobId -> the id the blob has in the destination account.
     copied: dict[str, str] = Field(default_factory=dict)
     not_copied: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("copied", "not_copied", mode="before")
+    @classmethod
+    def _null_map_is_empty(cls, value: Any) -> Any:
+        # RFC 8620 §6.3 makes both null when empty, like the /set results.
+        return {} if value is None else value

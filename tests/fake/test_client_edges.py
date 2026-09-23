@@ -677,6 +677,33 @@ class TestOwnedHttpClients:
             )
 
 
+class TestConformantNullResultMaps:
+    def test_a_set_answered_with_nulls_is_a_success_not_a_malformed_result(self):
+        # RFC 8620 §5.3 answers an update-only /set with null for every empty
+        # category. The write has happened; reporting it as malformedResult
+        # invites the caller to make it again.
+        fake = server()
+        fake.respond(
+            "Email/set",
+            {
+                "accountId": "a",
+                "oldState": "s1",
+                "newState": "s2",
+                "created": None,
+                "updated": {"m1": None},
+                "destroyed": None,
+                "notCreated": None,
+                "notUpdated": None,
+                "notDestroyed": None,
+            },
+        )
+        with connect(fake) as client:
+            result = client.call("Email/set", {"update": {"m1": {"keywords/$seen": True}}})
+        assert result.new_state == "s2"
+        assert result.updated == {"m1": None}
+        assert not result.has_errors
+
+
 class TestSetSizeGate:
     def test_a_result_ref_destroy_does_not_crash_planning(self):
         # The canonical query-then-destroy pattern: `destroy` is a ResultRef

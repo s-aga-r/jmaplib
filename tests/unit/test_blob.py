@@ -181,6 +181,16 @@ class TestCopyModel:
         response = BlobCopyResponse.from_wire({"notCopied": {"src": {"type": "notFound"}}})
         assert response.not_copied["src"]["type"] == "notFound"
 
+    def test_the_rfcs_null_for_an_empty_category_parses(self):
+        # RFC 8620 §6.3: `copied` and `notCopied` are each null when empty.
+        response = BlobCopyResponse.from_wire(
+            {"fromAccountId": "b", "accountId": "a", "copied": {"src": "dst"}, "notCopied": None}
+        )
+        assert response.copied == {"src": "dst"}
+        assert response.not_copied == {}
+        nothing = BlobCopyResponse.from_wire({"copied": None, "notCopied": {"x": {"type": "e"}}})
+        assert nothing.copied == {}
+
 
 class TestUploadedBlob:
     def test_the_id_is_the_blob_id(self):

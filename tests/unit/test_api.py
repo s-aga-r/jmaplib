@@ -156,6 +156,30 @@ class TestSetResponse:
     def test_no_errors_is_the_clean_case(self):
         assert not SetResponse[Email].model_validate({"created": {}}).has_errors
 
+    def test_the_rfcs_null_for_an_empty_category_parses(self):
+        # RFC 8620 §5.3 types all six maps as nullable - "null if no Foo objects
+        # were successfully created", and so on. Rejecting null turned every
+        # conformant /set that did not touch all six categories into a
+        # malformedResult, for a write the server had already applied.
+        response = SetResponse[Email].model_validate(
+            {
+                "accountId": "a",
+                "oldState": "s1",
+                "newState": "s2",
+                "created": None,
+                "updated": {"m1": None},
+                "destroyed": None,
+                "notCreated": None,
+                "notUpdated": None,
+                "notDestroyed": None,
+            }
+        )
+        assert response.updated == {"m1": None}
+        assert response.created == {}
+        assert response.destroyed == []
+        assert not response.has_errors
+        assert response.creation_errors == {}
+
 
 class TestQueryResponses:
     def test_query(self):
@@ -195,6 +219,21 @@ class TestCopyResponse:
         )
         assert response.from_account_id == "b"
         assert response.creation_errors["c2"].existing_id == "M8"
+
+    def test_the_rfcs_null_for_an_empty_category_parses(self):
+        # RFC 8620 §5.4: both maps are nullable, exactly as for /set.
+        response = CopyResponse[Email].model_validate(
+            {
+                "fromAccountId": "b",
+                "accountId": "a",
+                "oldState": None,
+                "newState": "s2",
+                "created": {"c1": {"id": "M9"}},
+                "notCreated": None,
+            }
+        )
+        assert response.created["c1"].id == "M9"
+        assert response.not_created == {}
 
 
 class TestParseSetErrors:

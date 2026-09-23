@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Generic, TypeVar
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from jmap.core.errors import SetError
 from jmap.models.base import JMAPModel
@@ -85,6 +85,22 @@ class SetResponse(JMAPModel, Generic[T]):
     not_created: dict[str, dict[str, Any]] = Field(default_factory=dict)
     not_updated: dict[str, dict[str, Any]] = Field(default_factory=dict)
     not_destroyed: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator(
+        "created", "updated", "not_created", "not_updated", "not_destroyed", mode="before"
+    )
+    @classmethod
+    def _null_map_is_empty(cls, value: Any) -> Any:
+        # RFC 8620 §5.3 types all six results as nullable - "null if no Foo
+        # objects were successfully created", and likewise for the rest - so a
+        # server may answer an update-only /set with five nulls. Refusing them
+        # reported a write the server had applied as a malformedResult.
+        return {} if value is None else value
+
+    @field_validator("destroyed", mode="before")
+    @classmethod
+    def _null_list_is_empty(cls, value: Any) -> Any:
+        return [] if value is None else value
 
     @property
     def has_errors(self) -> bool:
@@ -163,6 +179,12 @@ class CopyResponse(JMAPModel, Generic[T]):
     new_state: str | None = None
     created: dict[str, T] = Field(default_factory=dict)
     not_created: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    @field_validator("created", "not_created", mode="before")
+    @classmethod
+    def _null_map_is_empty(cls, value: Any) -> Any:
+        # RFC 8620 §5.4: nullable, exactly as for /set.
+        return {} if value is None else value
 
     @property
     def creation_errors(self) -> dict[str, SetError]:
