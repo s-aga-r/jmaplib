@@ -12,6 +12,7 @@ from jmap.api.entity import (
     EntityBase,
     Gettable,
     Queryable,
+    QueryChangeable,
     Settable,
     entity_class,
     entity_for,
@@ -297,15 +298,19 @@ class TestComposition:
         second = entity_class(frozenset({MethodKind.GET}))
         assert first is second
 
-    def test_query_and_query_changes_share_one_mixin(self):
-        # Both live on Queryable, so requesting either yields the same class.
-        assert entity_class(frozenset({MethodKind.QUERY})) is entity_class(
-            frozenset({MethodKind.QUERY, MethodKind.QUERY_CHANGES})
-        )
+    def test_a_type_that_queries_without_query_changes_has_no_query_changes(self):
+        # One mixin supplied both, so every type with /query grew .query_changes
+        # - SieveScript and the legacy Contact among them, whose only answer was
+        # an UnsupportedMethodError at the call.
+        entity = entity_class(frozenset({MethodKind.QUERY}))
+        assert hasattr(entity, "query")
+        assert not hasattr(entity, "query_changes")
+        tracked = entity_class(frozenset({MethodKind.QUERY, MethodKind.QUERY_CHANGES}))
+        assert hasattr(tracked, "query_changes")
 
     def test_mixin_bases_are_what_they_claim(self, batch):
         entity = email_entity(batch)
-        for mixin in (Gettable, Changeable, Queryable, Settable, Copyable):
+        for mixin in (Gettable, Changeable, Queryable, QueryChangeable, Settable, Copyable):
             assert isinstance(entity, mixin)
 
     def test_repr_names_the_type(self, batch):

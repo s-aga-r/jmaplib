@@ -105,7 +105,7 @@ class Changeable(EntityBase[T]):
 
 
 class Queryable(EntityBase[T]):
-    """``Foo/query`` and ``Foo/queryChanges`` (RFC 8620 §5.5, §5.6)."""
+    """``Foo/query`` (RFC 8620 §5.5)."""
 
     __slots__ = ()
 
@@ -147,6 +147,17 @@ class Queryable(EntityBase[T]):
                 **extra,
             ),
         )
+
+
+class QueryChangeable(EntityBase[T]):
+    """``Foo/queryChanges`` (RFC 8620 §5.6).
+
+    Its own mixin because not every type that can be queried can say how a
+    query changed: SieveScript and the legacy Contact cannot, and a shared mixin
+    gave them a ``query_changes`` that could only fail.
+    """
+
+    __slots__ = ()
 
     def query_changes(
         self,
@@ -254,7 +265,7 @@ _MIXINS: dict[MethodKind, type[EntityBase[Any]]] = {
     MethodKind.GET: Gettable,
     MethodKind.CHANGES: Changeable,
     MethodKind.QUERY: Queryable,
-    MethodKind.QUERY_CHANGES: Queryable,
+    MethodKind.QUERY_CHANGES: QueryChangeable,
     MethodKind.SET: Settable,
     MethodKind.COPY: Copyable,
 }
