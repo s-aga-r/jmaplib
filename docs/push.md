@@ -110,6 +110,12 @@ with client.batch() as batch:
     )
 ```
 
+`new_subscription` checks what it is given before the server has to: `types` is
+a list of names - one name on its own is refused rather than sent as a string -
+`keys` may be a mapping or a `PushKeys` model, and `expires` must be a UTCDate,
+`Z` and all (`2026-10-01T00:00:00Z`). `renewal_update` checks its `expires` the
+same way.
+
 1. You create the subscription.
 2. The server immediately `POST`s a `PushVerification` to that URL and sends
    **nothing else** until you echo its code back. This is what stops anyone

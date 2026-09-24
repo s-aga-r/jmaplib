@@ -25,14 +25,19 @@ when the subscription was created has to be remembered and re-checked.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar
+
+from pydantic import Field
 
 from jmap.capabilities.push import VAPID_URN, VapidCapability, vapid_key_rotated
 from jmap.core.errors import JMAPError
+from jmap.models.arguments import UTCDate, checked
+from jmap.models.push import PushKeys
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
     from jmap.core.session import Session
     from jmap.models.push import PushSubscription, PushVerification
@@ -60,18 +65,23 @@ def check_push_url(url: str) -> None:
         raise InsecurePushUrlError(url)
 
 
+@checked
 def new_subscription(
-    device_client_id: str,
+    device_client_id: Annotated[str, Field(min_length=1)],
     url: str,
     *,
-    types: list[str] | None = None,
-    keys: Mapping[str, str] | None = None,
-    expires: str | None = None,
+    types: Sequence[str] | None = None,
+    keys: Mapping[str, str] | PushKeys | None = None,
+    expires: UTCDate | None = None,
 ) -> dict[str, Any]:
     """Build the ``create`` object for ``PushSubscription/set``.
 
     ``verificationCode`` is deliberately absent: §7.2 says it MUST be null or
     omitted on create, and the server rejects a guess.
+
+    The arguments are checked first. ``device_client_id`` is how a client finds
+    its own subscriptions again (§7.2.2), so it cannot be empty, and
+    ``expires`` is a ``UTCDate`` - ``Z``-suffixed.
     """
     check_push_url(url)
     creation: dict[str, Any] = {"deviceClientId": device_client_id, "url": url}
@@ -79,9 +89,9 @@ def new_subscription(
     # type", but so does leaving it out, and the shorter request is the one the
     # RFC's own example sends.
     if types is not None:
-        creation["types"] = types
+        creation["types"] = list(types)
     if keys is not None:
-        creation["keys"] = dict(keys)
+        creation["keys"] = keys.to_wire() if isinstance(keys, PushKeys) else dict(keys)
     if expires is not None:
         creation["expires"] = expires
     return creation
@@ -148,12 +158,14 @@ class PendingVerification:
         return len(self._codes)
 
 
+@checked
 def verification_update(verification_code: str) -> dict[str, Any]:
     """The ``update`` patch that completes verification."""
     return {"verificationCode": verification_code}
 
 
-def renewal_update(expires: str) -> dict[str, Any]:
+@checked
+def renewal_update(expires: UTCDate) -> dict[str, Any]:
     """The ``update`` patch that extends a subscription's lifetime.
 
     The server may shorten what is asked for, so the ``expires`` in the response

@@ -28,15 +28,18 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Self
+from typing import TYPE_CHECKING, Any, Final, Literal, Self
 
 from pydantic import ValidationError
 
 from jmap.core.errors import JMAPError
 from jmap.core.ijson import loads
 from jmap.core.narrow import as_object, is_object
+from jmap.core.session import Session
 from jmap.core.uritemplate import expand
+from jmap.models.arguments import UnsignedInt, checked
 from jmap.models.base import validation_summary
 from jmap.models.push import StateChange
 from jmap.push.sse import DEFAULT_EVENT_TYPE, SSEParser
@@ -44,15 +47,13 @@ from jmap.push.sse import DEFAULT_EVENT_TYPE, SSEParser
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from jmap.core.session import Session
-
 #: RFC 8620 §7.3 event names.
 EVENT_STATE = "state"
 EVENT_PING = "ping"
 
 #: ``closeafter`` values.
-CLOSE_AFTER_STATE = "state"
-CLOSE_AFTER_NO = "no"
+CLOSE_AFTER_STATE: Final = "state"
+CLOSE_AFTER_NO: Final = "no"
 
 #: The wildcard accepted by the ``types`` template variable.
 ALL_TYPES = "*"
@@ -102,12 +103,13 @@ class Ping:
     interval: int | None = None
 
 
+@checked
 def event_source_url(
     session: Session,
     *,
-    types: tuple[str, ...] | None = None,
-    close_after: str = CLOSE_AFTER_NO,
-    ping: int = 0,
+    types: Sequence[str] | None = None,
+    close_after: Literal["state", "no"] = CLOSE_AFTER_NO,
+    ping: UnsignedInt = 0,
     push_types: frozenset[str] | None = None,
 ) -> str:
     """Expand the session's ``eventSourceUrl`` template (RFC 8620 §7.3).
@@ -115,6 +117,9 @@ def event_source_url(
     ``types=None`` means every type, sent as the literal ``*``. Passing an
     explicit list is checked against ``push_types`` when one is given - see
     :class:`UnknownPushTypeError` for why silence is the alternative.
+
+    The arguments are checked first, so a type name passed on its own - which
+    joined into ``E,m,a,i,l`` - or a negative ping fails here.
     """
     if types is None:
         selector = ALL_TYPES

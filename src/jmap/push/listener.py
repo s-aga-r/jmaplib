@@ -45,7 +45,7 @@ from jmap.push.eventsource import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Generator, Iterator, Sequence
 
     from jmap.aio import AsyncJMAPClient
     from jmap.client import JMAPClient
@@ -204,7 +204,7 @@ class PushListener:
 def _listener(
     client: JMAPClient | AsyncJMAPClient,
     *,
-    types: tuple[str, ...] | None,
+    types: Sequence[str] | None,
     close_after_state: bool,
     ping: int,
 ) -> PushListener:
@@ -310,7 +310,7 @@ class EventSourceClient:
         self,
         client: JMAPClient,
         *,
-        types: tuple[str, ...] | None = None,
+        types: Sequence[str] | None = None,
         close_after_state: bool = False,
         ping: int = 0,
     ) -> None:
@@ -408,7 +408,7 @@ class AsyncEventSourceClient:
         self,
         client: AsyncJMAPClient,
         *,
-        types: tuple[str, ...] | None = None,
+        types: Sequence[str] | None = None,
         close_after_state: bool = False,
         ping: int = 0,
     ) -> None:

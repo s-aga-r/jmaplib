@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from jmap.capabilities.push import (
     VAPID,
@@ -220,6 +221,23 @@ class TestEventSourceUrl:
     def test_types_are_unchecked_when_no_push_types_are_known(self):
         assert event_source_url(session(), types=("Anything",))
 
+    def test_any_sequence_of_types_will_do(self):
+        assert "Email" in event_source_url(session(), types=["Email"])
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            # One type name is not a list of them: joined, it read "E,m,a,i,l".
+            {"types": "Email"},
+            {"ping": -1},
+            {"ping": "30"},
+            {"close_after": "yes"},
+        ],
+    )
+    def test_the_arguments_are_checked(self, fields):
+        with pytest.raises(ValidationError, match="event_source_url"):
+            event_source_url(session(), **fields)
+
     def test_the_portable_ping_range_is_stated(self):
         # RFC 8620 §7.3 bounds what a server may clamp to, so anything in here is
         # honoured verbatim everywhere.
@@ -384,6 +402,40 @@ class TestSubscriptionBuilding:
     def test_the_update_patches_are_single_property(self):
         assert verification_update("code") == {"verificationCode": "code"}
         assert renewal_update("2026-01-01T00:00:00Z") == {"expires": "2026-01-01T00:00:00Z"}
+
+    def test_keys_may_be_the_model(self):
+        creation = new_subscription(
+            "dev1", "https://push.example.com/x", keys=PushKeys(p256dh="abc", auth="def")
+        )
+        assert creation["keys"] == {"p256dh": "abc", "auth": "def"}
+
+    def test_types_may_be_any_sequence(self):
+        creation = new_subscription("dev1", "https://push.example.com/x", types=("Email",))
+        assert creation["types"] == ["Email"]
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"device_client_id": ""},
+            {"types": "Email"},
+            {"keys": {"p256dh": 1}},
+            # RFC 8620 §1.4: a UTCDate ends in Z.
+            {"expires": "2026-01-01T00:00:00+00:00"},
+            {"expires": "tomorrow"},
+        ],
+    )
+    def test_a_creation_the_server_would_refuse_is_refused_here(self, fields):
+        arguments = {"device_client_id": "dev1", "url": "https://push.example.com/x", **fields}
+        with pytest.raises(ValidationError, match="new_subscription"):
+            new_subscription(**arguments)
+
+    def test_a_renewal_must_be_a_utc_date(self):
+        with pytest.raises(ValidationError, match="renewal_update"):
+            renewal_update("2026-01-01")
+
+    def test_a_verification_code_is_a_string(self):
+        with pytest.raises(ValidationError, match="verification_update"):
+            verification_update(None)  # type: ignore[arg-type]
 
 
 class TestOwnership:
