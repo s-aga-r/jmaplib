@@ -30,14 +30,14 @@ holds fifty rows of. The view keeps ``total`` and implies the tail.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from jmap.core.errors import JMAPError
-from jmap.core.narrow import as_list, as_object, is_list, is_object
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Iterable
 
     from jmap.models.responses import AddedItem, QueryChangesResponse, QueryResponse
 
@@ -155,16 +155,23 @@ def _stable_key(value: Any) -> str:
     """A deterministic string for a filter or sort, for use as a cache key.
 
     Dict ordering must not affect identity: ``{"a": 1, "b": 2}`` and
-    ``{"b": 2, "a": 1}`` are the same filter and have to hash the same.
+    ``{"b": 2, "a": 1}`` are the same filter and have to hash the same. Any
+    mapping and any sequence but a string is read by its contents - a tuple sort
+    or a read-only mapping went through ``repr()``, making the same query a
+    different key - while dicts and lists keep exactly the keys they always
+    had, which persisted cursors are filed under.
     """
     if value is None:
         return ""
-    if is_object(value):
-        mapping = as_object(value)
+    if isinstance(value, Mapping):
+        # mypy narrows the Any to Mapping[Any, Any] and calls the cast redundant;
+        # pyright narrows to Mapping[Unknown, Unknown] and requires it.
+        mapping = cast("Mapping[Any, Any]", value)  # type: ignore[redundant-cast]
         items = sorted((str(key), _stable_key(item)) for key, item in mapping.items())
         return "{" + ",".join(f"{key}:{item}" for key, item in items) + "}"
-    if is_list(value):
-        return "[" + ",".join(_stable_key(item) for item in as_list(value)) + "]"
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        sequence = cast("Sequence[Any]", value)  # type: ignore[redundant-cast]
+        return "[" + ",".join(_stable_key(item) for item in sequence) + "]"
     return repr(value)
 
 

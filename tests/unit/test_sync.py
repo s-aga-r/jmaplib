@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import ClassVar
 
 import pytest
@@ -149,6 +150,33 @@ class TestQuerySpec:
         spec = QuerySpec.build("Email", "a")
         assert spec.filter_key == ""
         assert spec.sort_key == ""
+
+    def test_a_tuple_is_the_same_sort_as_a_list(self):
+        # Only dict and list were read structurally; a tuple went through
+        # repr(), so the same sort made a different spec - and a different key.
+        sort = [{"property": "receivedAt", "isAscending": False}]
+        assert QuerySpec.build("Email", "a", sort=sort) == QuerySpec.build(
+            "Email", "a", sort=tuple(sort)
+        )
+
+    def test_any_mapping_is_keyed_by_its_contents(self):
+        first = QuerySpec.build("Email", "a", filter={"inMailbox": "m1", "hasKeyword": "x"})
+        second = QuerySpec.build(
+            "Email", "a", filter=MappingProxyType({"hasKeyword": "x", "inMailbox": "m1"})
+        )
+        assert first == second
+
+    def test_keys_already_persisted_stay_the_same(self):
+        # A persisted cursor is filed under this key; changing it for a dict or
+        # a list would orphan every one.
+        spec = QuerySpec.build(
+            "Email",
+            "a",
+            filter={"operator": "AND", "conditions": [{"x": 1}, {"y": "z"}]},
+            sort=[{"property": "receivedAt"}],
+        )
+        assert spec.filter_key == "{conditions:[{x:1},{y:'z'}],operator:'AND'}"
+        assert spec.sort_key == "[{property:'receivedAt'}]"
 
 
 class TestQueryViewSeeding:
