@@ -5,6 +5,7 @@ Split from ``test_client.py`` to keep the happy-path story there readable.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
 
@@ -22,6 +23,7 @@ from jmap.core.errors import (
     AuthenticationError,
     BatchTooLargeError,
     CapabilityFieldError,
+    MethodError,
     RequestError,
     TransportError,
 )
@@ -926,6 +928,68 @@ class TestConformantNullResultMaps:
         assert result.new_state == "s2"
         assert result.updated == {"m1": None}
         assert not result.has_errors
+
+
+def answering(*, skip: set[int]) -> Callable[[httpx.Request], httpx.Response | None]:
+    """An API that echoes every call back, except the first call of each request
+    whose number (counting from 1) is in ``skip``."""
+    seen = {"requests": 0}
+
+    def intercept(request: httpx.Request) -> httpx.Response | None:
+        if request.method != "POST":
+            return None
+        seen["requests"] += 1
+        calls = json.loads(request.content)["methodCalls"]
+        if seen["requests"] in skip:
+            calls = calls[1:]
+        answers = [["Core/echo", arguments, call_id] for _name, arguments, call_id in calls]
+        return httpx.Response(200, json={"methodResponses": answers, "sessionState": "s0"})
+
+    return intercept
+
+
+class TestUnansweredCalls:
+    """RFC 8620 §3.4 has the server answer every method call. Some do not."""
+
+    def test_a_call_left_unanswered_fails_as_a_method_error(self):
+        # It read as a RuntimeError saying the batch had not run yet - after the
+        # batch had run and its context had exited.
+        fake = server()
+        with connect(fake) as client:
+            fake.intercept = answering(skip={1})
+            with client.batch() as batch:
+                dropped = batch.add("Core/echo", {"n": 1})
+                answered = batch.add("Core/echo", {"n": 2})
+        assert answered.result == {"n": 2}
+        with pytest.raises(MethodError) as excinfo:
+            _ = dropped.result
+        assert excinfo.value.type == "missingResponse"
+        assert excinfo.value.method_call_id == dropped.call_id
+
+    def test_only_the_request_that_went_unanswered_is_blamed(self):
+        # Split one call per request: the first comes back empty, the second
+        # answered - and the second's handle is not failed for the first's gap.
+        fake = server(capabilities={CORE_URN: {"maxCallsInRequest": 1}, MAIL_URN: {}})
+        with connect(fake) as client:
+            fake.intercept = answering(skip={1})
+            with client.batch() as batch:
+                dropped = batch.add("Core/echo", {"n": 1})
+                answered = batch.add("Core/echo", {"n": 2})
+        assert dropped.error is not None
+        assert answered.result == {"n": 2}
+
+    @pytest.mark.asyncio
+    async def test_the_async_client_fails_it_the_same_way(self):
+        fake = server()
+        http = httpx.AsyncClient(**fake.client_kwargs())
+        async with await AsyncJMAPClient.connect(
+            WELL_KNOWN, auth=BasicAuth("u", "p"), http=http, registry=registry()
+        ) as client:
+            fake.intercept = answering(skip={1})
+            async with client.batch() as batch:
+                dropped = batch.add("Core/echo", {"n": 1})
+        with pytest.raises(MethodError, match="missingResponse"):
+            _ = dropped.result
 
 
 class TestSetSizeGate:

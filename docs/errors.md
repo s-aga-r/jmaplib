@@ -90,6 +90,10 @@ except MethodError as error:
     print(error.type, error.method_call_id)
 ```
 
+Two error types come from the library rather than the server:
+`malformedResult`, for a response it could not parse, and `missingResponse`, for a
+call the server's response left out - RFC 8620 §3.4 has it answer every one.
+
 Two subclasses are worth catching by name:
 
 - **`ServerPartialFailError`** - RFC 8620 §3.6.2's `serverPartialFail`, the one

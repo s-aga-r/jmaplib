@@ -22,13 +22,13 @@ do the HTTP, which is what lets one implementation serve both sync and async.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from jmap.capabilities.parsing import parser_for
 from jmap.capabilities.registry import UnsupportedMethodError
 from jmap.capabilities.spec import MethodKind
 from jmap.chunking import ChunkedHandle, chunk_get_call
-from jmap.core.errors import CapabilityFieldError, JMAPError
+from jmap.core.errors import CapabilityFieldError, JMAPError, MethodError
 from jmap.core.invocation import Handle, MethodCall
 from jmap.core.narrow import as_list, as_object, is_list, is_object
 from jmap.core.request import plan_requests
@@ -80,6 +80,7 @@ class Batch:
         "_default_account",
         "_filter_fields",
         "_handles",
+        "_in_flight",
         "_properties",
         "_sort_options",
         "_type_names",
@@ -95,6 +96,10 @@ class Batch:
         self._capabilities = capabilities
         self._default_account = default_account or capabilities.account_id
         self._handles: list[Handle[Any]] = []
+        #: Call ids of the request :meth:`requests` last handed out, so that
+        #: :meth:`absorb` can tell a call the server skipped from one that has
+        #: not been sent yet.
+        self._in_flight: frozenset[str] = frozenset()
         #: (type, property) pairs seen so far, for `using` derivation.
         self._properties: list[tuple[str, str]] = []
         #: (type, name) pairs for every FilterCondition property and sort
@@ -320,7 +325,9 @@ class Batch:
         """
         for request in self.plan(extra_using=extra_using):
             request.created_ids = dict(self._created_ids) or None
+            self._in_flight = frozenset(call_id for call_id, _ in request.method_calls)
             yield request
+        self._in_flight = frozenset()
 
     def _check_set_sizes(self) -> None:
         """Refuse an oversized ``/set`` rather than splitting it.
@@ -346,9 +353,26 @@ class Batch:
                 raise CapabilityFieldError(handle.call.name, "maxObjectsInSet", limit, total)
 
     def absorb(self, response: Response) -> None:
-        """Route one response back to its handles and keep any new creation ids."""
+        """Route one response back to its handles and keep any new creation ids.
+
+        A call the request carried but the response does not answer is failed
+        with a ``missingResponse`` :class:`~jmap.core.errors.MethodError`. RFC
+        8620 §3.4 has the server answer every call; one that did not otherwise
+        left its handle reading as never sent, a RuntimeError telling the caller
+        to run a batch that had run.
+        """
         dispatch(response, self._handles)
         self._created_ids.update(response.created_ids)
+        for handle in self._handles:
+            if handle.call_id in self._in_flight and not handle.is_resolved:
+                handle.fail(
+                    MethodError(
+                        MISSING_RESPONSE,
+                        handle.call_id,
+                        {"description": "the server's response did not answer this call"},
+                    )
+                )
+        self._in_flight = frozenset()
 
     def pending(self) -> tuple[Handle[Any], ...]:
         """Handles still awaiting a response - non-empty mid-split."""
@@ -356,6 +380,11 @@ class Batch:
 
     def __repr__(self) -> str:
         return f"Batch({[handle.call.name for handle in self._handles]})"
+
+
+#: The error type a call gets when its request came back without an answer to
+#: it. The library's own, like ``malformedResult``: no RFC names this failure.
+MISSING_RESPONSE: Final = "missingResponse"
 
 
 def _condition_names(filter_: dict[str, Any]) -> list[str]:
