@@ -23,6 +23,7 @@ from jmap.auth import (
     OAuth2Auth,
     OAuth2Token,
 )
+from jmap.auth.challenge import parse_challenges
 from jmap.core.errors import AuthenticationError
 
 STALWART_CHALLENGES = [
@@ -305,6 +306,60 @@ class TestOAuth2Refresh:
         assert not errors
         assert len(refreshes) == 1
         assert auth.generation == 1
+
+
+SCOPE_CHALLENGE = 'Bearer error="insufficient_scope", scope="urn:ietf:params:jmap:mail"'
+
+
+def scope_refusal(status: int) -> httpx.Response:
+    return httpx.Response(status, headers={"WWW-Authenticate": SCOPE_CHALLENGE})
+
+
+class TestInsufficientScope:
+    """RFC 6750 §3.1: a valid token that lacks a scope - most often a 403."""
+
+    @pytest.mark.parametrize("status", [401, 403])
+    @pytest.mark.parametrize(
+        "make",
+        [
+            lambda: BearerAuth("t"),
+            lambda: CallableAuth(lambda: "Bearer t"),
+            lambda: OAuth2Auth(OAuth2Token("t")),
+            lambda: OAuth2Auth(OAuth2Token("t"), refresh=lambda _t: OAuth2Token("n")),
+        ],
+    )
+    def test_it_is_raised_for_either_status_and_any_credential(self, status, make):
+        # Only a 401 was checked, and only when a refresh callable was set: the
+        # 403 RFC 6750 recommends came back as a generic RequestError.
+        transport, seen = recording_transport(scope_refusal(status))
+        with httpx.Client(transport=transport) as client, pytest.raises(InsufficientScopeError):
+            client.get("https://x/", auth=make())
+        assert len(seen) == 1
+
+    def test_it_carries_the_challenge_as_the_server_sent_it(self):
+        # A repr of the parsed challenge could not be parsed back, so the scope
+        # the server named was lost.
+        transport, _ = recording_transport(scope_refusal(403))
+        with (
+            httpx.Client(transport=transport) as client,
+            pytest.raises(InsufficientScopeError) as excinfo,
+        ):
+            client.get("https://x/", auth=BearerAuth("t"))
+        assert excinfo.value.challenges == (SCOPE_CHALLENGE,)
+        [challenge] = parse_challenges(excinfo.value.challenges)
+        assert challenge.params["scope"] == "urn:ietf:params:jmap:mail"
+
+    @pytest.mark.asyncio
+    async def test_the_async_flow_raises_it_too(self):
+        transport, _ = recording_transport(scope_refusal(403))
+        async with httpx.AsyncClient(transport=transport) as client:
+            with pytest.raises(InsufficientScopeError):
+                await client.get("https://x/", auth=OAuth2Auth(OAuth2Token("t")))
+
+    def test_an_ordinary_403_is_left_alone(self):
+        transport, _ = recording_transport(httpx.Response(403))
+        with httpx.Client(transport=transport) as client:
+            assert client.get("https://x/", auth=BearerAuth("t")).status_code == 403
 
 
 class TestOAuth2RefreshAsync:

@@ -49,6 +49,25 @@ def _challenges_of(response: httpx.Response) -> tuple[Challenge, ...]:
     return parse_challenges(response.headers.get_list("www-authenticate"))
 
 
+def _refuse_insufficient_scope(response: httpx.Response) -> None:
+    """Raise :class:`InsufficientScopeError` if the answer says the token lacks a scope.
+
+    On a 401 or a 403 - RFC 6750 §3.1 recommends the 403 - and whatever the
+    credential: a static token lacks scopes as readily as a refreshable one.
+    The challenges travel as the header values, as on every other
+    AuthenticationError, so the scope the server names can be read back out.
+    """
+    if response.status_code not in (401, 403):
+        return
+    bearer = find_challenge(_challenges_of(response), "bearer")
+    if bearer is not None and bearer.error == "insufficient_scope":
+        raise InsufficientScopeError(
+            "the access token lacks the scope this request needs; "
+            "re-authorise with a wider scope rather than refreshing",
+            challenges=tuple(response.headers.get_list("www-authenticate")),
+        )
+
+
 class JMAPAuth(httpx.Auth):
     """Base for every credential: applies a header, and does not retry.
 
@@ -63,7 +82,8 @@ class JMAPAuth(httpx.Auth):
 
     def auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
         self.apply(request)
-        yield request
+        response = yield request
+        _refuse_insufficient_scope(response)
 
 
 class BasicAuth(JMAPAuth):
@@ -217,20 +237,13 @@ class OAuth2Auth(JMAPAuth):
 
         Gated on an actual Bearer challenge rather than the bare status code: a
         401 offering only Basic means this server will not take our token at all,
-        and refreshing is wasted work.
+        and refreshing is wasted work. A missing scope raises instead - a new
+        token of the same grant would lack it too.
         """
+        _refuse_insufficient_scope(response)
         if response.status_code != 401 or self._refresh is None:
             return False
-        bearer = find_challenge(_challenges_of(response), "bearer")
-        if bearer is None:
-            return False
-        if bearer.error == "insufficient_scope":
-            raise InsufficientScopeError(
-                "the access token lacks the scope this request needs; "
-                "re-authorise with a wider scope rather than refreshing",
-                challenges=tuple(str(c) for c in _challenges_of(response)),
-            )
-        return True
+        return find_challenge(_challenges_of(response), "bearer") is not None
 
     def _apply_token(self, token: OAuth2Token) -> None:
         # Persist first. A server that rotates refresh tokens invalidates the old

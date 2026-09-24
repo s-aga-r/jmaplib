@@ -195,6 +195,8 @@ authorization server.
 ## Scopes
 
 A token can be valid and still insufficient. When a server answers with a
-`WWW-Authenticate` challenge naming a missing scope, the library raises
-`InsufficientScopeError` rather than a generic 403, so you can re-authorize with
-the scope it named instead of guessing.
+`WWW-Authenticate` challenge naming a missing scope - on a 403, as RFC 6750 §3.1
+recommends, or a 401 - the library raises `InsufficientScopeError` rather than a
+generic error, whatever the credential. Its `challenges` are the header values as
+sent, so `parse_challenges(error.challenges)` gives back the scope the server
+named, to re-authorize with instead of guessing.
