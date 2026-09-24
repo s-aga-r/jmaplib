@@ -129,6 +129,11 @@ with client.batch() as batch:
     batch.core.push_subscription.set(update={subscription_id: verification_update(code)})
 ```
 
+The code can arrive *before* the `/set` response that created the subscription,
+as RFC 8620 §7.2.3 warns, so match codes by subscription id, not by order.
+`PendingVerification` records each code as it lands and hands it over once you
+know the id, whichever of the two comes first.
+
 Note the two id-like values. `device_client_id` is *yours* - stable for this
 installation - and `mine(subscriptions, device_client_id)` finds your own
 subscriptions among those the credentials can see. `PushSubscription/get` never

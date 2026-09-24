@@ -80,6 +80,13 @@ item = got.result.items[0]
 print(item.size, item.digest("sha-256"))
 ```
 
+Two fields are easy to misread. `size` is the size of the *whole* blob even when
+you asked for a range, so a short read shows in `is_truncated`, not in comparing
+sizes. And text that is not valid UTF-8 comes back as no text with
+`is_encoding_problem` set: `item.data`, which reads whichever representation
+arrived, gives `b""` for it as for an empty blob, so the flag is how to tell
+them apart.
+
 The property names carry colons and arguments; they are the wire names exactly.
 A digest algorithm the server did not advertise raises `CapabilityFieldError`
 before the request - so check what is on offer if you are not sure:

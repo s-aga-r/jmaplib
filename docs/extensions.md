@@ -58,7 +58,7 @@ if checked.result.is_valid:
         batch.sieve.sieve_script.activate("#s1")
 ```
 
-Three things:
+Five things:
 
 - **`validate` is a verdict, not an error.** Invalid content comes back as a
   successful method call with a non-null `error` argument, so nothing raises.
@@ -67,8 +67,15 @@ Three things:
   servers differ on whether a `#creationId` resolves in that position - Stalwart
   answers `blobNotFound`. See [Blobs](blobs.md).
 - **`activate`/`deactivate` are ordering-sensitive** and the library handles the
-  `onSuccessActivateScript` shape for you. Check the engine's `sieve_extensions`
+  `onSuccessActivateScript` shape for you. Destroying the active script takes
+  two `/set` calls - RFC 9661 §2.4 requires the deactivation to be separate - so
+  batch them rather than combining them. Check the engine's `sieve_extensions`
   before relying on `fileinto`, `vacation` or anything else optional.
+- **Script names are measured in octets.** `maxSizeScriptName` counts the UTF-8
+  encoding, so a four-character CJK name is twelve. The builder's `check_name()`
+  applies the account's limits before the server refuses a name.
+- **There is no `SieveScript/changes`.** RFC 9661 defines none, so when push says
+  scripts changed, fetch them again with `/get` - cheap for a handful of scripts.
 
 ## Contacts (RFC 9610)
 

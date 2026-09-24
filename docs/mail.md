@@ -132,6 +132,20 @@ The form matters: `asText`, `asAddresses`, `asMessageIds`, `asDate`, `asURLs`
 and the default `asRaw` are parsed differently by the server, and asking for the
 wrong one gives you a value you then have to parse yourself.
 
+Two more details are easy to miss. The server answers under *exactly* the name
+you asked with - `header:Subject` and `header:subject` are different keys - so
+ask and read with the same query: `query.read(email)` does the lookup. And
+without `all=True` you get the **last** occurrence of a header, not the first
+and not a list. The shorthands build the common queries:
+
+```python
+from jmap.models.mail.headers import addresses, raw, text
+
+subject = text("Subject")  # header:Subject:asText
+hops = raw("Received", all=True)  # header:Received:all - every hop
+recipients = addresses("To")  # header:To:asAddresses
+```
+
 ## Changing a message
 
 Updates are **patches**, addressed by JSON Pointer, not whole objects. This is
@@ -243,6 +257,32 @@ batch.submission.email_submission.set(
     }
 )
 ```
+
+### Checking a draft first
+
+`Email/set` is the one place the object you send is not shaped like the one you
+get back, and the server refuses a malformed draft with `invalidProperties`,
+which names the property but not the rule. `validate_email_create` checks the
+rules locally:
+
+```python
+from jmap.models.mail.create import validate_email_create
+
+validate_email_create(
+    {
+        "mailboxIds": {"mb1": True},
+        "textBody": [{"partId": "t", "type": "text/plain"}],
+        "bodyValues": {"t": {"value": "hello"}},
+    }
+)
+```
+
+It catches server-assigned properties (`id`, `blobId`, `threadId`, `size`), the
+read-only `headers` list, a body described both ways at once, empty
+`mailboxIds`, malformed keywords, body parts with both or neither of
+`partId`/`blobId`, and `bodyValues` entries that are unreferenced or missing. It
+is deliberately a subset of RFC 8621 §4.6: anything that needs server state -
+does the mailbox exist, is the blob still there - is left to the server.
 
 ## Importing and parsing
 

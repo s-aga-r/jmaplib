@@ -131,6 +131,14 @@ leads to. Every fetch in the chain is https, hop by hop through any redirect.
 Stalwart answers an unauthenticated session request with a 200 and no accounts,
 not a 401, so do not wait for a challenge to begin.
 
+The second step makes two checks of its own. The authorization server's
+metadata URL puts `/.well-known/oauth-authorization-server` *between* the host
+and the issuer's path, as RFC 8414 §3.1 requires - appending it happens to work
+for a single-tenant server, which is how that bug reaches production. And the
+`issuer` the document names must be the one its URL was built from (§3.3), or
+`IssuerMismatchError` is raised: otherwise any host that answers that path could
+nominate its own token endpoint.
+
 With no client id and a server supporting RFC 7591 dynamic registration:
 
 ```python
