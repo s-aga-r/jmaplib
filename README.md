@@ -1,560 +1,166 @@
 # jmaplib
 
-A complete, capability-driven [JMAP](https://jmap.io) client for Python.
+**A complete [JMAP](https://jmap.io) client for Python.** Read and send mail,
+manage contacts and calendars, store files, and get notified the moment
+something changes - on any server that speaks JMAP, such as Fastmail, Stalwart
+or Cyrus.
+
+```python
+from jmap.auth import BasicAuth
+from jmap.client import JMAPClient
+
+with JMAPClient.connect(
+    "https://mail.example.com/.well-known/jmap",
+    auth=BasicAuth("alice@example.com", "app-password"),
+) as client:
+    with client.batch() as batch:
+        mailboxes = batch.mail.mailbox.get(ids=None)
+
+    for mailbox in mailboxes.result.items:
+        print(mailbox.name, mailbox.unread_emails)
+```
+
+- **Covers the whole protocol.** Mail, sending, vacation replies, contacts,
+  calendars, files, Sieve filters, quotas, blobs, read receipts and sharing,
+  with push over EventSource, Web Push and WebSocket.
+- **Adapts to your server.** It reads what the server says it supports and
+  offers exactly that, so a call the server cannot answer fails on your line of
+  code, not in a response you have to decode.
+- **Typed throughout.** Every response is a [pydantic](https://docs.pydantic.dev)
+  model, and every argument you pass is checked before anything is sent.
+- **Few round trips.** Calls travel together in one request and can feed each
+  other their results. Server limits are respected for you.
+- **Sync and async** with the same API. The async client runs on asyncio or trio.
+- **Safe by default.** It retries a request only when that cannot make it apply
+  twice, refuses to be downgraded from https to plain http, and asks before
+  trusting a DNS answer with your credentials.
+- **Easy to test.** An in-process fake JMAP server ships with the package.
+
+Python 3.11+ · MIT licensed · fully typed · 100% test coverage · tested against
+a live Stalwart server on every push.
+
+## Contents
+
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Core concepts](#core-concepts)
+- [Common tasks](#common-tasks)
+- [Handling errors](#handling-errors)
+- [Configuration](#configuration)
+- [Testing your code](#testing-your-code)
+- [Supported specifications](#supported-specifications)
+- [How it works](#how-it-works)
+- [Documentation](#documentation)
+- [Status and versioning](#status-and-versioning)
+- [Contributing](#contributing)
+
+## Installation
 
 ```console
 pip install jmaplib
 ```
 
-```python
-import jmap
-```
+The package is called `jmaplib` on PyPI and is imported as `jmap`.
 
-> The distribution is `jmaplib`; the module is `jmap`. Same split as
-> `python-dateutil` → `dateutil`.
+Optional extras - you need none of them for mail:
 
-## Why
-
-Python has no JMAP client that covers the protocol. The one maintained option is
-mail-only and GPL-3.0. `jmaplib` aims at the whole ecosystem — Mail, Submission,
-Vacation, Contacts, Calendars, FileNode, Sieve, Quota, Blob, MDN, push over
-EventSource and WebSocket, and Principals/Sharing — under MIT.
-
-## Capability-driven by design
-
-The library reads the server's Session resource and adapts to what that server
-actually advertises. It will not put a URN on the wire that the server did not
-offer, it derives `using` from the calls you make, and it enforces the server's
-own advertised limits (`maxCallsInRequest`, `maxObjectsInGet`, `maxSizeUpload`)
-before sending — auto-batching and auto-chunking where that is safe, and raising
-where it is not.
-
-A capability is **data**, not a class hierarchy — one `CapabilitySpec` per URN,
-describing its data types and methods:
-
-```python
-from jmap.capabilities.registry import Registry
-from jmap.capabilities.core import CORE
-
-registry = Registry()
-registry.register(CORE)
-
-active = registry.resolve(session, account_id)  # per account, not per connection
-active.supports("Email/get")  # method-granular, not capability-granular
-active.using_for(["Email/get"])  # derived, then intersected with reality
-active.unknown_urns  # advertised but unrecognised — surfaced, never dropped
-```
-
-Four rules fall out of that, each of which exists because a real server
-misbehaves without it:
-
-- **Resolution is per account.** `accountCapabilities` is a *second* map, not a
-  subset of the session-level one. Stalwart advertises `urn:stalwart:jmap` only
-  at account level, so the answer is their union.
-- **`using` is derived, then hard-intersected.** Under-declaring degrades
-  silently (RFC 8620 §1.8); over-declaring makes Stalwart reject the *entire*
-  request with `notRequest`, killing every unrelated call batched alongside it.
-- **Capability presence ≠ method presence.** The specs say so outright: RFC 9404
-  §3.1 has a server advertise `urn:ietf:params:jmap:blob` with an empty
-  `supportedTypeNames` when it implements no `Blob/lookup` at all.
-- **Properties can pull in a capability too.** `urn:ietf:params:jmap:smimeverify`
-  adds properties but no methods, so derivation cannot look at method names alone.
-
-## Status
-
-**1.1.0** — the whole ecosystem. See [CHANGELOG.md](CHANGELOG.md).
-
-| Milestone | Scope | State |
+| Extra | Adds | Install it when |
 |---|---|---|
-| M1 | I/O-free protocol kernel | **done** |
-| M2 | Capability registry, auth, transports, sync + async shells | **done** |
-| M3 | Mail (RFC 8621), blobs → **0.1.0** | **done** |
-| M4 | Sync engine: change following, query views, state cursors | **done** |
-| M5 | Blob (RFC 9404), Quota (RFC 9425), Sieve (RFC 9661) → **0.2.0** | **done** |
-| M6 | Push: EventSource, PushSubscription, VAPID, WebSocket → **0.3.0** | **done** |
-| M7 | OAuth acquisition (PKCE, device flow), SRV discovery | **done** |
-| M8 | Contacts (RFC 9610 + vendor), Sharing (RFC 9670) | **done** |
-| M9 | Calendars (draft-27) — *experimental* | **done** |
-| M10 | FileNode (draft-14) — *experimental* → **0.7.0** | **done** |
-| M11 | MDN (RFC 9007), S/MIME, conformance matrix → **1.0.0** | **done** |
+| `jmaplib[discovery]` | `dnspython` | You want `JMAPClient.discover()` to look up SRV records. Without it, discovery tries only `https://<domain>/.well-known/jmap`. |
+| `jmaplib[ws]` | `httpx-ws` | You speak JMAP over WebSocket (RFC 8887). `jmap.push.WebSocketProtocol` frames and matches the messages; this extra gives you a socket to carry them. |
+| `jmaplib[push]` | `cryptography` | Your own Web Push endpoint decrypts push payloads (RFC 8291). |
+| `jmaplib[cli]` | `typer`, `rich` | Nothing yet - it is reserved for command-line tools. The conformance report below needs only the standard library. |
 
-> **Two caveats worth stating plainly.**
->
-> **Calendars and FileNode are experimental** and do not resolve unless you pass
-> `experimental=True`. They track Internet-Drafts; the calendars draft is blocked
-> on `jscalendarbis` and its own normative reference is already a revision stale,
-> so its wire names can still change. `jmap.SPEC_REVISIONS` publishes exactly what
-> this build targets.
->
-> **The JSCalendar and JSContact bodies are carried, not modelled.** A
-> `CalendarEvent` is a JSCalendar Event and a `ContactCard` is a JSContact Card;
-> both round-trip losslessly through the model's `extra` and are readable by exact
-> wire name (`event.jscalendar("recurrenceRule")`). What *is* modelled is the JMAP
-> layer around them, which is where the traps live. Field-by-field models for
-> those two vocabularies are a codegen job and are not done.
->
-> **The live suite gates CI.** Every push bootstraps a real Stalwart v0.16
-> headlessly and runs `tests/integration/` against it; see
-> [`docs/stalwart-spike.md`](docs/stalwart-spike.md) for the procedure and what
-> had to be discovered to make it work. Its first green run was worth the trouble
-> — it found five defects no fake server could have, four of them in the library:
-> a creation reference that never serialised, a back-reference nested where the
-> wire format cannot express one, blob upload unable to resolve an account on any
-> real server, and an event source that could not stay open past five seconds.
-> Point it at your own server with `JMAP_TEST_URL`, `JMAP_TEST_USER` and
-> `JMAP_TEST_PASS`.
+## Quick start
 
-### Capability namespaces
+Connect, find the inbox, and fetch its ten newest messages:
 
 ```python
-with client.batch() as batch:
-    query = batch.mail.email.query(filter={"inMailbox": inbox})
-    emails = batch.mail.email.get(ids=query.ref_ids(), properties=["subject"])
-
-emails.result.items[0].subject  # typed Email, one request
-```
-
-Namespaces come from the same resolution the raw path uses, so a mail-only server
-has no `client.calendars` at all — an `AttributeError` at your call site rather
-than a namespace that exists and fails on every call.
-
-### Blobs, two ways
-
-The RFC 8620 way is not JMAP at all: blobs move over plain HTTP to URLs the
-Session advertises as templates, so they are not batchable.
-
-```python
-uploaded = client.upload(pdf_bytes, content_type="application/pdf")
-client.download(uploaded.blob_id, name="invoice.pdf")
-```
-
-`maxSizeUpload` is checked *before* sending — a 60 MB attachment against a 50 MB
-limit fails in microseconds rather than after streaming 60 MB.
-
-Where the server offers `urn:ietf:params:jmap:blob` (RFC 9404) there is a second
-way, and it *is* batchable — which matters whenever something else in the same
-request needs the new blobId:
-
-```python
-from jmap.models.blob import BlobUpload, DataSource
-
-with client.batch() as batch:
-    batch.blob.blob.upload(
-        create={"s": BlobUpload(data=[DataSource.text(script)], type="application/sieve")}
-    )
-    batch.sieve.sieve_script.set(create={"A": {"name": "filters", "blobId": "#s"}})
-```
-
-`"#s"` is a *creation* reference, resolved by the server against `createdIds`. It
-is a different mechanism from the `#argument` result references used elsewhere,
-and it is the only one legal inside a `/set` object — RFC 8620 §3.7 result
-references are top-level arguments only.
-
-Sources concatenate, and a `blobId` source with `offset` and `length` splices an
-existing blob without the octets ever leaving the server:
-
-```python
-DataSource.blob("#whole", offset=2, length=3)
-```
-
-Two things about reading blobs back are easy to get wrong, so the models handle
-them: `size` is the size of the **whole** blob even under a range request (so
-comparing it against `len(data)` is not how you detect a short read — `isTruncated`
-is), and `data:asText` comes back **null with `isEncodingProblem`** when the
-selected octets are not valid UTF-8, which is indistinguishable from an empty blob
-unless you look at the flag. `Blob.data` reads whichever representation arrived.
-
-Content moves inside the JSON request here, so it counts against `maxSizeRequest`;
-RFC 9404 §4.1 recommends the upload endpoint past a megabyte. `Blob/copy` stays
-with `:core` because RFC 8620 owns it, so the same type has different methods in
-`client.core.blob` and `client.blob.blob` — the split is the spec's, not ours.
-
-### Quotas and Sieve scripts
-
-```python
-with client.batch() as batch:
-    quotas = batch.quota.quota.get(ids=None)
-
-quotas.result.items[0].remaining  # headroom, floored at zero
-```
-
-There is no `Quota/set` — usage is server-computed — so `client.quota.quota` has
-no `.set` attribute at all. `Quota/changes` carries `updatedProperties`, and its
-`null` reads backwards from the obvious: RFC 9425 §4.3 requires it whenever the
-server *cannot* tell what changed, so it means "fetch everything", not "nothing
-changed". `fetch_all_properties` says which you have.
-
-Sieve scripts are metadata plus a `blobId`. Activation is a side effect of `/set`
-rather than a property, because `isActive` is server-set and at most one script may
-hold it:
-
-```python
-with client.batch() as batch:
-    batch.sieve.sieve_script.activate(script_id)
-```
-
-Destroying the active script needs *two* `/set` calls — RFC 9661 §2.4 requires the
-deactivation to be separate — which is a batch, not a combined call. And
-`maxSizeScriptName` counts **octets**, not characters: `check_name()` measures the
-UTF-8 encoding, so a four-character CJK name is twelve.
-
-RFC 9661 defines no `SieveScript/changes` at all, even though the type is
-registered as usable for state change. Push can tell you scripts changed while
-giving you no way to ask what — re-running `/get` is the answer, which is fine for
-a handful of scripts.
-
-### Staying in sync
-
-The library holds no cache of its own. It computes deltas and hands them over;
-what to persist is the application's decision, so the only seam is a `StateStore`.
-
-```python
-from jmap.sync import ChangeStream, InMemoryStateStore
-
-stream = ChangeStream(client, "Email", store=my_store)
-changes = stream.catch_up()  # follows hasMoreChanges to the end
-changes.touched  # created + updated, deduplicated
-```
-
-Two things this gets right that are easy to get wrong:
-
-- **`hasMoreChanges` means there is more.** Reading one page and stopping loses
-  the tail *silently*, because the state string still advances. `catch_up()`
-  follows it to the end; `pages()` yields them one at a time for large mailboxes.
-- **`cannotCalculateChanges` is not retryable.** RFC 8620 §5.2 requires the cache
-  to be invalidated and re-downloaded, so it raises `ResyncRequiredError` rather
-  than passing through as a generic method error — the recovery is different.
-
-Through `pages()`, delivery is **at least once**: the cursor advances only when you
-come back for the next page, so a page being processed when the process dies
-arrives again. A caller can absorb duplicates; it cannot recover changes it never
-saw. `catch_up()` hands everything over at once, so it is all or nothing instead:
-the cursor moves once, when the whole set is returned, and a failure part-way
-through leaves it where it was.
-
-`QueryView` keeps a cached result list current via `Foo/queryChanges`:
-
-```python
-view = QueryView.from_query(spec, query_response)
-view.apply(query_changes_response)  # splices the delta in
-view.known_ids  # what you actually hold
-```
-
-The cached list is **sparse** — RFC 8620 §5.6 models it as `["id1", null, "id3"]`,
-where the nulls are positions you know exist but never fetched, and they are what
-keep the indices meaningful. Removals are applied before insertions because the
-`added` indices describe the list *after* removals, and an id appearing in *both*
-arrays is a move, not a delete. The implementation reproduces the RFC's worked
-example exactly, and that example is a test.
-
-### Push
-
-Three transports, one idea: a `StateChange` names which types moved in which
-accounts and nothing else. So whichever way it arrives — and whether or not some
-are dropped — the follow-up is the same `/changes` call, and the client converges.
-Push is an optimisation, never a second source of truth.
-
-```python
-from jmap.push import EventSourceClient, Ping
-
-source = EventSourceClient(client, types=("Email", "Mailbox"), ping=30)
-for event in source.listen():  # reconnects, resuming each time
-    if isinstance(event, Ping):
-        continue  # a keep-alive; nothing moved
-    for account, states in event.outdated(my_cursors).items():
-        ...  # only what actually moved
-```
-
-`outdated()` is the method that matters. A `StateChange` arriving does not mean
-something changed *for you* — compare it against what you hold, or you re-fetch
-types that never moved. And RFC 8620 §7.1 notes a notification can land while your
-own `/set` is still in flight, so `matches()` recognises your own write.
-
-Two rules here are silent when broken, so the library encodes both:
-
-- **A ping is not a cursor.** RFC 8620 §7.3 forbids a ping from setting an event
-  id. A client tracking "the last thing I received" resumes from a keep-alive and
-  skips every change before it. The resume cursor is unmoved by pings.
-- **`closeafter=state` ending the response is success.** Buffering proxies
-  otherwise hold a stream back indefinitely, so the server ending it after one
-  event is what was asked for. `listen()` reconnects rather than backing off.
-
-`ping` also decides how long the client will wait on a silent stream. An event
-source is idle by design, so it does *not* inherit the HTTP client's read timeout
-— httpx defaults that to five seconds, which would hang up on every healthy
-connection. A requested ping is a promise of traffic on a schedule and becomes the
-deadline — allowing for the fact that §7.3 lets a server round a request up to a
-minimum of 30 seconds, so asking for 5 and hanging up at 5 would kill a perfectly
-conformant connection. With no ping requested there is no promise at all and the
-client waits indefinitely, which is what "notify me when something changes" means.
-
-Registering a URL instead is a three-step dance, and the middle step is the
-security property: the server pushes a `PushVerification` and makes **no further
-request** to that URL until the code comes back — which is what stops a
-subscription being used to aim a JMAP server at a third party. The verification
-can arrive *before* the `/set` response that created the subscription (§7.2.3), so
-`PendingVerification` records codes as they land and claims them later, in
-whichever order the two actually happen.
-
-Over a WebSocket (RFC 8887) the same socket carries requests, responses, errors
-and notifications, distinguished only by `@type`. Responses may come back **out of
-order** — §4.3.2 says so — so `WebSocketProtocol` correlates by request id rather
-than assuming FIFO. Its `pushState` token makes a reconnect cost one exchange
-instead of a `/changes` call per type.
-
-VAPID (RFC 9749) adds one field and one obligation: rotating the application
-server key destroys subscriptions tied to the old one, and nothing raises when it
-happens — notifications just stop. `needs_recreating(session, key)` is how you
-find out.
-
-### Signing in
-
-`jmaplib` can find the server and get a token without being told either.
-
-```python
-from jmap.auth import OAuthClient
-
-# `challenge` is the Bearer challenge on a 401, and `url` the URL that drew it.
-metadata = OAuthClient.discover(challenge.resource_metadata, resource=url)  # RFC 9728 → RFC 8414
-with OAuthClient(metadata, client_id="...") as oauth:
-    token = oauth.authorize(scope="urn:ietf:params:jmap:core")  # PKCE, loopback
-client = JMAPClient.discover("alice@example.com", auth=BearerAuth(token.access_token))
-```
-
-`JMAPClient.discover` tries `_jmap._tcp` SRV records before
-`https://<domain>/.well-known/jmap`, because the well-known guess alone is not
-enough — Fastmail answers 404 there. A record naming a host outside the address's
-domain is tried only once `confirm_srv_target` accepts it: without DNSSEC the
-answer can be forged, and whoever it names receives the credentials (RFC 6186 §6).
-
-Three things in the OAuth path are security properties rather than conveniences,
-and all are the kind that work fine against a cooperative server:
-
-- **The well-known segment is inserted, not appended.** RFC 8414 §3.1 puts
-  `/.well-known/oauth-authorization-server` *between* host and path. Appending
-  happens to work for single-tenant deployments, which is exactly why that bug
-  survives to production.
-- **The returned `issuer` is checked against the one the URL was built from**
-  (§3.3). Without it, any host that merely answers that path can nominate
-  whichever token endpoint it likes.
-- **The resource metadata must be about this resource.** RFC 9728 §3.3: the
-  `resource` it names must be the one its well-known URL was built from, and must
-  cover the URL whose 401 pointed there. Otherwise a pointer aimed anywhere picks
-  the authorization server.
-
-Only S256 PKCE is used. RFC 7636 also defines `plain`, where the challenge *is*
-the verifier — which defeats the point for precisely the clients that need it, so
-a server advertising neither is refused rather than downgraded to.
-
-### Sharing
-
-```python
-from jmap import sharing
-
-principals = sharing.principal_account(client.session, data_account_id)
-with client.batch() as batch:
-    batch.calendars.calendar.set(update={cal_id: sharing.grant(bob, {"mayReadItems": True})})
-```
-
-`grant()` and `revoke()` build *pointer* patches. Assigning `shareWith` wholesale
-revokes everyone absent from the new map — the difference between "add Bob" and
-"make Bob the only person with access". The owning Principal must never appear in
-the map at all (RFC 9670 §4), and the account you address the `/set` at is **not**
-the account the Principal ids come from: `principal_account()` is that lookup.
-
-### Contacts, two models
-
-RFC 9610 gave contacts `AddressBook` and `ContactCard`. Before it, Fastmail and
-Cyrus shipped `Contact` and `ContactGroup` — and those are gated by *vendor* URNs,
-not by `urn:ietf:params:jmap:contacts`. So they are three capabilities rather than
-two flavours of one, a server may advertise several at once, and `using` derivation
-handles it without being told:
-
-```python
-batch.contacts.contact_card.query(filter={"name/given": "Alice"})  # RFC 9610
-batch.fastmail_contacts.contact.query(filter={"text": "Alice"})  # pre-RFC
-```
-
-Calling `Contact/get` with only the IETF URN in `using` earns `unknownMethod` from
-a server that fully implements it, and the error names the *method* — which reads
-as "this server has no contacts" rather than "you declared the wrong capability".
-
-### What does this server actually do?
-
-Capability presence does not imply method presence — the specs say so outright,
-and RFC 9404 §3.1 describes a server advertising `urn:ietf:params:jmap:blob` while
-implementing no `Blob/lookup` at all. So the honest answer is a matrix:
-
-```console
-python -m jmap.testing.conformance https://example.com/.well-known/jmap \
-    --user alice@example.com --markdown   # asks for the password, or reads $JMAP_PASSWORD
-```
-
-It costs no method calls — everything comes from the Session — and it keeps three
-states apart that reports usually collapse into "supported":
-
-| | meaning |
-|---|---|
-| advertised, modelled | typed calls available |
-| advertised, **not** modelled | a vendor URN or a newer spec; still reachable via `batch.add` |
-| modelled, **not** advertised | this build speaks it; this server does not offer it |
-
-That last row is the one that answers "why is this feature missing", and it is
-absent from most conformance reports.
-
-### `/get` chunks itself; `/set` refuses to
-
-`maxObjectsInGet` caps how many ids one call may name, and a client holding a few
-thousand ids from a `/query` exceeds it routinely. `/get` is safe to split — it
-changes nothing — so it happens automatically and you still get one handle:
-
-```python
-emails = batch.add("Email/get", {"ids": three_thousand_ids})  # → 30 calls
-emails.result.items  # merged back
-```
-
-The one thing that doesn't recombine cleanly is the `state` string. Each chunk
-reports the state it was answered from, and if the data changed mid-read the
-merged result would be a mix of two points in time — undetectable afterwards. So
-mismatched states raise `TornReadError` rather than handing back a torn read.
-
-`/set` is **not** chunked, for the reason given above: splitting it would break
-the single `ifInState` that makes it atomic. It raises instead.
-
-### Header queries own both halves of the round trip
-
-A header is fetched by asking for a property whose *name encodes the request* —
-and RFC 8621 §4.1.2 says the server echoes that name back **exactly as sent**.
-Request `header:subject` and the answer is keyed `header:subject`; request
-`header:Subject` and it is keyed `header:Subject`. Ask one way, read the other,
-and you silently get `None`.
-
-```python
-from jmap.models.mail.headers import text, addresses, raw
-
-subject = text("Subject")  # header:Subject:asText
-subject.property_name  # what to request
-subject.read(email)  # …and the key it comes back under
-
-raw("Received", all=True)  # header:Received:all — every hop
-addresses("To")  # header:To:asAddresses
-```
-
-Without `:all` you get the **last** occurrence, not the first and not a list.
-
-### Creation constraints are checked before sending
-
-`Email/set` is the one place the object you send is not shaped like the one you
-get back. The server refuses with `invalidProperties`, which names the property
-but not the rule — so the same mistake is easy to make twice:
-
-```python
-from jmap.models.mail.create import validate_email_create
-
-validate_email_create(
-    {
-        "mailboxIds": {"mb1": True},
-        "textBody": [{"partId": "t", "type": "text/plain"}],
-        "bodyValues": {"t": {"value": "hello"}},
-    }
-)
-```
-
-It catches server-assigned properties (`id`, `blobId`, `threadId`, `size`), the
-read-only `headers` list, describing the body *both* ways at once, empty
-`mailboxIds`, malformed keywords, body parts with both or neither of
-`partId`/`blobId`, and `bodyValues` entries that are unreferenced or missing.
-It is deliberately a **subset** of §4.6 — anything needing server state (does the
-mailbox exist? is the blob still live?) is left to the server.
-
-### The method surface matches the server
-
-Six method shapes cover almost all of JMAP, so they are written once and
-parameterised by the object model. But a type does not get all six — and rather
-than expose them everywhere and fail at run time, each façade is *composed from
-the capability spec*:
-
-| Type | Surface |
-|---|---|
-| `Email` | `get` `changes` `query` `query_changes` `set` `copy` |
-| `Mailbox` | `get` `changes` `query` `query_changes` `set` |
-| `Thread` | `get` `changes` — threads are derived, not stored |
-| `VacationResponse` | `get` `set` — a singleton |
-
-So `thread.query(...)` is an `AttributeError` at your call site rather than an
-`unknownMethod` from the server. Responses are typed to match: `Email/get`
-returns a `GetResponse[Email]`, `Email/set` a `SetResponse[Email]`.
-
-A `/set` half-succeeds by design, so its per-object failures are values rather
-than exceptions — raising would discard the objects that *did* change:
-
-```python
-result = emails.set(create={"d1": {...}}).result
-result.created_id("d1")  # server-assigned id, or None
-result.creation_errors  # {"d2": SetError(type="overQuota")}
-```
-
-### Mail is three capabilities, not one
-
-RFC 8621 defines `…:mail`, `…:submission` and `…:vacationresponse` separately,
-and servers advertise them independently — a read-only archive account may have
-mail without submission. Merging them would put `:submission` in `using` for a
-plain `Email/get` and, on a server that lacks it, fail the *entire* request.
-
-`Identity` therefore lives under `:submission`, not `:mail`: it exists to name
-what you may send *from*.
-
-## Documentation
-
-Task-oriented guides live in [`docs/`](docs/index.md):
-
-| | |
-|---|---|
-| [Getting started](docs/getting-started.md) | Install, connect, first request, async. |
-| [Capabilities](docs/capabilities.md) | What the server advertises decides what you can call. |
-| [Batching and references](docs/batching.md) | One request, many calls, chaining results. |
-| [Mail](docs/mail.md) | Mailboxes, searching, reading, composing, sending. |
-| [Blobs](docs/blobs.md) | Binary data, digests, lookup, copying. |
-| [Staying in sync](docs/sync.md) | Change streams, query views, state cursors. |
-| [Push](docs/push.md) | Event source, subscriptions, VAPID, WebSocket. |
-| [Authentication](docs/auth.md) | Presenting credentials, and acquiring them. |
-| [Errors](docs/errors.md) | Four failure levels, and which are safe to retry. |
-| [Other capabilities](docs/extensions.md) | Quota, Sieve, contacts, calendars, files, sharing, MDN, S/MIME. |
-| [Testing your own code](docs/testing.md) | The fake server that ships with the package. |
-
-The rest of this README is design rationale: why the library is shaped the way
-it is. If you want to *use* it, start with the guides.
-
-## Usage
-
-```python
-import httpx
 from jmap.auth import BasicAuth
 from jmap.client import JMAPClient
 
 with JMAPClient.connect(
-    "https://mail.example.com/.well-known/jmap",  # redirects are followed
+    "https://mail.example.com/.well-known/jmap",
     auth=BasicAuth("alice@example.com", "app-password"),
 ) as client:
-    client.echo(hello="world")
+    # 1. Queue calls in a batch; they are sent together when the block ends.
+    with client.batch() as batch:
+        mailboxes = batch.mail.mailbox.get(ids=None)  # None means "all of them"
+
+    inbox = next(m for m in mailboxes.result.items if m.role == "inbox")
+    print(f"{inbox.name}: {inbox.unread_emails} unread")
+
+    # 2. Search and fetch in a single request: the get uses the query's ids.
+    with client.batch() as batch:
+        found = batch.mail.email.query(
+            filter={"inMailbox": inbox.id},
+            sort=[{"property": "receivedAt", "isAscending": False}],
+            limit=10,
+        )
+        emails = batch.mail.email.get(
+            ids=found.ref_ids(), properties=["subject", "from", "receivedAt"]
+        )
+
+    for email in emails.result.items:
+        sender = email.from_[0].email if email.from_ else "(unknown)"
+        print(email.received_at, sender, email.subject)
 ```
 
-A JMAP request *is* a batch, so batching is the normal path rather than an
-optimisation. Calls queued in one block travel in one request, which is what
-makes back-references natural:
+What happened:
+
+1. **`connect` fetched the session** - the server's description of itself: its
+   accounts, the capabilities it supports and its limits. Everything afterwards
+   is decided from it. Point it at `/.well-known/jmap`; the redirect to the real
+   session URL is followed.
+2. **Each `with client.batch()` block made one HTTP request.** The calls inside
+   return *handles* immediately; their results are readable once the block ends.
+3. **`found.ref_ids()` is a back-reference.** The server feeds the query's
+   result into the `get` itself, so searching and fetching cost one round trip.
+4. **Results are typed.** `inbox` is a `Mailbox` and `email` an `Email`, so your
+   editor and type checker know every field. (`from` is a Python keyword, so the
+   field is `from_`.)
+
+For app passwords, OAuth and other credentials, see
+[Sign in with OAuth](#sign-in-with-oauth) and [Authentication](docs/auth.md).
+
+## Core concepts
+
+### Batches and handles
+
+A JMAP request is a list of method calls, so batching is the normal way to work
+rather than an optimisation. Queue as many calls as you like:
 
 ```python
 with client.batch() as batch:
-    query = batch.add("Email/query", {"filter": {"inMailbox": inbox}})
-    emails = batch.add("Email/get", {"ids": query.ref_ids()})  # resolved server-side
+    mailboxes = batch.mail.mailbox.get(ids=None)
+    identities = batch.submission.identity.get(ids=None)
 
-print(emails.result["list"])  # readable once the block exits
+print(len(mailboxes.result.items), len(identities.result.items))  # after the block
 ```
 
-A back-reference replaces a whole argument, because that is all the wire format
-can express: `ids` becomes `#ids`. To point at an object being created in the
-*same* request — a draft you are submitting as you write it — the mechanism is a
-creation reference, which is an ordinary string and so works at any depth:
+- A **handle** is returned as soon as a call is queued. Read `handle.result`
+  after the block; reading it earlier raises `RuntimeError`.
+- If one call fails, the others still succeed. The failure is raised only when
+  you read *that* call's result - see [Handling errors](#handling-errors).
+- `ids=None` means "every record", which is not the same as leaving `ids` out.
+  The library keeps "not given" and JSON `null` apart everywhere.
+
+### Referring to other calls
+
+Calls in one batch can use each other's results, without a round trip:
+
+```python
+with client.batch() as batch:
+    changes = batch.mail.email.changes(since_state=saved_state)
+    updated = batch.mail.email.get(ids=changes.ref_updated())
+```
+
+Handles offer `ref_ids()`, `ref_list(prop)`, `ref_updated()`,
+`ref_created(key)` and `ref(path)` for any other path.
+
+To point at an object **created in the same request** - a draft you are sending
+straight away, say - use a `CreationRef`. It works anywhere, including inside
+the object being created, where a back-reference cannot go:
 
 ```python
 from jmap import CreationRef
@@ -562,231 +168,574 @@ from jmap import CreationRef
 with client.batch() as batch:
     batch.mail.email.set(create={"draft": {...}})
     batch.submission.email_submission.set(
-        create={"send": {"emailId": CreationRef("draft"), "identityId": identity}}
+        create={"send": {"emailId": CreationRef("draft"), "identityId": identity_id}}
     )
 ```
 
-Putting a `ResultRef` inside a `create` object instead raises
-`NestedResultRefError` locally, naming the argument and pointing here — rather
-than failing as a `TypeError` from inside the JSON encoder.
+More in [Batching and references](docs/batching.md).
 
-The async client is a mirror — same names, same behaviour, `await` in front:
+### Namespaces follow the server
+
+Each capability the server advertises becomes an attribute on the batch, and
+each data type an attribute on that:
+
+| Namespace | Data types |
+|---|---|
+| `batch.core` | `push_subscription`, `blob` (copying blobs between accounts) |
+| `batch.mail` | `mailbox`, `thread`, `email`, `search_snippet` |
+| `batch.submission` | `identity`, `email_submission` |
+| `batch.vacation` | `vacation_response` |
+| `batch.blob` | `blob` (upload in a request, read ranges, lookup) |
+| `batch.quota` | `quota` |
+| `batch.sieve` | `sieve_script` |
+| `batch.contacts` | `address_book`, `contact_card` |
+| `batch.fastmail_contacts`, `batch.cyrus_contacts` | `contact`, `contact_group` (the pre-RFC contact APIs) |
+| `batch.principals` | `principal`, `share_notification` |
+| `batch.mdn` | `mdn` (read receipts) |
+| `batch.calendars` *(experimental)* | `calendar`, `calendar_event`, `participant_identity`, `calendar_event_notification` |
+| `batch.files` *(experimental)* | `file_node` |
+
+A namespace exists only when the server offers the capability, and a data type
+has only the methods the server implements. A mail-only server has no
+`batch.calendars`, and `Thread` has no `.query()`. Either is an
+`AttributeError` at your call site rather than an error from the server. To
+check before you call:
 
 ```python
-from jmap.aio import AsyncJMAPClient
-
-async with await AsyncJMAPClient.connect(url, auth=auth) as client:
-    async with client.batch() as batch:
-        query = batch.add("Email/query", {})
-        emails = batch.add("Email/get", {"ids": query.ref_ids()})
+if client.capabilities.supports("SieveScript/get"):
+    ...
 ```
 
-Everything either client decides — what `using` needs, how to split a batch,
-whether a failure may be retried — is computed by the same I/O-free kernel, so
-the two cannot disagree about protocol behaviour.
+See [Capabilities](docs/capabilities.md).
 
-### Failures are caught locally where possible
+### Typed results, checked arguments
 
-These all raise before anything reaches the wire:
+Responses are parsed into models: `Email/get` gives a `GetResponse[Email]`,
+`Email/set` a `SetResponse[Email]`. Properties the model does not know are kept,
+not dropped, so reading an object and writing it back loses nothing.
+
+Arguments are checked with pydantic before the call is queued, strictly - `"5"`
+is not a number - so mistakes fail where you made them:
+
+```python
+batch.mail.email.get(ids="m1")
+# pydantic_core.ValidationError: 1 validation error for Email.get
+# ids
+#   'str' instances are not allowed as a Sequence value [type=sequence_str, ...]
+```
+
+When creating objects you can pass either the wire mapping or a typed model. A
+model sends only the fields you set:
+
+```python
+from jmap.models.mail.objects import Mailbox
+
+with client.batch() as batch:
+    created = batch.mail.mailbox.set(create={"r": Mailbox(name="Receipts")})
+
+receipts_id = created.result.created_id("r")
+```
+
+### Calls without a builder
+
+Every method has a raw path, taking wire-spelled arguments and returning the
+response as a dict. It is how you reach the few methods without a typed builder
+(`Email/import`, `Email/parse` and others) and vendor extensions:
+
+```python
+result = client.call("Mailbox/get", {"ids": None})  # one call, no batch
+
+with client.batch() as batch:
+    parsed = batch.add("Email/parse", {"blobIds": [blob_id]})
+```
+
+The raw path skips the typed surface and the argument checks, but not the rest:
+the account is resolved, limits apply, and an unsupported method still fails
+before it is sent.
+
+## Common tasks
+
+### Search and read mail
+
+```python
+with client.batch() as batch:
+    found = batch.mail.email.query(
+        filter={"inMailbox": inbox.id, "hasKeyword": "$flagged"},
+        sort=[{"property": "receivedAt", "isAscending": False}],
+        limit=25,
+        calculate_total=True,
+    )
+    emails = batch.mail.email.get(
+        ids=found.ref_ids(), properties=["subject", "from", "receivedAt", "preview"]
+    )
+
+print(found.result.total, "flagged messages")
+```
+
+Ask for the properties you need; a bare `Email/get` returns the whole, large
+object. Page with `position=` or `anchor=` (not both). Message bodies arrive
+separately from their structure, so ask for them explicitly:
+
+```python
+with client.batch() as batch:
+    got = batch.mail.email.get(
+        ids=[email_id],
+        properties=["subject", "textBody", "bodyValues"],
+        fetchTextBodyValues=True,  # RFC 8621 arguments keep their wire spelling
+    )
+
+email = got.result.items[0]
+for part in email.text_body or []:
+    body = (email.body_values or {}).get(part.part_id or "")
+    if body:
+        print(body.value)
+```
+
+### Flag, move and delete messages
+
+Updates are *patches* that change only what they name, so two clients editing
+the same message do not overwrite each other. Helpers build the common ones:
+
+```python
+from jmap.core.patch import keyword_patch, mailbox_patch
+
+patch = keyword_patch(add=["$seen"], remove=["$flagged"])
+patch.update(mailbox_patch(add=[archive_id], remove=[inbox_id]))  # a move
+
+with client.batch() as batch:
+    changed = batch.mail.email.set(update={email_id: patch}, destroy=[spam_id])
+
+if changed.result.has_errors:
+    print(changed.result.update_errors, changed.result.destroy_errors)
+```
+
+`destroy` deletes permanently; moving to the `trash` mailbox is the gentle
+option. A `/set` can partly succeed, so per-object failures come back as
+values, not exceptions.
+
+### Send a message
+
+Sending takes two objects in one request: the `Email` (the draft) and the
+`EmailSubmission` (the instruction to send it).
+
+```python
+from jmap import CreationRef
+
+with client.batch() as batch:
+    mailboxes = batch.mail.mailbox.get(ids=None)
+    identities = batch.submission.identity.get(ids=None)
+
+drafts = next(m for m in mailboxes.result.items if m.role == "drafts")
+identity = identities.result.items[0]  # who you may send as
+
+with client.batch() as batch:
+    batch.mail.email.set(
+        create={
+            "draft": {
+                "mailboxIds": {drafts.id: True},
+                "keywords": {"$draft": True},
+                "from": [{"email": identity.email, "name": identity.name}],
+                "to": [{"email": "bob@example.com"}],
+                "subject": "Lunch?",
+                "textBody": [{"partId": "body", "type": "text/plain"}],
+                "bodyValues": {"body": {"value": "One o'clock?"}},
+            }
+        }
+    )
+    sent = batch.submission.email_submission.set(
+        create={"send": {"identityId": identity.id, "emailId": CreationRef("draft")}},
+        # Applied only if sending succeeds, so the message stops being a draft.
+        onSuccessUpdateEmail={"#send": {"keywords/$draft": None}},
+    )
+
+assert not sent.result.has_errors, sent.result.creation_errors
+```
+
+`jmap.models.mail.create.validate_email_create()` checks a draft against the
+rules the server enforces before you send it. More in [Mail](docs/mail.md).
+
+### Attachments and other files
+
+Blobs - attachments, uploads, raw messages - move over plain HTTP:
+
+```python
+uploaded = client.upload(pdf_bytes, content_type="application/pdf")
+data = client.download(uploaded.blob_id, name="invoice.pdf", content_type="application/pdf")
+```
+
+To attach an upload, name its `blobId` in the draft:
+`"attachments": [{"blobId": uploaded.blob_id, "type": "application/pdf", "name": "invoice.pdf"}]`.
+The server's `maxSizeUpload` is checked before a byte is sent. Servers with the
+Blob capability (RFC 9404) also accept uploads *inside* a batch, read byte
+ranges and compute digests - see [Blobs](docs/blobs.md).
+
+### Keep a local copy in sync
+
+Every data type has a state string, and the server can list what changed since
+one. `ChangeStream` follows those changes for one type:
+
+```python
+from jmap.sync import ChangeStream, ResyncRequiredError
+
+stream = ChangeStream(client, "Mailbox")  # pass store= to persist the cursor
+
+with client.batch() as batch:
+    mailboxes = batch.mail.mailbox.get(ids=None)
+stream.seed(mailboxes.result.state)  # your copy starts here
+
+# Later - on a timer, or when push says so:
+try:
+    changes = stream.catch_up()  # follows every page to the end
+    print(changes.created, changes.updated, changes.destroyed)
+except ResyncRequiredError:
+    ...  # the server can no longer diff from your state: fetch again and re-seed
+```
+
+`changes.touched` is created plus updated - the ids worth fetching again. To
+keep a *search result* current, see `QueryView` in
+[Staying in sync](docs/sync.md).
+
+### Get notified when something changes
+
+The event source is a long-lived connection on which the server announces
+changes. It tells you *what moved*, and you fetch it as above:
+
+```python
+from jmap.push import EventSourceClient, Ping
+
+known = {account_id: {"Email": email_state, "Mailbox": mailbox_state}}
+
+for event in EventSourceClient(client, types=("Email", "Mailbox"), ping=30).listen():
+    if isinstance(event, Ping):
+        continue  # a keep-alive
+    for account, moved in event.outdated(known).items():
+        print(account, "changed:", sorted(moved))  # e.g. ['Email']: catch up on it
+```
+
+`listen()` reconnects on its own and resumes where it left off. Push
+subscriptions (the server calls your URL), Web Push encryption and WebSocket are
+covered in [Push](docs/push.md).
+
+### Use it from async code
+
+`AsyncJMAPClient` has the same API. Await `connect` and use `async with`, but
+queueing a call needs no `await`:
+
+```python
+import asyncio
+
+from jmap.aio import AsyncJMAPClient
+from jmap.auth import BasicAuth
+
+
+async def main() -> None:
+    auth = BasicAuth("alice@example.com", "app-password")
+    async with await AsyncJMAPClient.connect(url, auth=auth) as client:
+        async with client.batch() as batch:
+            mailboxes = batch.mail.mailbox.get(ids=None)
+        print([m.name for m in mailboxes.result.items])
+
+
+asyncio.run(main())
+```
+
+### Sign in with OAuth
+
+The library can find the authorization server from the JMAP server and run the
+sign-in flow itself - in the browser with PKCE, or with a device code:
+
+```python
+from jmap.auth import OAuth2Auth, OAuthClient, protected_resource_url
+
+url = "https://mail.example.com/.well-known/jmap"
+metadata = OAuthClient.discover(protected_resource_url("https://mail.example.com"), resource=url)
+
+oauth = OAuthClient(metadata, client_id="my-app")
+token = oauth.authorize(scope="urn:ietf:params:jmap:core", open_browser=True)
+# No browser on this machine? token = oauth.device_flow(scope="urn:ietf:params:jmap:core")
+
+client = JMAPClient.connect(
+    url,
+    auth=OAuth2Auth(token, refresh=lambda current: oauth.refresh(current.refresh_token or "")),
+)
+```
+
+`OAuth2Auth` renews the token shortly before it expires, and only once however
+many requests notice at the same time. Pass `store=` to save each new token
+before the old one is dropped - some servers revoke the whole grant when an old
+refresh token is used. Other credentials:
+
+```python
+from jmap.auth import BasicAuth, BearerAuth, CallableAuth
+
+BasicAuth("alice@example.com", "app-password")  # passwords and app passwords
+BearerAuth("api-token")  # a static token
+CallableAuth(lambda: build_header())  # anything else: return the whole header
+```
+
+Details, including dynamic client registration and scopes, are in
+[Authentication](docs/auth.md).
+
+### Find the server from an email address
+
+```python
+client = JMAPClient.discover("alice@example.com", auth=auth)
+```
+
+It tries the domain's `_jmap._tcp` SRV records (with `jmaplib[discovery]`) and
+then `https://<domain>/.well-known/jmap`. A server that DNS names *outside* your
+domain is tried only if you approve it with `confirm_srv_target=`, because an
+unsigned DNS answer could send your credentials anywhere. See
+[Getting started](docs/getting-started.md).
+
+### Contacts, calendars and more
+
+The same patterns work for every data type:
+
+```python
+with client.batch() as batch:
+    books = batch.contacts.address_book.get(ids=None)
+    cards = batch.contacts.contact_card.query(filter={"text": "Alice"})
+    quotas = batch.quota.quota.get(ids=None)
+```
+
+| For | Namespace | Notes |
+|---|---|---|
+| Contacts | `batch.contacts` | JSContact cards (RFC 9610). Older Fastmail and Cyrus APIs are `batch.fastmail_contacts` and `batch.cyrus_contacts`. |
+| Calendars | `batch.calendars` | Experimental: connect with `experimental=True`. |
+| Files | `batch.files` | Experimental: connect with `experimental=True`. |
+| Quotas | `batch.quota` | Read-only; `quota.remaining` is the headroom left. |
+| Mail filters | `batch.sieve` | Upload, validate and activate Sieve scripts. |
+| Sharing | `batch.principals` | Plus `jmap.sharing` to build share patches safely. |
+| Read receipts | `batch.mdn` | Send and parse MDNs (RFC 9007). |
+| Out-of-office | `batch.vacation` | The vacation response. |
+
+See [Other capabilities](docs/extensions.md) for each one's gotchas.
+
+## Handling errors
+
+Every error the library raises for the server, the network or bad data derives
+from `jmap.JMAPError`. What matters is *how much* failed:
+
+| Level | Raised as | What still worked |
+|---|---|---|
+| Transport | `TransportError`, or `AuthenticationError` for rejected credentials | Nothing - no JMAP response arrived |
+| Request | `RequestError` (an RFC 7807 problem) | Nothing - the server ran no method |
+| Method | `MethodError`, when you read that call's `.result` | Every other call in the batch |
+| Object | `SetError` values in a `/set` result - never raised | Every other object in the same `/set` |
+
+```python
+from jmap import MethodError, RequestError, TransportError
+
+try:
+    with client.batch() as batch:
+        mailboxes = batch.mail.mailbox.get(ids=None)
+        changes = batch.mail.email.changes(since_state=saved_state)
+except (TransportError, RequestError):
+    ...  # nothing ran; try again later
+
+print(len(mailboxes.result.items))  # unaffected by the other call
+try:
+    changes.result
+except MethodError as error:
+    print(error.type)  # for example "cannotCalculateChanges"
+```
+
+Many mistakes are caught before anything is sent:
 
 | Situation | Error |
 |---|---|
-| Builder argument of the wrong type or range - `ids="m1"`, `limit=-5` | `pydantic.ValidationError` |
-| Method no advertised capability provides | `UnsupportedMethodError` |
-| Mutation aimed at a read-only account | `ReadOnlyAccountError` |
-| No `accountId`, and no single account to resolve one | `NoAccountError` |
-| Back-reference nested inside a `create` object | `NestedResultRefError` |
-| Requesting a property the server never returns | `CapabilityFieldError` |
-| `/set` larger than `maxObjectsInSet` | `CapabilityFieldError` |
-| Reference chain that cannot fit `maxCallsInRequest` | `BatchTooLargeError` |
+| An argument of the wrong type or range - `ids="m1"`, `limit=-5` | `pydantic.ValidationError` |
+| A method no advertised capability provides | `UnsupportedMethodError` |
+| A change aimed at a read-only account | `ReadOnlyAccountError` |
+| No `accountId`, and no single account to use | `NoAccountError` |
+| A back-reference nested inside an object being created | `NestedResultRefError` |
+| A property the server never returns | `CapabilityFieldError` |
+| A `/set` larger than the server's `maxObjectsInSet` | `CapabilityFieldError` |
+| A chain of references too long for one request | `BatchTooLargeError` |
 
-An oversized `/set` raises rather than being split, because splitting it would
-break the single `ifInState` that makes it atomic.
+**Retries are automatic, but only when safe.** JMAP has no idempotency key, so
+re-sending a `/set` that timed out could create a second copy. The library
+retries only when the request provably never ran - a failed connection, a 429,
+a 503 - or when it cannot have changed anything. A batch that writes is retried
+after a timeout only if every write carries `if_in_state`, which makes a repeat
+fail with `stateMismatch` instead of applying twice.
 
-## Testing against the library
+More in [Errors](docs/errors.md).
 
-The fake server ships with the package, so downstream tests need no network:
+## Configuration
 
 ```python
-from jmap.testing import FakeJMAPServer, ServerQuirks
+from jmap.core.retry import RetryPolicy
 
-server = FakeJMAPServer(quirks=ServerQuirks(unknown_using_is_not_request=True))
-server.respond("Email/get", {"list": [{"id": "m1"}], "state": "s"})
-client = JMAPClient.connect(url, auth=auth, http=httpx.Client(**server.client_kwargs()))
+client = JMAPClient.connect(
+    url,
+    auth=auth,
+    account_id="u1234",  # use one account for everything
+    retry_policy=RetryPolicy(max_attempts=5, initial_backoff=1.0),
+    timeout=60.0,  # seconds
+    experimental=True,  # opt into draft specifications (calendars, files)
+)
 ```
 
-It resolves back-references with the library's *own* pointer evaluator, so the
-test exercises what the client will really do, and `ServerQuirks` reproduces real
-deviations — Stalwart answering an unknown `using` URN with a batch-destroying
-`notRequest`, capabilities appearing only in `accountCapabilities`.
+| Option | Default | |
+|---|---|---|
+| `auth` | required | Any `httpx.Auth`; see [Authentication](docs/auth.md). |
+| `account_id` | per capability | Normally each call uses the server's primary account for its capability, which is right when mail, contacts and calendars live in different accounts. |
+| `retry_policy` | 3 attempts | Attempts and backoff. Values are checked when the policy is made. |
+| `timeout` | 30 s | Ignored when you pass your own `http`. |
+| `http` | a new client | Your own `httpx.Client` - for proxies, custom TLS or a shared pool. |
+| `experimental` | `False` | Enable capabilities that track Internet-Drafts. |
+| `registry` | all built in | Your own capability registry, to add or remove support. |
 
-## Retry safety
+## Testing your code
 
-JMAP has no idempotency key, so "retry on failure" is not a policy — it is a way
-to create duplicate drafts and double-send mail. A POST carrying `Email/set` that
-timed out may have fully applied, and the client cannot tell.
+`FakeJMAPServer` is an in-process JMAP server - no network, no container. It
+answers the session request, resolves back-references like a real server, and
+returns whatever you tell it to:
 
-So failures are classified by whether the request *provably never reached
-application*:
+```python
+import httpx
 
-| Situation | Verdict |
+from jmap.auth import BasicAuth
+from jmap.client import JMAPClient
+from jmap.testing import FakeJMAPServer
+
+
+def test_unread_count():
+    server = FakeJMAPServer(
+        capabilities={"urn:ietf:params:jmap:core": {}, "urn:ietf:params:jmap:mail": {}},
+        primary_accounts={"urn:ietf:params:jmap:core": "a", "urn:ietf:params:jmap:mail": "a"},
+    )
+    server.respond(
+        "Mailbox/get",
+        {
+            "accountId": "a",
+            "state": "s1",
+            "list": [{"id": "m1", "name": "Inbox", "unreadEmails": 3}],
+        },
+    )
+
+    with JMAPClient.connect(
+        "https://jmap.example.com/.well-known/jmap",
+        auth=BasicAuth("alice@example.com", "pw"),
+        http=httpx.Client(**server.client_kwargs()),
+    ) as client:
+        with client.batch() as batch:
+            mailboxes = batch.mail.mailbox.get(ids=None)
+
+    assert mailboxes.result.items[0].unread_emails == 3
+```
+
+Leave capabilities out to test how your code copes without them, and use
+`ServerQuirks` to reproduce known server behaviours. See
+[Testing your own code](docs/testing.md).
+
+To see what a real server supports, method by method:
+
+```console
+python -m jmap.testing.conformance https://mail.example.com/.well-known/jmap \
+    --user alice@example.com --markdown
+```
+
+It asks for the password, or reads `$JMAP_PASSWORD`.
+
+## Supported specifications
+
+| Specification | Covers | Where |
+|---|---|---|
+| RFC 8620 | JMAP core: sessions, requests, blobs, push | `batch.core`, `jmap.push` |
+| RFC 8621 | Mail, sending, vacation responses | `batch.mail`, `batch.submission`, `batch.vacation` |
+| RFC 8887 | JMAP over WebSocket | `jmap.push.WebSocketProtocol` |
+| RFC 9007 | Read receipts (MDN) | `batch.mdn` |
+| RFC 9219 | S/MIME signature verification | properties on `Email` |
+| RFC 9404 | Blob management | `batch.blob` |
+| RFC 9425 | Quotas | `batch.quota` |
+| RFC 9610 | Contacts (JSContact) | `batch.contacts` |
+| RFC 9661 | Sieve scripts | `batch.sieve` |
+| RFC 9670 | Principals and sharing | `batch.principals`, `jmap.sharing` |
+| RFC 9749 | Web Push VAPID keys | `jmap.push` |
+| Fastmail and Cyrus contacts | The pre-RFC contacts APIs | `batch.fastmail_contacts`, `batch.cyrus_contacts` |
+| draft-ietf-jmap-calendars-27 | Calendars *(experimental)* | `batch.calendars` |
+| draft-ietf-jmap-filenode-14 | File storage *(experimental)* | `batch.files` |
+
+Signing in follows the OAuth 2.0 family: RFC 6749 and 6750, PKCE (RFC 7636),
+native apps (RFC 8252), server metadata (RFC 8414), the device flow (RFC 8628),
+dynamic registration (RFC 7591) and protected-resource metadata (RFC 9728).
+`jmap.SPEC_REVISIONS` lists exactly which revision each capability implements.
+
+## How it works
+
+A few principles explain most of the library's behaviour:
+
+- **The server's session decides.** On connect the client reads the session and
+  works out, account by account, what the server supports - down to single
+  methods, because advertising a capability does not mean implementing all of
+  it. Namespaces, methods and checks all follow from that.
+- **The `using` list is derived for you.** Each request must declare the
+  capabilities it needs. The library works it out from your calls, arguments and
+  properties, and never lists one the server did not advertise: some servers
+  reject a whole request over a single unknown capability.
+- **Limits are enforced before sending.** A batch longer than
+  `maxCallsInRequest` is split across requests, carrying creation references
+  across. A `/get` naming more ids than `maxObjectsInGet` is split and merged
+  back, and refused if the data changed in between. A `/set` too large is
+  refused rather than split, because splitting it would lose its all-or-nothing
+  guarantee.
+- **One protocol core, two clients.** Everything that can be decided without
+  I/O - requests, responses, retries, references, sync - lives in a kernel that
+  both the sync and async clients call, so they cannot disagree.
+- **Nothing the server sends is lost.** Models keep unknown properties, types
+  without a model come back as a read-only `JMAPObject`, and JSON is parsed
+  strictly to I-JSON.
+
+The guides explain the reasons behind each of these, with the RFC sections
+involved.
+
+## Documentation
+
+Task-oriented guides live in [`docs/`](docs/index.md):
+
+| Guide | |
 |---|---|
-| Connection never established | safe — nothing was sent |
-| 429, 503, request-level `…:error:limit` | safe — rejected whole, no method ran |
-| Timeout after the bytes went out | only if the batch cannot change state… |
-| 5xx | …or every mutation carried `ifInState` |
-| 4xx | never — understood and refused |
+| [Getting started](docs/getting-started.md) | Install, connect, first request, async |
+| [Capabilities](docs/capabilities.md) | What the server advertises decides what you can call |
+| [Batching and references](docs/batching.md) | One request, many calls, chaining results |
+| [Mail](docs/mail.md) | Mailboxes, searching, reading, composing, sending |
+| [Blobs](docs/blobs.md) | Binary data, digests, lookup, copying |
+| [Staying in sync](docs/sync.md) | Change streams, query views, state cursors |
+| [Push](docs/push.md) | Event source, subscriptions, VAPID, WebSocket |
+| [Authentication](docs/auth.md) | Presenting credentials, and acquiring them |
+| [Errors](docs/errors.md) | Four failure levels, and which are safe to retry |
+| [Other capabilities](docs/extensions.md) | Quota, Sieve, contacts, calendars, files, sharing, MDN, S/MIME |
+| [Testing your own code](docs/testing.md) | The fake server that ships with the package |
 
-`ifInState` is what makes the middle rows safe: RFC 8620 §5.3 makes a guarded
-`/set` fail with `stateMismatch` if anything changed, so a retry of an
-already-applied request is rejected rather than duplicated.
+## Status and versioning
 
-## Authentication
+**1.1.0** - stable, and following [Semantic Versioning](https://semver.org). See
+the [changelog](CHANGELOG.md) for what changed.
 
-RFC 8620 deliberately defines no auth scheme — the Session resource is simply an
-authenticated endpoint — so the library presents credentials and reads the
-`WWW-Authenticate` challenge that comes back.
+- **Experimental capabilities are outside the SemVer promise.** Calendars and
+  files track Internet-Drafts whose wire names can still change, so they are off
+  unless you pass `experimental=True`.
+- **Contact and calendar bodies are carried, not modelled.** A `ContactCard`
+  (JSContact) or `CalendarEvent` (JSCalendar) round-trips losslessly and each
+  field is readable by its wire name, for example
+  `event.jscalendar("recurrenceRule")`. The JMAP layer around them is fully
+  modelled.
+- **WebSocket is a protocol layer.** `WebSocketProtocol` frames requests and
+  matches responses and notifications; the socket itself is yours.
 
-```python
-from jmap.auth import BasicAuth, BearerAuth, CallableAuth, OAuth2Auth, OAuth2Token
-
-BasicAuth("alice@example.com", "app-password")  # self-hosted, Fastmail app passwords
-BearerAuth("api-token")  # API tokens, static access tokens
-CallableAuth(lambda: sign_request())  # escape hatch for anything else
-OAuth2Auth(OAuth2Token("access", refresh_token="r"), refresh=renew, store=my_store)
-```
-
-Two behaviours here are correctness rather than preference:
-
-- **Basic and Bearer never retry a 401.** The credential would be byte-identical
-  the second time, so a retry cannot succeed — it can only look like brute force,
-  and Stalwart fail2bans repeated failures.
-- **Refresh is single-flight and persists before it discards.** Fastmail rotates
-  the refresh token on every use and revokes the whole grant if an old one is
-  replayed, so concurrent 401s must produce exactly one refresh, and the new
-  token must reach your `TokenStore` before the old one is dropped.
-
-Getting a token in the first place - PKCE in the browser, the device flow, and
-RFC 9728/8414 discovery of where to ask - is [Signing in](#signing-in) above, and
-[docs/auth.md](docs/auth.md) in full.
-
-Specs tracked: RFC 8620, 8621, 8887, 9007, 9219, 9404, 9425, 9553, 9555, 9610,
-9661, 9670, 9749, plus `draft-ietf-jmap-calendars-27` and
-`draft-ietf-jmap-filenode-14` (both shipped behind an experimental flag and
-excluded from the SemVer promise; see `jmap.SPEC_REVISIONS`).
-
-## Development
+## Contributing
 
 ```console
 uv sync --all-extras
-uv run pytest                    # integration tests are deselected by default
+uv run pytest
 ```
 
-The full gate, which is what CI runs:
-
-```console
-uv run ruff check src/ tests/
-uv run ruff format --check .
-uv run mypy --strict src/ && uv run mypy tests/
-uv run pyright src/
-uv run pyright --verifytypes jmap --ignoreexternal   # must be 100%
-uv run lint-imports                                   # layering contracts
-uv run pytest --cov                                   # must be 100%
-```
-
-### Running against a live server
-
-Integration tests are deselected by default; `-m integration` selects them. They
-need a server and two accounts — the second one exists so the delivery test
-(alice sends, bob receives) runs rather than skips, and that assertion is the one
-thing the fake server cannot make.
-
-Against a server you already have, no bootstrap is involved:
-
-```console
-JMAP_TEST_URL=https://mail.example.com/.well-known/jmap \
-JMAP_TEST_USER=alice@example.com JMAP_TEST_PASS=... \
-JMAP_TEST_USER2=bob@example.com  JMAP_TEST_PASS2=... \
-  uv run pytest -m integration
-```
-
-Point `JMAP_TEST_URL` at `/.well-known/jmap` rather than the API URL: that way
-the redirect and the survival of the `Authorization` header across it are
-exercised for real. Everything the server does not implement skips with a reason
-naming the method, so a partial server still produces a useful run.
-
-**A TLS error from an `http://` URL is not a contradiction.** Only the session
-document is fetched from the URL you supply; every call after that goes to the
-`apiUrl` the *server* advertises, and a server that does not know its own public
-URL will advertise `https://<hostname>` regardless of how you reached it. For
-Stalwart that means `STALWART_PUBLIC_URL` is unset. Two env vars handle a
-certificate no public CA vouches for, which is the normal case for a self-hosted
-server:
-
-| | |
-|---|---|
-| `JMAP_TEST_CA=/path/to/cert.pem` | Trust this certificate. Verification still happens, so a wrong host or an expired certificate still fails. Prefer this. |
-| `JMAP_TEST_INSECURE=1` | Verify nothing. Also disables hostname checking, which is what catches a server advertising `https://localhost` when it means something else. |
-
-To raise a throwaway Stalwart instead, the recipe CI uses:
-
-```console
-docker run -d --name jmaplib-test -p 18080:8080 \
-  -e STALWART_PUBLIC_URL=http://localhost:18080 \
-  -e STALWART_RECOVERY_ADMIN="admin:$STALWART_RECOVERY_ADMIN_PASS" \
-  -v jmaplib-test-data:/var/lib/stalwart \
-  stalwartlabs/stalwart:v0.16.17
-
-STALWART_URL=http://localhost:18080 STALWART_CONTAINER=jmaplib-test \
-STALWART_RECOVERY_ADMIN_PASS=... ./scripts/stalwart-bootstrap.sh
-```
-
-The script prints alice's and bob's generated passwords at the end. Two details
-are load-bearing: **no config file is mounted**, because bootstrap mode triggers
-only when the server finds none, and the volume is a **named volume**, because the
-image runs as UID/GID 2000 and cannot write a bind mount. `STALWART_PUBLIC_URL`
-must match the published port or the session advertises URLs nothing can reach.
-
-> The script completes setup and restarts the container it is given. Point it only
-> at a throwaway instance — never at a server holding anything you want to keep.
-> Pick a host port nothing else uses, too: Stalwart defaults `socket_reuse_port`
-> to true, so a second server binds an occupied port *silently* and the kernel
-> then splits requests between the two.
-
-`python -m jmap.testing.conformance <url> --user … --markdown` renders what any
-server actually supports, method by method.
-
-**Coverage is gated at 100%**, not aspirational. The kernel is pure functions
-over plain data, so anything uncovered is either dead code or a branch nobody
-thought through — both worth failing the build over. `lint-imports` enforces the
-layering: `core` may not import httpx, asyncio or anyio, and `capabilities` may
-not import the client.
-
-### Benchmarks
-
-```console
-uv run python -m benchmarks.run                        # all cases
-uv run python -m benchmarks.run --profile "e2e query"  # cProfile one of them
-```
-
-Payloads are shaped like what a real server returns — a Stalwart-shaped session,
-an `Email/get` of a hundred messages with the full RFC 8621 §4.1 property set —
-because a benchmark over `{"id": …, "subject": …}` measures nothing that happens
-in production. `--save` records a baseline and `--compare` diffs against it,
-exiting non-zero past a 5% regression. See [benchmarks/README.md](benchmarks/README.md).
-
-Two things worth knowing before reading a number. The statistic is the **minimum**
-of N repeats, not the mean: timing noise is one-sided, so the minimum is both the
-truest estimate and the stable one. And the `json.loads (floor)` / `json.dumps
-(floor)` cases are the stdlib doing the same work without I-JSON enforcement —
-the gap to them *is* the cost of conformance, currently about 1.8× on parse.
-
-Performance claims in this project are expected to come with a measurement. The
-one time that rule was skipped, `dumps` got 8% slower while every test still
-passed, because `True` fell through the fast scan's type ladder and sent every
-payload down the precise-but-slow path. Tests cannot see that — both paths give
-the same answer — so `TestTheFastPathIsActuallyTaken` asserts the path directly.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the full check suite CI runs, how to run
+the integration tests against a live server, and the benchmarks.
 
 ## License
 
-MIT
+MIT - see [LICENSE](LICENSE).
