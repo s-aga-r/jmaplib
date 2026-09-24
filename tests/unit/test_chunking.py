@@ -93,6 +93,17 @@ class TestSplitting:
         assert isinstance(handle, ChunkedHandle)
         assert [len(chunk.call.arguments["ids"]) for chunk in handle.chunks] == [100, 100]
 
+    def test_a_repeated_id_is_asked_for_once(self):
+        # RFC 8620 §5.1 returns an id once however often it is named. Split
+        # across two chunks, a repeat came back twice - so the answer depended
+        # on maxObjectsInGet.
+        batch = Batch(capabilities(max_objects_in_get=2))
+        handle = batch.add("Email/get", {"ids": ["m1", "m2", "m1"]})
+        assert not isinstance(handle, ChunkedHandle)
+        handle = batch.add("Email/get", {"ids": ["m1", "m2", "m3", "m1"]})
+        assert isinstance(handle, ChunkedHandle)
+        assert [chunk.call.arguments["ids"] for chunk in handle.chunks] == [["m1", "m2"], ["m3"]]
+
     def test_ids_given_as_a_tuple_are_split_too(self):
         # `ids` accepts any sequence; a tuple went out whole, 250 ids to a
         # server that takes 100.

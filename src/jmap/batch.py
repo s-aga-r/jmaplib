@@ -241,6 +241,11 @@ class Batch:
         limit = self._capabilities.limits.max_objects_in_get
         if len(ids) <= limit:
             return None
+        # Each id at most once: RFC 8620 §5.1 answers a repeat once, but chunks
+        # are separate calls, and a repeat in two of them came back twice.
+        ids = list(dict.fromkeys(ids))
+        if len(ids) <= limit:
+            return None
         return chunk_get_call(call, ids, limit)
 
     # -- local gates -------------------------------------------------------- #
