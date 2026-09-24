@@ -630,6 +630,20 @@ class TestReconnectLoop:
         assert second.states_for("a") == {"Email": "e2"}
         assert fake.event_source_requests[1]["last-event-id"] == "1"
 
+    @pytest.mark.asyncio
+    async def test_closing_the_async_loop_closes_its_connection(self):
+        # close() on the sync loop closes the connection under it; aclose() on
+        # the async one left it open until the event loop got round to it, and
+        # with it the cursor the connection had moved.
+        fake = server()
+        fake.push("a", {"Email": "e1"}, event_id="7")
+        async with await TestAsyncEventSource().aconnect(fake) as client:
+            source = AsyncEventSourceClient(client)
+            stream = source.listen()
+            await anext(stream)
+            await stream.aclose()
+            assert source.last_event_id == "7"
+
 
 class TestListenReconnects:
     def test_a_mid_stream_drop_redials_instead_of_escaping(self, monkeypatch):

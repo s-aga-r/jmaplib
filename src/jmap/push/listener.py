@@ -26,6 +26,7 @@ so inheriting one caps how long a *healthy* stream may wait. See
 from __future__ import annotations
 
 import time
+from contextlib import aclosing
 from typing import TYPE_CHECKING
 
 import anyio
@@ -432,10 +433,14 @@ class AsyncEventSourceClient:
             opened = time.monotonic()
             delivered = False
             try:
-                async for event in self.events():
-                    delivered = True
-                    self._listener.note_delivery()
-                    yield event
+                # Closed explicitly, as the sync twin's is by close(): left to
+                # the event loop's finaliser, the connection outlived aclose(),
+                # and the cursor it had moved was not carried over until then.
+                async with aclosing(self.events()) as events:
+                    async for event in events:
+                        delivered = True
+                        self._listener.note_delivery()
+                        yield event
             except TransportError:
                 self._listener.note_failure()
             else:
