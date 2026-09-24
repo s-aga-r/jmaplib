@@ -151,8 +151,10 @@ from jmap.push import application_server_key
 key = application_server_key(client.session)
 ```
 
-Needs `jmaplib[push]`. Check `vapid_key_rotated` before trusting a cached key -
-a rotation means re-subscribing.
+Reading the key needs no extra. Decrypting the payloads (RFC 8291) is your push
+endpoint's job rather than this library's; `jmaplib[push]` installs
+`cryptography`, which that needs. Check `vapid_key_rotated` before trusting a
+cached key - a rotation means re-subscribing.
 
 ## WebSocket
 
@@ -166,9 +168,15 @@ capability = WebSocketCapability.of(client.session.capability_value(WEBSOCKET_UR
 print(capability.url, capability.supports_push, capability.is_secure)
 ```
 
-Needs `jmaplib[ws]`. The `websockets` package is asyncio-only, so this surface
-is asyncio-only too - the rest of the library runs on anyio and works under
-trio.
+The library's part is the protocol rather than the socket.
+`jmap.push.WebSocketProtocol` frames requests and the push enable and disable
+messages, and classifies whatever comes back: a response, a request-level error
+or a state change. Responses may arrive out of order (RFC 8887 §4.3.2), so it
+matches them to requests by id rather than by arrival, and it keeps the latest
+`pushState`, which lets a reconnect catch up in one exchange instead of a
+`/changes` call per type. Carry the frames over any WebSocket client that
+negotiates the `jmap` subprotocol (`jmap.push.SUBPROTOCOL`); `jmaplib[ws]`
+installs `httpx-ws` for that.
 
 `is_secure` is worth checking before you send credentials over it. RFC 8887 §4.2
 requires TLS; a `ws://` URL from an `https://` session is a downgrade and worth

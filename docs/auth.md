@@ -95,8 +95,8 @@ decision stays testable.
 
 ## Acquiring a credential
 
-`jmaplib[oauth]`, stdlib only. The chain follows the specs in order, so most of
-it is automatic:
+No extra is needed: the flows use only the standard library and httpx. The
+chain follows the specs in order, so most of it is automatic:
 
 ```python
 from jmap.auth import OAuthClient, protected_resource_url
