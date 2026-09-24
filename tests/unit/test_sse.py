@@ -239,6 +239,21 @@ class TestByteDecoding:
         [event] = parser.feed_bytes("﻿event: state\ndata: {}\n\n".encode())
         assert event.type == "state"
 
+    @pytest.mark.parametrize("split", [1, 2])
+    def test_a_bom_split_across_reads_is_still_stripped(self, split):
+        # Part of a character decodes to "", and that empty chunk spent the
+        # one-time BOM check: the mark joined the first field name, and the
+        # first state event arrived typed "message".
+        parser = SSEParser()
+        raw = "﻿event: state\ndata: {}\n\n".encode()
+        events = [event for part in (raw[:split], raw[split:]) for event in parser.feed_bytes(part)]
+        assert [event.type for event in events] == ["state"]
+
+    def test_an_empty_chunk_does_not_split_a_crlf(self):
+        # It also cleared the CR held over from the last chunk, so the LF after
+        # it ended a second line - a blank one, which dispatched early.
+        assert [event.data for event in events("data: a\r", "", "\ndata: b\n\n")] == ["a\nb"]
+
 
 class TestHostileStreams:
     @staticmethod

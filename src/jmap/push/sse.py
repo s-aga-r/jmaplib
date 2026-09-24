@@ -128,6 +128,11 @@ class SSEParser:
 
     def feed(self, chunk: str) -> Iterator[ServerSentEvent]:
         """Consume a chunk of the stream, yielding whatever events complete."""
+        if not chunk:
+            # Nothing arrived - which is what the decoder returns for part of a
+            # character. Letting it past spent the one-time BOM check and the
+            # held-over CR on a chunk with nothing to check them against.
+            return
         # A CR held over from the previous chunk: if this one starts with LF the
         # two are a single terminator, otherwise the CR already ended its line.
         if self._pending_cr:
