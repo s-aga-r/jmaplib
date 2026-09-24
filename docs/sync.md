@@ -126,13 +126,16 @@ view.apply(delta.result)
 print(view.known_ids)
 ```
 
-Three constraints the type enforces for you, because getting any of them wrong
-corrupts the view silently:
+Three constraints, because getting any of them wrong corrupts the view silently.
+The type enforces the last two; the first is yours:
 
 - **The filter and sort must be identical** to the ones the state came from.
-  `QuerySpec` hashes them into a key, and applying a delta from a different
-  query raises `StaleQueryViewError` rather than producing a plausible, wrong
-  list.
+  `QuerySpec` hashes them into a key, so each query keeps its own view and
+  cursor - but a `/queryChanges` response does not repeat them, and a server may
+  share one `queryState` between queries, so the view cannot tell a delta for
+  another query from its own. Ask with the filter and sort the spec was built
+  from. What it does catch is a delta against another *state*: that raises
+  `StaleQueryViewError`.
 - **Not every query supports this.** `can_calculate_changes` on the original
   response says whether the server will answer at all; a query that does not
   raises `UncacheableQueryError`.
