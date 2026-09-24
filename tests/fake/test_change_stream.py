@@ -54,6 +54,22 @@ def page(**kwargs: Any) -> dict[str, Any]:
     return base
 
 
+class TestNamespaces:
+    def test_two_servers_sharing_a_store_keep_their_own_cursors(self):
+        # Their account ids can match - "a" on both - and a cursor from one
+        # sent to the other either fails or, worse, names a state it also has.
+        store = InMemoryStateStore()
+        with connect(server()) as first, connect(server()) as second:
+            work = ChangeStream(first, "Email", store=store, namespace="work")
+            home = ChangeStream(second, "Email", store=store, namespace="home")
+            work.seed("A-900")
+            assert home.state is None
+            assert work.state == "A-900"
+            home.seed("B-7")
+            work.reset()
+            assert home.state == "B-7"
+
+
 class TestFollowingPages:
     def test_a_single_page(self):
         fake = server()

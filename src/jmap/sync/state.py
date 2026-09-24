@@ -13,6 +13,12 @@ The keys are structured rather than opaque so an application can reason about
 them: ``<accountId>/<TypeName>`` for a type's state,
 ``<accountId>/<TypeName>/query/<hash>`` for a query's. That matters when an
 account is removed and its rows should go with it.
+
+An account id is unique only on its own server, so a store shared between
+servers needs a namespace in front: ``<namespace>/<accountId>/<TypeName>``.
+Without one, two servers that both call an account ``a`` file their cursors
+under one key, and each resumes from the other's state - which fails, or, where
+both servers mint states the same way, quietly skips changes.
 """
 
 from __future__ import annotations
@@ -28,12 +34,25 @@ if TYPE_CHECKING:
 SEPARATOR = "/"
 
 
-def type_key(account_id: str, type_name: str) -> str:
-    """The key under which a data type's ``/changes`` state is remembered."""
-    return f"{account_id}{SEPARATOR}{type_name}"
+def _prefix(namespace: str) -> str:
+    if SEPARATOR in namespace:
+        raise ValueError(
+            f"a namespace may not contain {SEPARATOR!r}, which separates the parts of "
+            f"a key: {namespace!r}"
+        )
+    return f"{namespace}{SEPARATOR}" if namespace else ""
 
 
-def query_key(spec: QuerySpec) -> str:
+def type_key(account_id: str, type_name: str, *, namespace: str = "") -> str:
+    """The key under which a data type's ``/changes`` state is remembered.
+
+    ``namespace`` goes in front, for a store shared between servers - see the
+    module docstring.
+    """
+    return f"{_prefix(namespace)}{account_id}{SEPARATOR}{type_name}"
+
+
+def query_key(spec: QuerySpec, *, namespace: str = "") -> str:
     """The key for one query's ``queryState``.
 
     Includes a digest of the filter and sort, because a different filter is a
@@ -45,7 +64,10 @@ def query_key(spec: QuerySpec) -> str:
     """
     material = "\x1f".join((spec.filter_key, spec.sort_key, "1" if spec.collapse_threads else "0"))
     digest = hashlib.sha256(material.encode()).hexdigest()[:16]
-    return f"{spec.account_id}{SEPARATOR}{spec.type_name}{SEPARATOR}query{SEPARATOR}{digest}"
+    return (
+        f"{_prefix(namespace)}{spec.account_id}{SEPARATOR}{spec.type_name}"
+        f"{SEPARATOR}query{SEPARATOR}{digest}"
+    )
 
 
 @runtime_checkable

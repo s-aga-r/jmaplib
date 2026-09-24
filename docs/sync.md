@@ -100,6 +100,16 @@ Implement `get(key)`, `set(key, state)` and `delete(key)` against your own
 database to survive restarts. The library holds no cache of its own and never
 writes to disk; what you keep is your decision.
 
+Keys are `<accountId>/<TypeName>`, and an account id is unique only on its own
+server. If one store serves several servers, give each a `namespace` - any label
+without a `/` - or two accounts both called `a` share a cursor, and each server is
+handed the other's state:
+
+```python
+work = ChangeStream(work_client, "Email", store=store, namespace="work")
+home = ChangeStream(home_client, "Email", store=store, namespace="home")
+```
+
 ## Keeping a query current
 
 Re-running `Email/query` after every change is wasteful and, on a large mailbox,

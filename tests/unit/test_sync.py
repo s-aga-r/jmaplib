@@ -383,6 +383,20 @@ class TestStateKeys:
         key = query_key(QuerySpec.build("Email", "acct1"))
         assert key.startswith("acct1/Email/query/")
 
+    def test_a_namespace_prefixes_every_key(self):
+        # Account ids are unique per server only, so one store shared by two
+        # servers filed both "a"s under one key - and fed one's cursor to the
+        # other.
+        assert type_key("a", "Email", namespace="work") == "work/a/Email"
+        assert query_key(QuerySpec.build("Email", "a"), namespace="work").startswith(
+            "work/a/Email/query/"
+        )
+        assert type_key("a", "Email", namespace="") == "a/Email"
+
+    def test_a_namespace_may_not_contain_the_separator(self):
+        with pytest.raises(ValueError, match="namespace"):
+            type_key("a", "Email", namespace="mail.example.com/alice")
+
 
 class TestChangeSet:
     def test_an_id_reported_on_two_pages_is_listed_once(self):

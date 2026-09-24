@@ -166,14 +166,17 @@ class ChangeStream:
         *,
         account_id: Id | None = None,
         store: StateStore | None = None,
+        namespace: str = "",
     ) -> None:
+        """``namespace`` prefixes the cursor's key in ``store``; give each server
+        its own when they share one store (see :mod:`jmap.sync.state`)."""
         from jmap.sync.state import InMemoryStateStore  # local: avoids an import cycle
 
         self._client = client
         self._type_name = type_name
         self._account_id: Id | None = account_id or client.default_account
         self._store = store if store is not None else InMemoryStateStore()
-        self._key = type_key(str(self._account_id or ""), type_name)
+        self._key = type_key(str(self._account_id or ""), type_name, namespace=namespace)
 
     @property
     def state(self) -> str | None:
