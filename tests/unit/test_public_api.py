@@ -13,7 +13,10 @@ avoid, so the assertions are subset checks in that direction.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import pkgutil
+import tomllib
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -287,3 +290,21 @@ class TestDataclassDefaults:
                     f"{type(field.default).__name__}; Python 3.11 refuses to build the "
                     f"class. Use `field(default_factory=...)`."
                 )
+
+
+class TestImportRules:
+    """The import-linter contracts in pyproject.toml, which CI enforces."""
+
+    def test_every_module_a_rule_names_exists(self):
+        # A rule about a module that does not exist holds vacuously: the one
+        # keeping capabilities from importing the client named jmap.transport,
+        # and passed while guarding nothing.
+        config = tomllib.loads((Path(__file__).parents[2] / "pyproject.toml").read_text())
+        named: list[str] = []
+        for contract in config["tool"]["importlinter"]["contracts"]:
+            named += contract.get("source_modules", [])
+            named += contract.get("forbidden_modules", [])
+            for layer in contract.get("layers", []):
+                named += [part.strip().strip("()") for part in layer.split("|")]
+        assert named
+        assert [name for name in named if importlib.util.find_spec(name) is None] == []

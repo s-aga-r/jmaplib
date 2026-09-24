@@ -169,16 +169,16 @@ forbidden_modules = ["httpx", "asyncio", "anyio", "socket", "ssl"]
 name = "capabilities do not import the client"
 type = "forbidden"
 source_modules = ["jmap.capabilities"]
-forbidden_modules = ["jmap.transport"]
+forbidden_modules = ["jmap.client", "jmap.aio"]
 
 [[tool.importlinter.contracts]]
 name = "layers"
 type = "layers"
-# Parenthesised layers are optional: client.py and aio.py arrive in M2, and the
-# contract must not fail the build before they exist.
+# No layer is optional (parenthesised): each exists, and a layer that vanished
+# would otherwise satisfy the contract by default.
 layers = [
-    "(jmap.client) | (jmap.aio)",
-    "(jmap.api)",
+    "jmap.client | jmap.aio",
+    "jmap.api",
     "jmap.capabilities",
     "jmap.models",
     "jmap.core",
