@@ -153,8 +153,12 @@ by method:
 
 ```console
 python -m jmap.testing.conformance https://mail.example.com/.well-known/jmap \
-  --user alice@example.com --password ... --markdown
+  --user alice@example.com --markdown
 ```
+
+It asks for the password, or reads `$JMAP_PASSWORD`. `--password` works too, but
+it puts the password where every user on the machine can read it - the process
+list - and in your shell history.
 
 Useful when a call works against one server and not another - the matrix says
 which methods the server implements rather than which capabilities it claims.

@@ -387,7 +387,7 @@ implementing no `Blob/lookup` at all. So the honest answer is a matrix:
 
 ```console
 python -m jmap.testing.conformance https://example.com/.well-known/jmap \
-    --user alice@example.com --password ... --markdown
+    --user alice@example.com --markdown   # asks for the password, or reads $JMAP_PASSWORD
 ```
 
 It costs no method calls — everything comes from the Session — and it keeps three
@@ -752,8 +752,8 @@ must match the published port or the session advertises URLs nothing can reach.
 > to true, so a second server binds an occupied port *silently* and the kernel
 > then splits requests between the two.
 
-`python -m jmap.testing.conformance <url> --user … --password … --markdown`
-renders what any server actually supports, method by method.
+`python -m jmap.testing.conformance <url> --user … --markdown` renders what any
+server actually supports, method by method.
 
 **Coverage is gated at 100%**, not aspirational. The kernel is pure functions
 over plain data, so anything uncovered is either dead code or a branch nobody

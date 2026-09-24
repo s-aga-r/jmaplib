@@ -28,6 +28,8 @@ which is what ``tests/integration`` is for.
 from __future__ import annotations
 
 import argparse
+import getpass
+import os
 import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -35,7 +37,7 @@ from typing import TYPE_CHECKING
 from jmap.defaults import default_registry
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Mapping, Sequence
 
     from jmap.capabilities.registry import ActiveCapabilities, Registry
     from jmap.capabilities.spec import CapabilitySpec
@@ -191,12 +193,34 @@ def method_gaps(capabilities: ActiveCapabilities, expected: Iterable[str]) -> li
     return sorted(name for name in expected if not capabilities.supports(name))
 
 
+def _password(
+    given: str | None, *, environ: Mapping[str, str], prompt: Callable[[str], str]
+) -> str:
+    """The password to sign in with, kept off the command line if it can be.
+
+    An argument is visible to every user on the machine through the process
+    list, and stays in shell history. So ``$JMAP_PASSWORD`` comes next, and with
+    neither the user is asked. ``--password`` still works for scripts that pass
+    it; it is simply no longer needed.
+    """
+    if given is not None:
+        return given
+    from_environment = environ.get("JMAP_PASSWORD")
+    if from_environment:
+        return from_environment
+    return prompt("Password: ")
+
+
 def _main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - CLI entry
     """Print a conformance matrix for a live server."""
     parser = argparse.ArgumentParser(description="Report a JMAP server's capability surface.")
     parser.add_argument("url", help="session URL, or anything redirecting to it")
     parser.add_argument("--user", required=True)
-    parser.add_argument("--password", required=True)
+    parser.add_argument(
+        "--password",
+        help="discouraged - it shows in the process list; set JMAP_PASSWORD, or leave both "
+        "out to be asked",
+    )
     parser.add_argument("--experimental", action="store_true", help="resolve draft specs too")
     parser.add_argument("--markdown", action="store_true", help="render as Markdown")
     args = parser.parse_args(argv)
@@ -204,8 +228,9 @@ def _main(argv: Sequence[str] | None = None) -> int:  # pragma: no cover - CLI e
     from jmap.auth import BasicAuth
     from jmap.client import JMAPClient
 
+    password = _password(args.password, environ=os.environ, prompt=getpass.getpass)
     with JMAPClient.connect(
-        args.url, auth=BasicAuth(args.user, args.password), experimental=args.experimental
+        args.url, auth=BasicAuth(args.user, password), experimental=args.experimental
     ) as client:
         report = analyse(client.session, client.capabilities)
     if args.markdown:

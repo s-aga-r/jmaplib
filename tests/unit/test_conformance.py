@@ -25,6 +25,7 @@ from jmap.defaults import default_registry
 from jmap.testing.conformance import (
     CapabilityRow,
     Conformance,
+    _password,
     analyse,
     method_gaps,
 )
@@ -243,3 +244,27 @@ class TestCapabilityRow:
         assert row.reference == ""
         assert row.experimental is False
         assert row.methods == ()
+
+
+def no_prompt(_text: str) -> str:
+    raise AssertionError("prompted although the password was already given")
+
+
+class TestThePassword:
+    """--password was required, which put the password in ps output and history."""
+
+    def test_the_environment_is_read_before_anyone_is_asked(self):
+        assert _password(None, environ={"JMAP_PASSWORD": "pw"}, prompt=no_prompt) == "pw"
+
+    def test_with_neither_it_is_asked_for(self):
+        asked: list[str] = []
+
+        def prompt(text: str) -> str:
+            asked.append(text)
+            return "typed"
+
+        assert _password(None, environ={}, prompt=prompt) == "typed"
+        assert asked == ["Password: "]
+
+    def test_one_given_on_the_command_line_still_works(self):
+        assert _password("given", environ={"JMAP_PASSWORD": "env"}, prompt=no_prompt) == "given"
