@@ -193,10 +193,7 @@ def splice(
     # numbers under server control. The indices are checked first because they
     # size the result. (Out-of-spec duplicate indices land in delta order.)
     additions = sorted(
-        (
-            (_checked_position(item.index or 0, what="an added item's index"), item.id)
-            for item in added
-        ),
+        ((_checked_position(item.index, what="an added item's index"), item.id) for item in added),
         key=lambda pair: pair[0],
     )
     result: SparseIds = []

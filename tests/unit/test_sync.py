@@ -7,6 +7,7 @@ from typing import ClassVar
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from pydantic import ValidationError
 
 from jmap.models.responses import AddedItem, ChangesResponse, QueryChangesResponse, QueryResponse
 from jmap.sync import (
@@ -378,6 +379,13 @@ class TestChangeSet:
 
 
 class TestHostileQueryResponses:
+    @pytest.mark.parametrize("item", [{"id": "m1"}, {"index": 0}, {}])
+    def test_an_added_item_needs_both_its_id_and_its_index(self, item):
+        # RFC 8620 §5.6 requires both. A missing index read as 0 and a missing
+        # id as a gap, so a malformed delta rewrote the view without a word.
+        with pytest.raises(ValidationError):
+            AddedItem.model_validate(item)
+
     def test_an_absurd_position_is_refused(self):
         # position/total/index size real allocations: [None] * 2**40 from a
         # fifty-byte response is a multi-terabyte list.

@@ -148,10 +148,15 @@ class QueryResponse(JMAPModel):
 
 
 class AddedItem(JMAPModel):
-    """One insertion in a ``/queryChanges`` result, with its index."""
+    """One insertion in a ``/queryChanges`` result, with its index.
 
-    id: str | None = None
-    index: int | None = None
+    Both fields are required (RFC 8620 §5.6). Defaulted, a missing index read
+    as position 0 and a missing id as a gap, so a malformed delta rewrote a
+    cached view without complaint instead of failing to parse.
+    """
+
+    id: str
+    index: int
 
 
 class QueryChangesResponse(JMAPModel):
