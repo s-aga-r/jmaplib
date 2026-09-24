@@ -63,6 +63,12 @@ for exactly which revision of each spec this build implements.
   It now serves each connection on its own thread with a 10-second deadline, and
   takes only the redirect carrying the flow's `state`.
 
+- **The conformance command wanted the password on its command line.**
+  `--password` was required, which showed the password to every user on the
+  machine through the process list, and kept it in shell history. The command
+  now reads `$JMAP_PASSWORD`, or asks; `--password` still works for scripts that
+  pass it.
+
 ### Fixed
 
 - **A `/set` answered with `null` came back as a failure.** RFC 8620 §5.3 makes
@@ -162,6 +168,80 @@ for exactly which revision of each spec this build implements.
   the discovery order backwards; and the OAuth example passed a URL `discover`
   could never use. Each now describes the library as it is.
 
+- **A call the server left unanswered read as never sent.** RFC 8620 §3.4 has
+  the server answer every method call. One that did not left its handle raising
+  a RuntimeError that told the caller to run a batch that had already run; it
+  now fails with a `missingResponse` MethodError.
+- **`SetError` took the server's fields on trust.** A string `properties` came
+  back as a tuple of its characters, and a number raised TypeError. Each field is
+  now kept only when it has the type RFC 8620 §5.3 gives it.
+- **A chunked `/get` could fetch an id twice, or not chunk at all.** A repeated
+  id that fell into two chunks came back twice, so the answer depended on
+  `maxObjectsInGet`, and ids given as a tuple went out whole. Ids are now
+  deduplicated before splitting, and any sequence splits.
+- **A malformed query delta rewrote a view without complaint.** `AddedItem` read
+  a missing index as 0 and a missing id as a gap. Both are required now, as RFC
+  8620 §5.6 has them, so such a delta fails to parse.
+- **A view kept a total its latest delta had made stale.** Applied without one,
+  the old total stayed and `len()` counted rows that were gone. It is unknown now
+  until a response reports it again.
+- **The same query could get two keys.** `QuerySpec` read dicts and lists by
+  content and everything else through `repr()`, so a tuple sort or a read-only
+  mapping made a different key from its equal list or dict. Any mapping or
+  sequence is read by content now; keys already persisted do not change.
+- **Two servers could share a sync cursor.** State keys hold the account id,
+  which is unique only on its own server, so one store serving two servers filed
+  both accounts named `a` under one key. `namespace=` on `ChangeStream`,
+  `type_key()` and `query_key()` keeps them apart.
+- **`ChangeSet` repeated ids it promised to deduplicate.** An id reported on two
+  pages was listed twice; each list now holds an id once, in first-reported
+  order.
+- **A finished chunked `/get` still said "pending"** in its repr, which read a
+  flag only an ordinary handle sets.
+- **A byte-order mark split across reads survived.** Part of a character decodes
+  to nothing, and that empty chunk spent the one-time BOM check - and any CR held
+  over from the chunk before - so the first event could arrive typed `message`,
+  or a CRLF split in two.
+- **Closing the async `listen()` left its connection open** until the event
+  loop got round to finalising it, and with it the cursor that connection had
+  moved. It closes at once now, as the sync loop's does.
+- **`listen()` gave up on a proxy's 503.** A 429 or a 5xx - the statuses the retry
+  policy calls transient - ended the listener. It now redials with backoff, after
+  any `Retry-After`, capped like every other delay; other 4xx still raise.
+- **Two WebSocket requests could share an id.** The counter could hand out an id
+  a caller had already chosen, and responses are matched by id. Generated ids
+  now skip those in flight, and reusing one in flight is refused.
+- **`InsufficientScopeError` missed most missing scopes.** Only a 401 was checked,
+  and only for `OAuth2Auth` with a refresh callable, though RFC 6750 recommends a
+  403; and its challenges were reprs the scope could not be read back from. Any
+  credential now raises it on a 401 or a 403, carrying the headers as sent.
+- **`OAuth2Auth` never renewed a token ahead of its expiry,** though the auth
+  guide said it did: an expired token went out, and a 401 without a Bearer
+  challenge never led to a refresh. It now renews thirty seconds ahead, or
+  halfway through a shorter life, so a short-lived token is not renewed on every
+  request.
+- **A token of another type was sent as Bearer.** A DPoP or MAC token response is
+  now refused with `unsupported_token_type`, as RFC 6749 §7.1 requires; a
+  response naming no type is still read as Bearer.
+- **`protected_resource_url` dropped the query,** which RFC 9728 §3.1 keeps, so
+  two resources differing only there shared one metadata URL.
+- **An OAuth endpoint could fail as a raw `httpx.InvalidURL`.** `urlsplit`
+  deletes tabs and newlines before parsing, so the https check read a different
+  URL from the one httpx refused - with an error no `except` in the library
+  caught. Such URLs, and any other httpx cannot use, are a `DiscoveryError` now.
+- **An odd SRV answer could end discovery.** A target DNS allows but a URL cannot
+  hold - `a:b` - made httpx raise `InvalidURL` before the well-known URL was
+  tried. Such targets, RFC 2782's "." and port 0 are left out.
+- **Types without `/queryChanges` offered `query_changes()`.** SieveScript and the
+  legacy contact types had it, only for it to fail at the call.
+- **An import rule guarded a module that does not exist.** The one keeping the
+  capabilities from importing the client named `jmap.transport`, and passed
+  vacuously. It names `jmap.client` and `jmap.aio`, and a test now checks that
+  every module the rules name exists.
+- **The README was a release behind,** still calling itself 1.0.0 and OAuth
+  sign-in future work, and the sync guide said a view refuses a delta computed
+  for another filter, which it cannot tell apart. Both are corrected.
+
 ### Added
 
 - `Batch.requests()`, which yields a batch's requests one at a time, each carrying
@@ -184,6 +264,14 @@ for exactly which revision of each spec this build implements.
 - `jmap.core.ijson.MalformedJSONError`, `jmap.core.session.MalformedSessionError`
   and `jmap.models.base.validation_summary()`.
 
+- `AsyncJMAPClient.discover()`, which the async client lacked.
+- `namespace=` on `ChangeStream`, `jmap.sync.type_key()` and
+  `jmap.sync.query_key()`.
+- `jmap.api.entity.QueryChangeable`, the mixin `query_changes()` now lives on.
+- `jmap.auth.metadata.protected_resource_url`, which `jmap.auth` now exports from
+  there, and `jmap.auth.credentials.REFRESH_AHEAD_SECONDS`.
+- `jmap.batch.MISSING_RESPONSE`, the error type of an unanswered call.
+
 ### Changed
 
 - **Releases run the whole CI gate first.** The release workflow checked only
@@ -202,6 +290,11 @@ for exactly which revision of each spec this build implements.
 - **Blob transfers fail as API calls do.** A 401 from the upload or download
   endpoint is an `AuthenticationError` rather than a `RequestError`, and a failed
   connection a `TransportError` rather than httpx's own.
+- **`InsufficientScopeError` is raised on a 403 too, for any credential.** Code
+  catching a `RequestError` for a 403 whose challenge names `insufficient_scope`
+  gets `InsufficientScopeError` instead.
+- **`listen()` redials after a 429 or a 5xx** instead of raising `RequestError`.
+- **`AddedItem.id` and `AddedItem.index` are required.**
 
 ## 1.1.0
 
