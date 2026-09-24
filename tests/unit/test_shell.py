@@ -10,6 +10,7 @@ import pytest
 
 from jmap._shell import (
     JMAP_CONTENT_TYPE,
+    SrvConfirmation,
     as_json_object,
     failure_of,
     merged_created_ids,
@@ -23,6 +24,7 @@ from jmap.core.errors import RequestError, TransportError
 from jmap.core.retry import RetryPolicy, Safety
 from jmap.core.session import Session
 from jmap.defaults import default_registry
+from jmap.discovery import SRVTarget, UnconfirmedSRVTargetError
 
 PROBLEM = {"Content-Type": "application/problem+json"}
 
@@ -174,3 +176,34 @@ class TestDefaultRegistry:
         first = default_registry()
         first.register(CapabilitySpec(urn="urn:vendor:private"))
         assert "urn:vendor:private" not in default_registry()
+
+
+class TestSrvConfirmation:
+    """What both clients' discover() share."""
+
+    def test_with_nothing_to_ask_every_target_goes_untried(self):
+        confirm = SrvConfirmation(None)
+        assert not confirm(SRVTarget(host="mail.elsewhere.example"))
+        assert confirm.untried == [SRVTarget(host="mail.elsewhere.example")]
+
+    def test_an_approved_target_is_not_remembered(self):
+        confirm = SrvConfirmation(lambda _target: True)
+        assert confirm(SRVTarget(host="api.provider.example"))
+        assert confirm.untried == []
+
+    def test_untried_targets_are_what_a_failed_search_reports(self):
+        confirm = SrvConfirmation(None)
+        confirm(SRVTarget(host="mail.elsewhere.example"))
+        last = TransportError("nothing listening")
+        error = confirm.failure("alice@example.com", last)
+        assert isinstance(error, UnconfirmedSRVTargetError)
+        assert error.__cause__ is last
+
+    def test_otherwise_the_last_failure_is(self):
+        last = TransportError("nothing listening")
+        assert SrvConfirmation(None).failure("alice@example.com", last) is last
+
+    def test_a_search_with_no_candidates_says_so(self):
+        error = SrvConfirmation(None).failure("alice@example.com", None)
+        assert isinstance(error, TransportError)
+        assert "alice@example.com" in str(error)

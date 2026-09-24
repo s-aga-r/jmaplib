@@ -21,6 +21,7 @@ import httpx
 
 from jmap._shell import (
     NO_BLOB_ACCOUNT,
+    SrvConfirmation,
     as_json_object,
     failure_of,
     problem_of,
@@ -222,29 +223,16 @@ class JMAPClient:
         there is none. A 401 or a downgrading session still stops the search,
         because trying the next candidate would hand it the same credentials.
         """
-        from jmap.discovery import UnconfirmedSRVTargetError, candidate_urls, domain_of
+        from jmap.discovery import candidate_urls
 
-        untried: list[SRVTarget] = []
-
-        def confirm(target: SRVTarget) -> bool:
-            if confirm_srv_target is not None and confirm_srv_target(target):
-                return True
-            untried.append(target)
-            return False
-
+        confirm = SrvConfirmation(confirm_srv_target)
         failure: BaseException | None = None
         for url in candidate_urls(address, use_srv=use_srv, confirm_srv_target=confirm):
             try:
                 return cls.connect(url, auth=auth, **kwargs)
             except (TransportError, RequestError, ValueError) as exc:
                 failure = exc
-        if untried:
-            raise UnconfirmedSRVTargetError(domain_of(address), tuple(untried)) from failure
-        raise (
-            failure
-            if failure is not None
-            else TransportError(f"no JMAP server could be found for {address!r}")
-        )
+        raise confirm.failure(address, failure)
 
     def refresh_session(self) -> None:
         """Refetch the session and re-resolve capabilities.

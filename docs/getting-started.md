@@ -108,6 +108,9 @@ client = JMAPClient.discover(
 )
 ```
 
+`AsyncJMAPClient.discover` works the same way, awaited. The DNS lookup blocks, so
+it runs on a worker thread - and `confirm_srv_target` is called there.
+
 ## Your first request
 
 ```python

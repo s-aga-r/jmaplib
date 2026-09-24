@@ -494,3 +494,60 @@ class TestAddressDiscovery:
             http=httpx.Client(**fake.client_kwargs()),
         ) as client:
             assert client.session.api_url.startswith("https://api.provider.example/")
+
+
+class TestAsyncAddressDiscovery:
+    """AsyncJMAPClient had no discover() at all."""
+
+    @pytest.mark.asyncio
+    async def test_the_well_known_url_is_tried(self):
+        fake = FakeJMAPServer(base_url="https://example.com")
+        async with await AsyncJMAPClient.discover(
+            "alice@example.com",
+            auth=BasicAuth("alice", "pw"),
+            use_srv=False,
+            http=httpx.AsyncClient(**fake.client_kwargs()),
+        ) as client:
+            assert client.session.username == "alice@example.com"
+
+    @pytest.mark.asyncio
+    async def test_an_srv_target_outside_the_domain_is_not_tried_unconfirmed(self, monkeypatch):
+        TestAddressDiscovery.srv_answer(monkeypatch, "mail.attacker.example.")
+        hosts: list[str] = []
+
+        def refuse(request: httpx.Request) -> httpx.Response:
+            hosts.append(request.url.host)
+            raise httpx.ConnectError("nothing listening")
+
+        with pytest.raises(UnconfirmedSRVTargetError, match=r"mail\.attacker\.example"):
+            await AsyncJMAPClient.discover(
+                "alice@example.com",
+                auth=BasicAuth("alice", "pw"),
+                http=httpx.AsyncClient(transport=httpx.MockTransport(refuse)),
+            )
+        assert hosts == ["example.com"]
+
+    @pytest.mark.asyncio
+    async def test_a_confirmed_target_is_used(self, monkeypatch):
+        TestAddressDiscovery.srv_answer(monkeypatch, "api.provider.example.")
+        fake = FakeJMAPServer(base_url="https://api.provider.example")
+        async with await AsyncJMAPClient.discover(
+            "alice@example.org",
+            auth=BasicAuth("alice", "pw"),
+            confirm_srv_target=lambda target: target.host == "api.provider.example",
+            http=httpx.AsyncClient(**fake.client_kwargs()),
+        ) as client:
+            assert client.session.api_url.startswith("https://api.provider.example/")
+
+    @pytest.mark.asyncio
+    async def test_the_last_failure_is_what_surfaces(self):
+        def refuse(_request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("nothing listening")
+
+        with pytest.raises(TransportError, match="nothing listening"):
+            await AsyncJMAPClient.discover(
+                "alice@example.com",
+                auth=BasicAuth("alice", "pw"),
+                use_srv=False,
+                http=httpx.AsyncClient(transport=httpx.MockTransport(refuse)),
+            )

@@ -15,12 +15,14 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from jmap.core.errors import AuthenticationError, JMAPError, RequestError, TransportError
 from jmap.core.ijson import loads
 from jmap.core.retry import Failure, Safety, classify, parse_retry_after
+from jmap.discovery import UnconfirmedSRVTargetError, domain_of
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from jmap.core.retry import RetryPolicy
     from jmap.core.session import Session
+    from jmap.discovery import SRVTarget
 
 #: RFC 8620 §3.1. Servers are entitled to reject anything else, and Stalwart does.
 JMAP_CONTENT_TYPE: Final = "application/json"
@@ -95,6 +97,43 @@ def refusal_of(
             "the server rejected these credentials", challenges=tuple(challenges)
         )
     return problem_of(status, headers, body)
+
+
+class SrvConfirmation:
+    """The confirmation step of address discovery, for both clients.
+
+    Asked about each SRV target outside the address's domain, it passes the
+    question to the caller's ``confirm_srv_target`` and remembers every target
+    that went unapproved - so a search that finds no session can say which
+    ones it never tried.
+    """
+
+    __slots__ = ("_confirm", "untried")
+
+    def __init__(self, confirm: Callable[[SRVTarget], bool] | None) -> None:
+        self._confirm = confirm
+        self.untried: list[SRVTarget] = []
+
+    def __call__(self, target: SRVTarget) -> bool:
+        if self._confirm is not None and self._confirm(target):
+            return True
+        self.untried.append(target)
+        return False
+
+    def failure(self, address: str, last: BaseException | None) -> BaseException:
+        """What a search that found no session raises.
+
+        :class:`~jmap.discovery.UnconfirmedSRVTargetError` when a target went
+        untried, caused by the last failure; otherwise that failure itself -
+        the well-known URL's, the one a user can most easily check by hand.
+        """
+        if self.untried:
+            error = UnconfirmedSRVTargetError(domain_of(address), tuple(self.untried))
+            error.__cause__ = last
+            return error
+        if last is not None:
+            return last
+        return TransportError(f"no JMAP server could be found for {address!r}")
 
 
 def as_json_object(value: Any, source: str) -> dict[str, Any]:

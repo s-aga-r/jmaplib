@@ -13,14 +13,17 @@ it here.
 
 from __future__ import annotations
 
+import functools
 import time
 from typing import TYPE_CHECKING, Any, Self
 
 import anyio
 import httpx
+from anyio import to_thread
 
 from jmap._shell import (
     NO_BLOB_ACCOUNT,
+    SrvConfirmation,
     as_json_object,
     failure_of,
     problem_of,
@@ -40,7 +43,7 @@ from jmap.blobs import (
     upload_url,
 )
 from jmap.capabilities.core import CORE_URN
-from jmap.core.errors import AuthenticationError, TransportError
+from jmap.core.errors import AuthenticationError, RequestError, TransportError
 from jmap.core.ijson import dumps, loads
 from jmap.core.response import Response
 from jmap.core.retry import Failure, RetryPolicy, Safety, classify, should_retry
@@ -48,13 +51,14 @@ from jmap.core.session import Session, check_session_redirects
 from jmap.defaults import default_registry
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
     from types import TracebackType
 
     from jmap.capabilities.registry import ActiveCapabilities, Registry
     from jmap.core.ids import Id
     from jmap.core.invocation import Handle
     from jmap.core.request import Request
+    from jmap.discovery import SRVTarget
 
 
 class AsyncBatchContext:
@@ -175,6 +179,37 @@ class AsyncJMAPClient:
             session_url=url,
             experimental=experimental,
         )
+
+    @classmethod
+    async def discover(
+        cls,
+        address: str,
+        *,
+        auth: httpx.Auth,
+        use_srv: bool = True,
+        confirm_srv_target: Callable[[SRVTarget], bool] | None = None,
+        **kwargs: Any,
+    ) -> Self:
+        """Connect using only an email address or domain (RFC 8620 §2.2).
+
+        The async twin of :meth:`jmap.client.JMAPClient.discover`, which has the
+        whole story. One difference: the SRV lookup blocks - the DNS resolver is
+        synchronous - so it runs on a worker thread, and ``confirm_srv_target``
+        is called there.
+        """
+        from jmap.discovery import candidate_urls
+
+        confirm = SrvConfirmation(confirm_srv_target)
+        urls = await to_thread.run_sync(
+            functools.partial(candidate_urls, address, use_srv=use_srv, confirm_srv_target=confirm)
+        )
+        failure: BaseException | None = None
+        for url in urls:
+            try:
+                return await cls.connect(url, auth=auth, **kwargs)
+            except (TransportError, RequestError, ValueError) as exc:
+                failure = exc
+        raise confirm.failure(address, failure)
 
     async def refresh_session(self) -> None:
         """Refetch the session and re-resolve capabilities, with the same
