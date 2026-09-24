@@ -133,11 +133,24 @@ class WebSocketProtocol:
     outstanding: set[str] = field(default_factory=lambda: set())
 
     def next_request_id(self) -> str:
-        self._counter += 1
-        return f"r{self._counter}"
+        """An id no request in flight is using - a caller's own included."""
+        while True:
+            self._counter += 1
+            candidate = f"r{self._counter}"
+            if candidate not in self.outstanding:
+                return candidate
 
     def encode_request(self, request: Request, request_id: str | None = None) -> str:
-        """Frame a JMAP request, returning the text to send and recording its id."""
+        """Frame a JMAP request, returning the text to send and recording its id.
+
+        An id already awaiting an answer is refused: responses are matched by
+        id, so two requests in flight under one could not be told apart.
+        """
+        if request_id and request_id in self.outstanding:
+            raise ValueError(
+                f"request id {request_id!r} is already awaiting an answer; responses "
+                f"are matched by id, so it cannot be reused until that one settles"
+            )
         identifier = request_id or self.next_request_id()
         body = request.to_wire()
         body["@type"] = TYPE_REQUEST

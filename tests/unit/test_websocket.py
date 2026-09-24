@@ -59,6 +59,23 @@ class TestEncoding:
         protocol = WebSocketProtocol()
         assert decoded(protocol.encode_request(request(), "mine"))["id"] == "mine"
 
+    def test_a_generated_id_skips_one_already_in_flight(self):
+        # Responses are matched by id: a caller's "r1" and the counter's "r1"
+        # in flight together could not be told apart, and settling one untracked
+        # the other.
+        protocol = WebSocketProtocol()
+        protocol.encode_request(request(), "r1")
+        assert decoded(protocol.encode_request(request()))["id"] == "r2"
+        assert protocol.outstanding == {"r1", "r2"}
+
+    def test_an_id_already_in_flight_is_refused(self):
+        protocol = WebSocketProtocol()
+        protocol.encode_request(request(), "mine")
+        with pytest.raises(ValueError, match="mine"):
+            protocol.encode_request(request(), "mine")
+        protocol.settle("mine")
+        assert decoded(protocol.encode_request(request(), "mine"))["id"] == "mine"
+
     def test_sent_requests_are_tracked_until_answered(self):
         protocol = WebSocketProtocol()
         protocol.encode_request(request(), "r9")
