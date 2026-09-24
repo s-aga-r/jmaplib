@@ -33,7 +33,8 @@ import anyio
 import httpx
 
 from jmap._shell import problem_of
-from jmap.core.errors import AuthenticationError, TransportError
+from jmap.core.errors import AuthenticationError, RequestError, TransportError
+from jmap.core.retry import Failure, Safety, classify, parse_retry_after
 from jmap.push.eventsource import (
     CLOSE_AFTER_NO,
     CLOSE_AFTER_STATE,
@@ -178,7 +179,7 @@ class PushListener:
         else:
             self.note_failure()
 
-    def delay(self) -> float:
+    def delay(self, *, at_least: float | None = None) -> float:
         """How long to wait before redialling.
 
         The base is the server's ``retry:`` when it sent one. Consecutive
@@ -187,13 +188,14 @@ class PushListener:
         rarely, not every three seconds forever - and everything is capped at
         :data:`MAX_RECONNECT_SECONDS`, because ``retry:`` is server-chosen and
         an absurd value would otherwise disable push while looking alive.
+        ``at_least`` is a server's ``Retry-After``, held to the same cap.
         """
         if self._retry is None:
             base = DEFAULT_RECONNECT_SECONDS
         else:
             base = max(MIN_RECONNECT_SECONDS, self._retry / 1000)
         escalated = base * (2.0 ** min(self._failures, 16))
-        return min(MAX_RECONNECT_SECONDS, escalated)
+        return min(MAX_RECONNECT_SECONDS, max(escalated, at_least or 0.0))
 
     def __repr__(self) -> str:
         return f"PushListener(last_event_id={self._last_event_id!r})"
@@ -282,7 +284,21 @@ def _check(response: httpx.Response, body: bytes) -> None:
     problem = problem_of(response.status_code, response.headers, body)
     if problem is None:  # pragma: no cover - problem_of only answers None for a 2xx
         return
+    problem.retry_after = parse_retry_after(response.headers, now=time.time())
     raise problem
+
+
+def _not_now(error: RequestError) -> bool:
+    """Whether a refused connection said "not now" rather than "no".
+
+    The statuses the retry policy calls transient - 429, 503 and the rest of the
+    5xx family. Its caution about a 5xx possibly having applied a write does not
+    arise for a GET, so each is worth another dial; a 4xx is the same answer
+    every time.
+    """
+    return classify(Failure.STATUS, status=error.status, problem_type=error.type) is not (
+        Safety.FUTILE
+    )
 
 
 class EventSourceClient:
@@ -349,10 +365,11 @@ class EventSourceClient:
         to escape, which meant the ping mechanism built to *detect* a dead
         connection killed the listener instead of recovering it.) Failures
         without a delivered event back off exponentially, so a server that is
-        gone gets dialled rarely rather than every few seconds forever;
-        anything that is not a transport drop - a 401, a problem response, an
-        overflowing stream - still raises, because retrying those loops on an
-        answer that will not change.
+        gone gets dialled rarely rather than every few seconds forever. A
+        refusal that means "not now" - 429, or a 5xx while a server restarts -
+        backs off the same way, waiting out any ``Retry-After``; anything else
+        - a 401, a 4xx, an overflowing stream - still raises, because retrying
+        those loops on an answer that will not change.
 
         Typed as a generator rather than an iterator because a caller that
         stops listening needs ``close()`` to end the connection - an infinite
@@ -361,6 +378,7 @@ class EventSourceClient:
         while True:
             opened = time.monotonic()
             delivered = False
+            wait: float | None = None
             try:
                 for event in self.events():
                     delivered = True
@@ -368,12 +386,17 @@ class EventSourceClient:
                     yield event
             except TransportError:
                 self._listener.note_failure()
+            except RequestError as error:
+                if not _not_now(error):
+                    raise
+                self._listener.note_failure()
+                wait = error.retry_after
             else:
                 # A clean end is the connection working as designed - after
                 # closeafter=state, or an idle close - unless it ended at once
                 # having delivered nothing.
                 self._listener.note_end(delivered=delivered, lasted=time.monotonic() - opened)
-            time.sleep(self._listener.delay())
+            time.sleep(self._listener.delay(at_least=wait))
 
 
 class AsyncEventSourceClient:
@@ -426,12 +449,13 @@ class AsyncEventSourceClient:
     async def listen(self) -> AsyncGenerator[StateChange | Ping, None]:
         """Yield events indefinitely, reconnecting whenever the stream ends.
 
-        Transport drops redial with backoff; everything else raises - see the
-        sync twin for the reasoning.
+        Transport drops and transient refusals redial with backoff; everything
+        else raises - see the sync twin for the reasoning.
         """
         while True:
             opened = time.monotonic()
             delivered = False
+            wait: float | None = None
             try:
                 # Closed explicitly, as the sync twin's is by close(): left to
                 # the event loop's finaliser, the connection outlived aclose(),
@@ -443,7 +467,12 @@ class AsyncEventSourceClient:
                         yield event
             except TransportError:
                 self._listener.note_failure()
+            except RequestError as error:
+                if not _not_now(error):
+                    raise
+                self._listener.note_failure()
+                wait = error.retry_after
             else:
                 self._listener.note_end(delivered=delivered, lasted=time.monotonic() - opened)
             # anyio rather than asyncio.sleep, so this works under trio too.
-            await anyio.sleep(self._listener.delay())
+            await anyio.sleep(self._listener.delay(at_least=wait))

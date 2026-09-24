@@ -35,8 +35,11 @@ for event in source.listen():
 `listen()` yields the keep-alives as well as the changes - a `Ping` carries the
 interval the server settled on - so a loop steps past them before asking what
 moved. It reconnects on its own, resuming from `Last-Event-ID` each time, so a
-dropped connection costs latency rather than data. `events()` is the single-
-connection version if you want to manage reconnection yourself.
+dropped connection costs latency rather than data. A connection refused with a
+429 or a 5xx - a proxy while the server restarts - is redialled the same way,
+after any `Retry-After`; a 401 or another 4xx still raises, being the same answer
+every time. `events()` is the single-connection version if you want to manage
+reconnection yourself.
 
 ### `outdated` is the method that matters
 

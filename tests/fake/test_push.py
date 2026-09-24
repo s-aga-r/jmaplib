@@ -39,6 +39,7 @@ from jmap.push import (
 from jmap.push.listener import (
     DEFAULT_RECONNECT_SECONDS,
     ERROR_BODY_LIMIT,
+    MAX_RECONNECT_SECONDS,
     MIN_RECONNECT_SECONDS,
 )
 from jmap.testing import FakeJMAPServer
@@ -643,6 +644,102 @@ class TestReconnectLoop:
             await anext(stream)
             await stream.aclose()
             assert source.last_event_id == "7"
+
+
+def briefly(status: int, **headers: str) -> Any:
+    """An event source that refuses its first connection with ``status``."""
+    refusals = {"remaining": 1}
+
+    def intercept(request: httpx.Request) -> httpx.Response | None:
+        if "/jmap/eventsource/" in request.url.path and refusals["remaining"]:
+            refusals["remaining"] -= 1
+            return httpx.Response(status, headers=headers, text="busy")
+        return None
+
+    return intercept
+
+
+class TestTransientRefusals:
+    """429 and 5xx mean "not now"; the retry policy says so, and a GET applies nothing."""
+
+    @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+    def test_a_transient_refusal_is_redialled(self, monkeypatch, status):
+        # A proxy answering 503 for the seconds a server takes to restart ended
+        # the listener for good.
+        fake = server()
+        fake.push("a", {"Email": "e1"}, event_id="1")
+        naps: list[float] = []
+        monkeypatch.setattr("jmap.push.listener.time.sleep", naps.append)
+        with connect(fake) as client:
+            fake.intercept = briefly(status)
+            stream = EventSourceClient(client).listen()
+            event = next(stream)
+            stream.close()
+        assert isinstance(event, StateChange)
+        assert naps == [DEFAULT_RECONNECT_SECONDS * 2]
+
+    def test_retry_after_is_waited_out(self, monkeypatch):
+        fake = server()
+        fake.push("a", {"Email": "e1"}, event_id="1")
+        naps: list[float] = []
+        monkeypatch.setattr("jmap.push.listener.time.sleep", naps.append)
+        with connect(fake) as client:
+            fake.intercept = briefly(503, **{"Retry-After": "40"})
+            stream = EventSourceClient(client).listen()
+            next(stream)
+            stream.close()
+        assert naps == [40.0]
+
+    def test_an_absurd_retry_after_is_capped(self, monkeypatch):
+        fake = server()
+        fake.push("a", {"Email": "e1"}, event_id="1")
+        naps: list[float] = []
+        monkeypatch.setattr("jmap.push.listener.time.sleep", naps.append)
+        with connect(fake) as client:
+            fake.intercept = briefly(429, **{"Retry-After": "31536000"})
+            stream = EventSourceClient(client).listen()
+            next(stream)
+            stream.close()
+        assert naps == [MAX_RECONNECT_SECONDS]
+
+    def test_a_refusal_that_will_not_change_still_escapes(self, monkeypatch):
+        # A 400 is the same answer on every dial.
+        monkeypatch.setattr("jmap.push.listener.time.sleep", lambda _s: None)
+        fake = server()
+        with connect(fake) as client:
+            fake.intercept = briefly(400)
+            with pytest.raises(RequestError):
+                next(EventSourceClient(client).listen())
+
+    @pytest.mark.asyncio
+    async def test_the_async_loop_still_raises_what_will_not_change(self, monkeypatch):
+        async def nap(_seconds: float) -> None:
+            return None
+
+        monkeypatch.setattr("jmap.push.listener.anyio.sleep", nap)
+        fake = server()
+        async with await TestAsyncEventSource().aconnect(fake) as client:
+            fake.intercept = briefly(400)
+            with pytest.raises(RequestError):
+                await anext(AsyncEventSourceClient(client).listen())
+
+    @pytest.mark.asyncio
+    async def test_the_async_loop_redials_too(self, monkeypatch):
+        fake = server()
+        fake.push("a", {"Email": "e1"}, event_id="1")
+        naps: list[float] = []
+
+        async def nap(seconds: float) -> None:
+            naps.append(seconds)
+
+        monkeypatch.setattr("jmap.push.listener.anyio.sleep", nap)
+        async with await TestAsyncEventSource().aconnect(fake) as client:
+            fake.intercept = briefly(503, **{"Retry-After": "40"})
+            stream = AsyncEventSourceClient(client).listen()
+            event = await anext(stream)
+            await stream.aclose()
+        assert isinstance(event, StateChange)
+        assert naps == [40.0]
 
 
 class TestListenReconnects:
