@@ -93,6 +93,14 @@ class TestSplitting:
         assert isinstance(handle, ChunkedHandle)
         assert [len(chunk.call.arguments["ids"]) for chunk in handle.chunks] == [100, 100]
 
+    def test_ids_given_as_a_tuple_are_split_too(self):
+        # `ids` accepts any sequence; a tuple went out whole, 250 ids to a
+        # server that takes 100.
+        batch = Batch(capabilities(max_objects_in_get=100))
+        handle = batch.add("Email/get", {"ids": tuple(f"m{i}" for i in range(250))})
+        assert isinstance(handle, ChunkedHandle)
+        assert [len(chunk.call.arguments["ids"]) for chunk in handle.chunks] == [100, 100, 50]
+
     def test_exactly_the_limit_is_not_split(self):
         batch = Batch(capabilities(max_objects_in_get=100))
         handle = batch.add("Email/get", {"ids": [f"m{i}" for i in range(100)]})

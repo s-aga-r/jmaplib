@@ -22,7 +22,7 @@ do the HTTP, which is what lets one implementation serve both sync and async.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from jmap.capabilities.parsing import parser_for
 from jmap.capabilities.registry import UnsupportedMethodError
@@ -233,10 +233,11 @@ class Batch:
             return None
         raw_ids: Any = call.arguments.get("ids")
         # A ResultRef has no length here, and `None` means "every record" - in
-        # both cases the count is the server's problem, not ours.
-        if not is_list(raw_ids):
+        # both cases the count is the server's problem, not ours. A tuple is a
+        # sequence of ids like a list, and went out whole when only lists split.
+        if not isinstance(raw_ids, (list, tuple)):
             return None
-        ids = as_list(raw_ids)
+        ids = list(cast("Sequence[Any]", raw_ids))
         limit = self._capabilities.limits.max_objects_in_get
         if len(ids) <= limit:
             return None

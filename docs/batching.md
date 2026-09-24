@@ -214,7 +214,8 @@ from the session and plans around them:
 
 - **`/get` with too many ids** is split automatically, and the responses are
   recombined. The `state` of each chunk is compared, so a mutation racing your
-  read is detected rather than silently producing a mixed answer.
+  read is detected rather than silently producing a mixed answer. A tuple of
+  ids splits as a list does.
 - **A batch with too many calls** is split into several requests, cut only
   between consecutive calls - so they still run in the order you queued them -
   and never between a call and one it references. If no such cut fits under the
