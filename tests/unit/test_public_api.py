@@ -190,30 +190,31 @@ class TestSpecRevisions:
             assert not revision.startswith("draft-"), f"{urn} is not marked experimental"
 
 
-#: Wire names carrying two consecutive capitals. These are the ones pydantic's
-#: camelCase generator gets wrong - it lowercases all but the first letter of an
-#: acronym - and the failure is silent in *both* directions: the value is written
-#: under a key no server reads, and a value read back lands in `extra` rather than
-#: on the field.
+#: Wire names carrying two consecutive capitals, or a digit. These are the ones
+#: pydantic's camelCase generator gets wrong - it lowercases all but the first
+#: letter of an acronym, and capitalises a letter after a digit - and the failure
+#: is silent in *both* directions: the value is written under a key no server
+#: reads, and a value read back lands in `extra` rather than on the field.
 #:
 #: To find more, grep the spec texts for a property-shaped token with an internal
-#: run of capitals:
+#: run of capitals, or a digit:
 #:
-#:     grep -ohE '\b[a-z][a-zA-Z0-9]*[A-Z]{2,}[a-zA-Z0-9]*\b' rfc*.txt | sort -u
+#:     grep -ohE '\b[a-z][a-zA-Z0-9]*([A-Z]{2,}|[0-9])[a-zA-Z0-9]*\b' rfc*.txt | sort -u
 #:
 #: Model field -> the wire name it must serialise to.
 ACRONYM_ALIASES = {
     ("jmap.models.mdn", "MDN", "reporting_ua"): "reportingUA",
     ("jmap.models.calendars", "CalendarRights", "may_rsvp"): "mayRSVP",
+    ("jmap.models.push", "PushKeys", "p256dh"): "p256dh",
 }
 
 
 class TestAcronymAliases:
     """Wire names the camelCase generator cannot derive.
 
-    Two of these shipped wrong in 1.0 before being caught. The class of bug is
-    worth a standing guard because nothing else detects it: the model validates,
-    the request sends, the server accepts it, and the property is simply absent.
+    Three of these shipped wrong before being caught. The class of bug is worth
+    a standing guard because nothing else detects it: the model validates, the
+    request sends, the server accepts it, and the property is simply absent.
     """
 
     def test_each_acronym_property_keeps_its_spelling(self):
@@ -232,6 +233,10 @@ class TestAcronymAliases:
         assert MDN(reportingUA="joes-pc").to_wire() == {"reportingUA": "joes-pc"}
         assert CalendarRights.from_wire({"mayRSVP": True}).may_rsvp is True
         assert CalendarRights(mayRSVP=True).to_wire() == {"mayRSVP": True}
+        # RFC 8620 §7.2 spells it all lower case; it went out as "p256Dh".
+        from jmap.models.push import PushKeys
+
+        assert PushKeys(p256dh="k").to_wire() == {"p256dh": "k"}
 
     def test_the_generator_really_would_get_them_wrong(self):
         # Pins *why* the explicit aliases are needed, so removing one is not
@@ -240,6 +245,7 @@ class TestAcronymAliases:
 
         assert to_camel("reporting_ua") == "reportingUa"
         assert to_camel("may_rsvp") == "mayRsvp"
+        assert to_camel("p256dh") == "p256Dh"
 
 
 class TestDataclassDefaults:

@@ -128,8 +128,9 @@ class PushKeys(JMAPModel):
     shows up as a decryption failure on the client.
     """
 
-    #: The P-256 ECDH public key.
-    p256dh: str | None = None
+    #: The P-256 ECDH public key. Its alias is spelled out: the camelCase
+    #: generator capitalises a letter after a digit, and sent it as ``p256Dh``.
+    p256dh: str | None = Field(default=None, alias="p256dh")
     #: The authentication secret. Excluded from repr: it authenticates the
     #: RFC 8291 key derivation, and model reprs end up in logs.
     auth: str | None = Field(default=None, repr=False)
