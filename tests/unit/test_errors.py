@@ -211,6 +211,20 @@ class TestSetError:
     def test_unknown_type_defaults(self):
         assert SetError.from_wire({}).type == "unknown"
 
+    @pytest.mark.parametrize("hostile", ["subject", 5, {"subject": True}, ["subject", 5]])
+    def test_properties_that_are_not_a_list_of_names_are_dropped(self, hostile):
+        # A string came back as a tuple of its characters, and a number raised
+        # TypeError out of every /set response that carried it.
+        error = SetError.from_wire({"type": "invalidProperties", "properties": hostile})
+        assert error.properties is None
+
+    def test_a_description_or_existing_id_of_the_wrong_type_is_dropped(self):
+        error = SetError.from_wire(
+            {"type": "alreadyExists", "description": 5, "existingId": ["M1"]}
+        )
+        assert error.description is None
+        assert error.existing_id is None
+
     def test_repr_is_informative(self):
         assert "overQuota" in repr(SetError("overQuota"))
 

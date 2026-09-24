@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Final, cast
 
+from jmap.core.narrow import as_list, is_list
+
 if TYPE_CHECKING:
     # Only for annotations: jmap.core.ids defines InvalidIdError on JMAPError,
     # so importing it here at run time would be a cycle.
@@ -178,14 +180,21 @@ class SetError:
 
     @classmethod
     def from_wire(cls, body: dict[str, Any]) -> SetError:
-        """Build from one entry of a ``notCreated``/``notUpdated``/``notDestroyed`` map."""
+        """Build from one entry of a ``notCreated``/``notUpdated``/``notDestroyed`` map.
+
+        Each optional field is kept only when it has the type RFC 8620 §5.3
+        gives it. ``tuple()`` of a string ``properties`` made a tuple of its
+        characters, and of a number raised TypeError - from a server's answer.
+        """
         props = body.get("properties")
+        description = body.get("description")
         existing = body.get("existingId")
+        names = is_list(props) and all(isinstance(name, str) for name in as_list(props))
         return cls(
             str(body.get("type", "unknown")),
-            description=body.get("description"),
-            properties=tuple(props) if props is not None else None,
-            existing_id=cast("Id | None", existing),
+            description=description if isinstance(description, str) else None,
+            properties=tuple(as_list(props)) if names else None,
+            existing_id=cast("Id", existing) if isinstance(existing, str) else None,
             raw=body,
         )
 
