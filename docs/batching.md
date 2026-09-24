@@ -33,6 +33,46 @@ handle.result.items  # readable now
 The request goes out when the block exits. Reading `.result` too early raises
 `RuntimeError` rather than returning an empty or misleading value.
 
+## Arguments are checked
+
+Every builder checks its arguments with pydantic before the call is queued, so a
+mistake raises on the line that made it - rather than coming back from the
+server as `invalidArguments`, or not at all:
+
+```python
+batch.mail.email.get(ids="m1")  # a string is not a list of ids
+batch.mail.email.query(limit=-5)  # an UnsignedInt (RFC 8620 §5.5)
+batch.mail.email.changes(since_state=None)  # a state is a string
+```
+
+Each raises pydantic's `ValidationError` - a `ValueError` - titled with the call
+and listing every argument at fault:
+
+```text
+1 validation error for Email.get
+ids
+  'str' instances are not allowed as a Sequence value [type=sequence_str, ...]
+```
+
+The checks are strict: `"5"` is not a number and `1` is not a boolean, because
+the wire would not coerce them either. `UNSET` and a back-reference go through
+unchecked - RFC 8620 §3.7 lets any argument be a reference, and its value only
+exists once the server resolves it. Calling a builder with the wrong arguments
+at all, such as one it does not take positionally, is Python's own `TypeError`.
+
+A `/set` or `/copy` `create` takes typed models as well as mappings. A model
+sends the fields it was given and nothing else, so the server defaults the rest:
+
+```python
+from jmap.models.mail.objects import Mailbox
+
+with client.batch() as batch:
+    batch.mail.mailbox.set(create={"r": Mailbox(name="Receipts", parent_id=None)})
+```
+
+More generally, a model goes anywhere its wire object can, at any depth:
+anything with a `to_wire()` method is serialised through it.
+
 ## Back-references
 
 A back-reference points at a path inside an earlier call's response. The
@@ -193,7 +233,8 @@ none yet and go through `batch.add` with wire-spelled arguments:
 `batch.add` is not a lesser path. It resolves the account, derives `using`,
 enforces the read-only and limit gates, and returns a normal handle you can
 reference from other calls. What you give up is the typed response - the result
-is the raw response dict rather than a parsed model:
+is the raw response dict rather than a parsed model - and the argument checks,
+since there is no signature to check against; the arguments go out as given:
 
 ```python
 with client.batch() as batch:

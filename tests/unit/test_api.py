@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
+from pydantic.alias_generators import to_camel
 
 from jmap.api.entity import (
     Changeable,
@@ -29,9 +32,11 @@ from jmap.capabilities.mail import (
 )
 from jmap.capabilities.registry import ActiveCapabilities, Registry
 from jmap.capabilities.spec import MethodKind
-from jmap.core.ids import Id
+from jmap.core.errors import JMAPError
+from jmap.core.ids import CreationRef, Id
 from jmap.core.session import Session
-from jmap.models.mail.objects import Email
+from jmap.models.base import UNSET, JMAPObject
+from jmap.models.mail.objects import Email, Mailbox
 from jmap.models.responses import (
     AddedItem,
     ChangesResponse,
@@ -376,6 +381,170 @@ class TestBuilders:
         query = email_entity(batch).query()
         handle = email_entity(batch).get(ids=query.ref_ids())
         assert handle.call.to_wire_arguments()["#ids"]["path"] == "/ids"
+
+
+def entity(batch: Batch, type_name: str) -> Any:
+    data_type = MAIL.data_type(type_name)
+    assert data_type is not None
+    return entity_for(batch, MAIL, data_type)
+
+
+def problems(excinfo: pytest.ExceptionInfo[ValidationError]) -> list[tuple[Any, ...]]:
+    """Each failure's location and type, for comparing in one assertion."""
+    return [(error["loc"], error["type"]) for error in excinfo.value.errors()]
+
+
+class TestArgumentsAreChecked:
+    """Every builder validates its arguments before queueing the call, so a
+    mistake raises where it was made instead of as ``invalidArguments``."""
+
+    def test_a_string_is_not_a_list_of_ids(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).get(ids="m1")
+        assert problems(excinfo) == [(("ids",), "sequence_str")]
+
+    def test_the_error_names_the_type_and_the_builder(self, batch):
+        with pytest.raises(ValidationError, match=r"validation error for Email\.get") as excinfo:
+            email_entity(batch).get(ids="m1")
+        # A ValueError, like the library's other argument errors, but not a
+        # JMAPError: it is a bug in the call, not something the server did.
+        assert isinstance(excinfo.value, ValueError)
+        assert not isinstance(excinfo.value, JMAPError)
+
+    def test_an_element_is_located_by_its_index(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).get(ids=["m1", 5])
+        assert {loc[:2] for loc, _ in problems(excinfo)} == {("ids", 1)}
+
+    def test_every_argument_at_fault_is_reported_at_once(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).query(limit=-5, calculate_total="yes")
+        assert problems(excinfo) == [
+            (("limit",), "greater_than_equal"),
+            (("calculate_total",), "bool_type"),
+        ]
+
+    @pytest.mark.parametrize("limit", [True, 2.0, "5", 2**53])
+    def test_a_limit_is_an_unsigned_int_and_nothing_else(self, batch, limit):
+        with pytest.raises(ValidationError):
+            email_entity(batch).query(limit=limit)
+
+    def test_a_position_may_be_negative(self, batch):
+        # RFC 8620 §5.5: a negative position counts back from the end.
+        assert email_entity(batch).query(position=-5).call.arguments["position"] == -5
+
+    def test_a_sort_is_a_list_of_comparators(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).query(sort="receivedAt")
+        assert problems(excinfo) == [(("sort",), "sequence_str")]
+
+    def test_any_mapping_is_a_filter(self, batch):
+        handle = email_entity(batch).query(filter=MappingProxyType({"inMailbox": "mb1"}))
+        assert handle.call.arguments["filter"] == {"inMailbox": "mb1"}
+
+    def test_a_list_is_not_a_filter(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).query(filter=["inMailbox"])
+        assert problems(excinfo) == [(("filter",), "dict_type")]
+
+    def test_a_tuple_of_ids_is_a_sequence_of_ids(self, batch):
+        handle = email_entity(batch).get(ids=("m1", CreationRef("d1")))
+        assert handle.call.to_wire_arguments()["ids"] == ["m1", "#d1"]
+
+    def test_a_state_is_a_string(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).changes(since_state=None)
+        assert problems(excinfo) == [(("since_state",), "string_type")]
+
+    def test_max_changes_must_be_above_zero_for_changes(self, batch):
+        # RFC 8620 §5.2: the server MUST reject anything else.
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).changes(since_state="s1", max_changes=0)
+        assert problems(excinfo) == [(("max_changes",), "greater_than")]
+
+    def test_but_query_changes_puts_no_floor_on_it(self, batch):
+        handle = email_entity(batch).query_changes(since_query_state="q1", max_changes=0)
+        assert handle.call.arguments["maxChanges"] == 0
+
+    def test_a_patch_is_a_mapping(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).set(update={"m1": "subject"})
+        assert problems(excinfo) == [(("update", "m1"), "dict_type")]
+
+    def test_destroy_is_a_list_of_ids(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).set(destroy="m1")
+        assert problems(excinfo) == [(("destroy",), "sequence_str")]
+
+    def test_an_object_to_create_is_a_mapping_or_a_model(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).set(create={"d1": "Hi"})
+        assert {loc[:2] for loc, _ in problems(excinfo)} == {("create", "d1")}
+
+    def test_copy_checks_its_arguments_too(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).copy(from_account_id=5, create={})
+        assert problems(excinfo) == [(("from_account_id",), "string_type")]
+
+    def test_query_changes_checks_its_arguments_too(self, batch):
+        with pytest.raises(ValidationError) as excinfo:
+            email_entity(batch).query_changes(since_query_state="q1", up_to_id=5)
+        assert problems(excinfo) == [(("up_to_id",), "string_type")]
+
+    def test_a_missing_argument_is_a_type_error_naming_the_call(self, batch):
+        with pytest.raises(TypeError, match=r"Email\.changes\(\): .*since_state"):
+            email_entity(batch).changes()
+
+    def test_a_positional_argument_is_a_type_error(self, batch):
+        with pytest.raises(TypeError, match=r"Email\.get\(\)"):
+            email_entity(batch).get(["m1"])
+
+    def test_an_explicit_unset_is_still_omitted(self, batch):
+        assert "ids" not in email_entity(batch).get(ids=UNSET).call.arguments
+
+
+class TestBackReferencesAreForwarded:
+    """RFC 8620 §3.7 lets any argument be a back-reference, and its value exists
+    only once the server resolves it - so a builder forwards one unchecked."""
+
+    @pytest.mark.parametrize(
+        ("builder", "arguments"),
+        [
+            ("get", {"properties": "/updatedProperties"}),
+            ("changes", {"since_state": "/state"}),
+            ("query", {"limit": "/total"}),
+            ("query_changes", {"since_query_state": "/queryState"}),
+            ("set", {"destroy": "/ids", "if_in_state": "/state"}),
+        ],
+    )
+    def test_a_reference_goes_through_unchecked(self, batch, builder, arguments):
+        source = email_entity(batch).query()
+        refs = {name: source.ref(path) for name, path in arguments.items()}
+        handle = getattr(email_entity(batch), builder)(**refs)
+        wire = handle.call.to_wire_arguments()
+        assert all(wire[f"#{to_camel(name)}"]["path"] == path for name, path in arguments.items())
+
+
+class TestModelsAsInput:
+    """A typed model is accepted wherever its wire object is."""
+
+    def test_a_model_is_an_object_to_create(self, batch):
+        handle = entity(batch, "Mailbox").set(create={"k": Mailbox(name="Receipts")})
+        # Only the fields it was given: RFC 8620 §5.3 has the server default the
+        # rest, and a null would say something else.
+        assert handle.call.to_wire_arguments()["create"] == {"k": {"name": "Receipts"}}
+
+    def test_an_explicit_null_is_kept(self, batch):
+        handle = entity(batch, "Mailbox").set(create={"k": Mailbox(name="R", parent_id=None)})
+        assert handle.call.to_wire_arguments()["create"]["k"] == {"name": "R", "parentId": None}
+
+    def test_a_model_is_an_object_to_copy(self, batch):
+        handle = email_entity(batch).copy(from_account_id="b", create={"c1": Email(id="m1")})
+        assert handle.call.to_wire_arguments()["create"] == {"c1": {"id": "m1"}}
+
+    def test_a_raw_object_is_one_too(self, batch):
+        handle = entity(batch, "Mailbox").set(create={"k": JMAPObject({"name": "R"})})
+        assert handle.call.to_wire_arguments()["create"] == {"k": {"name": "R"}}
 
 
 class TestPaginationGuards:

@@ -109,7 +109,7 @@ known-first-party = ["jmap"]
 [tool.ruff.lint.flake8-type-checking]
 # A checked function resolves its annotations when it is first called, so every
 # name in its signature must be imported at run time.
-runtime-evaluated-decorators = ["jmap.models.arguments.checked"]
+runtime-evaluated-decorators = ["jmap.models.arguments.checked", "jmap.api.entity.builder"]
 
 # --------------------------------------------------------------------------- #
 # Type checking

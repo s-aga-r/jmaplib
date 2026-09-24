@@ -21,7 +21,10 @@ shape, a refused upload - along with every error class this library defines. One
 
 What it lets through is misuse of the API itself: reading a handle before its
 batch has run (`RuntimeError`), passing both `anchor` and `position`
-(`ValueError`), a `bool` where a JMAP `Int` goes (`TypeError`). Those are bugs to
+(`ValueError`), an argument a builder's signature does not allow - `ids="m1"`,
+`limit=-5` - which pydantic refuses before the call is queued (its
+`ValidationError`, a `ValueError`; see [Batching](batching.md)), or a `bool`
+where a JMAP `Int` goes in a raw `batch.add` (`TypeError`). Those are bugs to
 fix rather than failures to handle, so they raise the builtin any Python code
 would. The library's own argument errors - `InvalidIdError`, `InvalidPatchError`,
 `InvalidEmailCreateError` and the rest - are both: `JMAPError`s, and the

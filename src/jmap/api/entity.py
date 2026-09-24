@@ -15,32 +15,45 @@ the rest of the library follows.
 Arguments are snake_case here and camelCase on the wire, and ``UNSET`` keeps the
 difference between "not passed" and "explicitly null" - which JMAP needs, because
 ``ids=None`` means *all records* while omitting ``ids`` is invalid.
+
+Every builder checks its arguments against its signature before queueing the
+call (see :mod:`jmap.models.arguments`), so ``ids="m1"`` or ``limit=-5`` raises
+where it was written rather than coming back as ``invalidArguments``. An
+argument the builder only forwards may be a :class:`~jmap.core.invocation.ResultRef`
+instead, as RFC 8620 §3.7 allows. A ``/set`` or ``/copy`` ``create`` takes typed
+models as well as plain mappings.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Annotated, Any, Generic, TypeVar
+
+from pydantic import Field
 
 from jmap.capabilities.spec import MethodKind
-from jmap.models.base import UNSET, Unset, omit_unset
+from jmap.core.ids import CreationRef, Id
+from jmap.core.invocation import Handle, ResultRef
+from jmap.models.arguments import Int, UnsignedInt, checked
+from jmap.models.base import UNSET, JMAPModel, Unset, omit_unset
+from jmap.models.responses import (
+    ChangesResponse,
+    CopyResponse,
+    GetResponse,
+    QueryChangesResponse,
+    QueryResponse,
+    SetResponse,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
     from jmap.batch import Batch
     from jmap.capabilities.spec import CapabilitySpec, DataTypeSpec
-    from jmap.core.ids import Id
-    from jmap.core.invocation import Handle, ResultRef
-    from jmap.models.responses import (
-        ChangesResponse,
-        CopyResponse,
-        GetResponse,
-        QueryChangesResponse,
-        QueryResponse,
-        SetResponse,
-    )
 
 T = TypeVar("T")
+
+#: An object to create: the wire mapping, or a typed model, which serialises
+#: itself through ``to_wire()``.
+Creation = Mapping[str, Any] | JMAPModel
 
 
 class EntityBase(Generic[T]):
@@ -53,6 +66,11 @@ class EntityBase(Generic[T]):
         self._type_name = type_name
         self._model = model
 
+    @property
+    def type_name(self) -> str:
+        """The data type these builders build calls for - ``Email``."""
+        return self._type_name
+
     def _add(self, suffix: str, arguments: Mapping[str, Any]) -> Handle[Any]:
         return self._batch.add(f"{self._type_name}/{suffix}", arguments)
 
@@ -60,16 +78,27 @@ class EntityBase(Generic[T]):
         return f"{type(self).__name__}({self._type_name!r})"
 
 
+def _type_name(entity: EntityBase[Any]) -> str:
+    return entity.type_name
+
+
+#: Wraps every builder: its arguments are checked on each call, and a failure
+#: is titled with the data type and the builder - ``Email.get`` - rather than
+#: with the mixin that implements it for every type.
+builder = checked(subject=_type_name)
+
+
 class Gettable(EntityBase[T]):
     """``Foo/get`` (RFC 8620 §5.1)."""
 
     __slots__ = ()
 
+    @builder
     def get(
         self,
         *,
-        ids: Sequence[Id] | ResultRef[Any] | Unset | None = UNSET,
-        properties: Sequence[str] | Unset | None = UNSET,
+        ids: Sequence[Id | CreationRef] | ResultRef[Any] | Unset | None = UNSET,
+        properties: Sequence[str] | ResultRef[Any] | Unset | None = UNSET,
         **extra: Any,
     ) -> Handle[GetResponse[T]]:
         """Fetch objects by id.
@@ -86,18 +115,19 @@ class Changeable(EntityBase[T]):
 
     __slots__ = ()
 
+    @builder
     def changes(
         self,
         *,
-        since_state: str,
-        max_changes: int | Unset | None = UNSET,
+        since_state: str | ResultRef[Any],
+        max_changes: Annotated[UnsignedInt, Field(gt=0)] | ResultRef[Any] | Unset | None = UNSET,
         **extra: Any,
     ) -> Handle[ChangesResponse]:
         """What changed since ``since_state``.
 
         A server that cannot answer replies ``cannotCalculateChanges``, which
         means resynchronising from scratch - it is a normal outcome after a long
-        gap, not a bug.
+        gap, not a bug. ``max_changes`` must be above zero (RFC 8620 §5.2).
         """
         return self._add(
             "changes", omit_unset(sinceState=since_state, maxChanges=max_changes, **extra)
@@ -109,16 +139,18 @@ class Queryable(EntityBase[T]):
 
     __slots__ = ()
 
+    @builder
     def query(
         self,
         *,
-        filter: Mapping[str, Any] | Unset | None = UNSET,  # `filter` mirrors the wire name
-        sort: Sequence[Mapping[str, Any]] | Unset | None = UNSET,
-        position: int | Unset = UNSET,
-        anchor: Id | Unset | None = UNSET,
-        anchor_offset: int | Unset = UNSET,
-        limit: int | Unset | None = UNSET,
-        calculate_total: bool | Unset = UNSET,
+        # `filter` mirrors the wire name.
+        filter: Mapping[str, Any] | ResultRef[Any] | Unset | None = UNSET,
+        sort: Sequence[Mapping[str, Any]] | ResultRef[Any] | Unset | None = UNSET,
+        position: Int | ResultRef[Any] | Unset = UNSET,
+        anchor: Id | ResultRef[Any] | Unset | None = UNSET,
+        anchor_offset: Int | ResultRef[Any] | Unset = UNSET,
+        limit: UnsignedInt | ResultRef[Any] | Unset | None = UNSET,
+        calculate_total: bool | ResultRef[Any] | Unset = UNSET,
         **extra: Any,
     ) -> Handle[QueryResponse]:
         """Search for ids.
@@ -159,15 +191,17 @@ class QueryChangeable(EntityBase[T]):
 
     __slots__ = ()
 
+    @builder
     def query_changes(
         self,
         *,
-        since_query_state: str,
-        filter: Mapping[str, Any] | Unset | None = UNSET,  # `filter` mirrors the wire name
-        sort: Sequence[Mapping[str, Any]] | Unset | None = UNSET,
-        max_changes: int | Unset | None = UNSET,
-        up_to_id: Id | Unset | None = UNSET,
-        calculate_total: bool | Unset = UNSET,
+        since_query_state: str | ResultRef[Any],
+        # `filter` mirrors the wire name.
+        filter: Mapping[str, Any] | ResultRef[Any] | Unset | None = UNSET,
+        sort: Sequence[Mapping[str, Any]] | ResultRef[Any] | Unset | None = UNSET,
+        max_changes: UnsignedInt | ResultRef[Any] | Unset | None = UNSET,
+        up_to_id: Id | ResultRef[Any] | Unset | None = UNSET,
+        calculate_total: bool | ResultRef[Any] | Unset = UNSET,
         **extra: Any,
     ) -> Handle[QueryChangesResponse]:
         """How a previous query's results have shifted.
@@ -194,13 +228,14 @@ class Settable(EntityBase[T]):
 
     __slots__ = ()
 
+    @builder
     def set(
         self,
         *,
-        create: Mapping[str, Any] | Unset | None = UNSET,
-        update: Mapping[str, Mapping[str, Any]] | Unset | None = UNSET,
-        destroy: Sequence[Id] | Unset | None = UNSET,
-        if_in_state: str | Unset | None = UNSET,
+        create: Mapping[str, Creation] | ResultRef[Any] | Unset | None = UNSET,
+        update: Mapping[str, Mapping[str, Any]] | ResultRef[Any] | Unset | None = UNSET,
+        destroy: Sequence[Id | CreationRef] | ResultRef[Any] | Unset | None = UNSET,
+        if_in_state: str | ResultRef[Any] | Unset | None = UNSET,
         **extra: Any,
     ) -> Handle[SetResponse[T]]:
         """Create, update and destroy in one atomic call.
@@ -209,8 +244,9 @@ class Settable(EntityBase[T]):
         read: it makes the call fail with ``stateMismatch`` rather than applying
         to a state that has moved on, and it is what makes a retry safe.
 
-        ``update`` takes PatchObjects, not whole objects - see
-        :mod:`jmap.core.patch`.
+        ``create`` takes typed models as well as mappings: a model sends the
+        fields it was given, and nothing it was not. ``update`` takes
+        PatchObjects, not whole objects - see :mod:`jmap.core.patch`.
         """
         return self._add(
             "set",
@@ -229,15 +265,16 @@ class Copyable(EntityBase[T]):
 
     __slots__ = ()
 
+    @builder
     def copy(
         self,
         *,
-        from_account_id: Id,
-        create: Mapping[str, Any],
-        if_from_in_state: str | Unset | None = UNSET,
-        if_in_state: str | Unset | None = UNSET,
-        on_success_destroy_original: bool | Unset = UNSET,
-        destroy_from_if_in_state: str | Unset | None = UNSET,
+        from_account_id: Id | ResultRef[Any],
+        create: Mapping[str, Creation] | ResultRef[Any],
+        if_from_in_state: str | ResultRef[Any] | Unset | None = UNSET,
+        if_in_state: str | ResultRef[Any] | Unset | None = UNSET,
+        on_success_destroy_original: bool | ResultRef[Any] | Unset = UNSET,
+        destroy_from_if_in_state: str | ResultRef[Any] | Unset | None = UNSET,
         **extra: Any,
     ) -> Handle[CopyResponse[T]]:
         """Copy objects from another account.

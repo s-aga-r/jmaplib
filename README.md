@@ -591,6 +591,7 @@ These all raise before anything reaches the wire:
 
 | Situation | Error |
 |---|---|
+| Builder argument of the wrong type or range - `ids="m1"`, `limit=-5` | `pydantic.ValidationError` |
 | Method no advertised capability provides | `UnsupportedMethodError` |
 | Mutation aimed at a read-only account | `ReadOnlyAccountError` |
 | No `accountId`, and no single account to resolve one | `NoAccountError` |
