@@ -370,6 +370,19 @@ def parse_token_response(document: Any, *, now: float) -> dict[str, Any]:
     access_token = body.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise OAuthError("invalid_response", description="the token response had no access_token")
+    token_type = body.get("token_type")
+    # This library presents Bearer tokens (RFC 6750) and nothing else, and RFC
+    # 6749 §7.1 says a client MUST NOT use a token whose type it does not
+    # understand: a DPoP- or MAC-bound token sent as Bearer is refused anyway.
+    # An absent type is REQUIRED by §5.1, but enough servers leave it out that
+    # refusing it would lock their users out over nothing, so it reads as Bearer.
+    if token_type is not None and (
+        not isinstance(token_type, str) or token_type.lower() != "bearer"
+    ):
+        raise OAuthError(
+            "unsupported_token_type",
+            description=f"the token is of type {token_type!r}; only Bearer tokens are presented",
+        )
     expires_in = body.get("expires_in")
     refresh_token = body.get("refresh_token")
     scope = body.get("scope")

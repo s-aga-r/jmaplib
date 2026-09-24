@@ -202,3 +202,7 @@ recommends, or a 401 - the library raises `InsufficientScopeError` rather than a
 generic error, whatever the credential. Its `challenges` are the header values as
 sent, so `parse_challenges(error.challenges)` gives back the scope the server
 named, to re-authorize with instead of guessing.
+
+A token response naming a type other than Bearer - DPoP, say - is refused with
+`OAuthError("unsupported_token_type")`: the library presents Bearer tokens only,
+and RFC 6749 §7.1 forbids using a token of a type the client does not understand.

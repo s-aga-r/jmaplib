@@ -938,6 +938,24 @@ class TestPolling:
 
 
 class TestTokenResponses:
+    @pytest.mark.parametrize("token_type", ["DPoP", "mac", 7])
+    def test_a_token_of_another_type_is_refused(self, token_type):
+        # It was sent as a Bearer token regardless; RFC 6749 §7.1 says a client
+        # MUST NOT use a token of a type it does not understand.
+        with pytest.raises(OAuthError, match="unsupported_token_type"):
+            parse_token_response({"access_token": "t", "token_type": token_type}, now=0.0)
+
+    @pytest.mark.parametrize("token_type", ["Bearer", "bearer", "BEARER"])
+    def test_bearer_is_bearer_in_any_case(self, token_type):
+        # RFC 6749 §5.1: the value is case-insensitive.
+        parsed = parse_token_response({"access_token": "t", "token_type": token_type}, now=0.0)
+        assert parsed["access_token"] == "t"
+
+    def test_a_missing_token_type_is_taken_for_bearer(self):
+        # REQUIRED by RFC 6749 §5.1, and left out by enough servers that
+        # refusing it would lock their users out over nothing.
+        assert parse_token_response({"access_token": "t"}, now=0.0)["access_token"] == "t"
+
     def test_the_access_token_is_returned(self):
         parsed = parse_token_response({"access_token": "t", "token_type": "Bearer"}, now=1000.0)
         assert parsed["access_token"] == "t"
