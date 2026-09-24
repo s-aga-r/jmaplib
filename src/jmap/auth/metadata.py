@@ -181,7 +181,7 @@ class ProtectedResourceMetadata(OAuthDocument):
                 "requires; without it nothing ties the document to the server it is for"
             )
         if fetched_from is not None and _is_protected_resource_url(fetched_from):
-            published = _protected_resource_location(claimed)
+            published = protected_resource_url(claimed)
             if published != _without_fragment(fetched_from):
                 raise ResourceMismatchError(
                     claimed,
@@ -222,7 +222,7 @@ def _is_protected_resource_url(url: str) -> bool:
     return path == _PROTECTED_RESOURCE_PATH or path.startswith(f"{_PROTECTED_RESOURCE_PATH}/")
 
 
-def _protected_resource_location(resource: str) -> str:
+def protected_resource_url(resource: str) -> str:
     """Where RFC 9728 §3 publishes ``resource``'s metadata.
 
     The segment goes between the host and the path *and query*, which is why

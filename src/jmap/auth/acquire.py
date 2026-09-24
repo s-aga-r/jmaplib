@@ -55,13 +55,13 @@ from jmap.auth.flows import (
 )
 from jmap.auth.metadata import (
     AUTHORIZATION_SERVER_SUFFIX,
-    PROTECTED_RESOURCE_SUFFIX,
     AuthorizationServerMetadata,
     DiscoveryError,
     ProtectedResourceMetadata,
     openid_url,
     well_known_url,
 )
+from jmap.auth.metadata import protected_resource_url as protected_resource_url
 from jmap.auth.pkce import PKCEPair, new_state
 from jmap.core.errors import TransportError
 from jmap.core.ijson import loads
@@ -704,8 +704,3 @@ def _absolute(pointer: str, resource: str | None) -> str:
             f"401 carried it, to resolve it against"
         )
     return urljoin(resource, pointer)
-
-
-def protected_resource_url(resource: str) -> str:
-    """The RFC 9728 well-known URL for a resource, when no challenge named one."""
-    return well_known_url(resource, PROTECTED_RESOURCE_SUFFIX)

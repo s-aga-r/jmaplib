@@ -19,7 +19,6 @@ from jmap.auth.acquire import (
     OAuthClient,
     RedirectTimeoutError,
     loopback_receiver,
-    protected_resource_url,
 )
 from jmap.auth.challenge import Challenge, find_challenge, parse_challenges
 from jmap.auth.credentials import (
@@ -57,6 +56,7 @@ from jmap.auth.metadata import (
     ProtectedResourceMetadata,
     ResourceMismatchError,
     openid_url,
+    protected_resource_url,
     well_known_url,
 )
 from jmap.auth.pkce import (

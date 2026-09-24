@@ -333,6 +333,14 @@ class TestDiscovery:
             "https://jmap.example.com/.well-known/oauth-protected-resource/t"
         )
 
+    def test_the_protected_resource_url_keeps_a_query(self):
+        # RFC 9728 §3.1 inserts the segment before the path *and query*;
+        # dropped, two tenants differing only there shared one document.
+        url = protected_resource_url("https://jmap.example.com/api?tenant=acme")
+        assert (
+            url == "https://jmap.example.com/.well-known/oauth-protected-resource/api?tenant=acme"
+        )
+
     def test_the_full_chain_closes_a_client_it_opened(self):
         # No `http=`, so it made its own. A leaked connection pool per discovery
         # is the kind of thing nothing notices until a long-running process dies.
