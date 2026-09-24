@@ -242,7 +242,36 @@ for exactly which revision of each spec this build implements.
   sign-in future work, and the sync guide said a view refuses a delta computed
   for another filter, which it cannot tell apart. Both are corrected.
 
+- **`PushKeys` sent its public key as `p256Dh`.** The camelCase generator
+  capitalises a letter after a digit, so a subscription whose `keys` came from the
+  model carried the key under a name no server reads; reading one back worked
+  only because the field name matched. It goes out as RFC 8620 §7.2's `p256dh`,
+  and the alias guard now covers digits as well as acronyms.
+- **`/set` and `/copy` refused a typed model to create.** `Blob/upload` and
+  `MDN/send` took one, and said every builder did, but a `Mailbox` in a
+  `Mailbox/set` failed as `TypeError: Object of type Mailbox is not JSON
+  serializable`. Any object with a `to_wire()` is now serialised through it,
+  wherever in the arguments it sits.
+
 ### Added
+
+- **Arguments are checked with pydantic before anything is sent.** Every builder
+  validates its arguments against its signature, strictly - ids, states, limits,
+  filters, sorts, patches, objects to create - so `ids="m1"`, `limit=-5` or
+  `calculate_total="yes"` raise pydantic's `ValidationError`, a `ValueError`
+  titled with the call (`Email.get`), where they were written. `UNSET` and a
+  back-reference go through unchecked, and every standard builder's arguments now
+  admit a `ResultRef`, as RFC 8620 §3.7 does. The push helpers
+  (`new_subscription`, `renewal_update`, `verification_update`,
+  `event_source_url`) and `QuerySpec.build` check theirs the same way.
+- **`RetryPolicy`, `OAuth2Token` and `SRVTarget` are pydantic dataclasses,**
+  checked when they are made - and `OAuth2Token` whenever a field is assigned.
+  `dataclasses.asdict(token)` is what a `TokenStore` needs to keep, and
+  `OAuth2Token(**saved)` restores it.
+- `jmap.models.arguments`: the `checked` decorator the builders use, and the
+  `Int`, `UnsignedInt` and `UTCDate` argument types (RFC 8620 §1.3, §1.4).
+- `jmap.api.entity.builder`, `jmap.api.entity.Creation` and `EntityBase.type_name`.
+- `new_subscription(keys=...)` takes a `PushKeys` model as well as a mapping.
 
 - `Batch.requests()`, which yields a batch's requests one at a time, each carrying
   the creation ids learnt so far - the lazy form of `plan()` that both clients now
@@ -295,6 +324,22 @@ for exactly which revision of each spec this build implements.
   gets `InsufficientScopeError` instead.
 - **`listen()` redials after a 429 or a 5xx** instead of raising `RequestError`.
 - **`AddedItem.id` and `AddedItem.index` are required.**
+- **Builders refuse arguments they used to pass on.** Anything their signatures
+  do not allow now raises `ValidationError` before the call is queued, where it
+  went to the server as it was - including a `max_changes` of 0 on `/changes`,
+  which RFC 8620 §5.2 has the server reject, and one type name given to
+  `Blob/lookup`, which was read as a list of letters. Calling a builder with the
+  wrong arguments is still a `TypeError`, now naming the call.
+- **`RetryPolicy` refuses a policy that cannot work:** no attempts
+  (`max_attempts=0` behaved as 1), a negative or non-finite delay, a
+  `multiplier` below 1, or a value of the wrong type. An unknown field raises
+  `ValidationError` rather than `TypeError`, as it does on `OAuth2Token` and
+  `SRVTarget`.
+- **`OAuth2Token` refuses an empty access token** and an expiry that is not a
+  finite number; a `SRVTarget` one naming no host or port a URL can carry.
+- **`new_subscription` needs a non-empty `device_client_id`,** and an `expires`
+  that is a UTCDate; `event_source_url` a `close_after` of `"state"` or `"no"`
+  and a `ping` of at least 0.
 
 ## 1.1.0
 
