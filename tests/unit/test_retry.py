@@ -6,9 +6,12 @@ it have applied?". Getting this wrong duplicates drafts and double-sends mail.
 
 from __future__ import annotations
 
+import dataclasses
 import email.utils
+import math
 
 import pytest
+from pydantic import ValidationError
 
 from jmap.core.errors import URN_LIMIT, URN_UNKNOWN_CAPABILITY
 from jmap.core.retry import (
@@ -132,6 +135,55 @@ class TestPause:
 
     def test_a_negative_hint_is_clamped(self):
         assert RetryPolicy().pause(1, retry_after=-5.0) == 0.0
+
+
+class TestPolicyValidation:
+    """A policy is checked when it is made, not when the first retry needs it:
+    a negative backoff used to surface as time.sleep's ValueError in the middle
+    of a failing request."""
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"max_attempts": 0},
+            {"initial_backoff": -1.0},
+            {"max_backoff": -1.0},
+            {"multiplier": 0.5},
+            {"max_retry_after": -1.0},
+            {"initial_backoff": math.nan},
+            {"max_backoff": math.inf},
+            {"max_attempts": "3"},
+            {"max_attempts": True},
+            {"multiplier": "2"},
+            # A misspelt field is refused, not ignored: the policy it leaves
+            # behind is the default, which is not what was asked for.
+            {"max_attemps": 5},
+        ],
+    )
+    def test_nonsense_is_refused(self, fields):
+        with pytest.raises(ValidationError):
+            RetryPolicy(**fields)
+
+    def test_one_attempt_is_no_retries(self):
+        policy = RetryPolicy(max_attempts=1)
+        assert not should_retry(Safety.NEVER_APPLIED, policy=policy, attempt=1, mutating=False)
+
+    def test_whole_seconds_are_accepted_for_any_delay(self):
+        policy = RetryPolicy(initial_backoff=0, max_backoff=10, max_retry_after=60)
+        assert (policy.initial_backoff, policy.max_backoff) == (0.0, 10.0)
+        assert policy.backoff(3) == 0.0
+
+    def test_a_replacement_is_checked_too(self):
+        with pytest.raises(ValidationError):
+            dataclasses.replace(RetryPolicy(), multiplier=-2.0)
+
+    def test_it_is_still_a_frozen_hashable_dataclass(self):
+        policy = RetryPolicy(max_attempts=5)
+        assert dataclasses.is_dataclass(policy)
+        assert policy == RetryPolicy(max_attempts=5)
+        assert hash(policy) == hash(RetryPolicy(max_attempts=5))
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            policy.max_attempts = 6  # type: ignore[misc]
 
 
 class TestParseRetryAfter:

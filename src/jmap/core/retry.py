@@ -27,9 +27,11 @@ an already-applied request is rejected rather than duplicated.
 from __future__ import annotations
 
 import email.utils
-from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Annotated, Final
+
+from pydantic import ConfigDict, Field
+from pydantic.dataclasses import dataclass
 
 from jmap.core.errors import URN_LIMIT
 
@@ -97,21 +99,38 @@ def classify(
     return Safety.FUTILE
 
 
-@dataclass(frozen=True, slots=True)
+#: A delay in seconds: not negative, and finite - ``time.sleep`` takes neither
+#: a negative number nor NaN, and an infinite wait is a hang.
+_Seconds = Annotated[float, Field(ge=0, allow_inf_nan=False)]
+
+
+#: Strict, and closed: a misspelt field left the policy at its default, unnoticed.
+_POLICY: Final = ConfigDict(strict=True, extra="forbid")
+
+
+@dataclass(frozen=True, slots=True, config=_POLICY)
 class RetryPolicy:
     """How often and how fast to retry.
 
     Defaults are deliberately timid. A JMAP batch can carry a lot of work, and
     the failure modes worth retrying are transient by definition.
+
+    Every field is checked when the policy is made - it is a pydantic
+    dataclass, strict, so ``"3"`` is not a number either, and a misspelt field
+    is an error rather than ignored. A policy that could not work is refused
+    there, rather than surfacing as ``time.sleep``'s ``ValueError`` in the
+    middle of a failing request.
     """
 
-    max_attempts: int = 3
-    initial_backoff: float = 0.5
-    max_backoff: float = 30.0
-    multiplier: float = 2.0
+    #: Every attempt, the first included: 1 never retries.
+    max_attempts: Annotated[int, Field(ge=1)] = 3
+    initial_backoff: _Seconds = 0.5
+    max_backoff: _Seconds = 30.0
+    #: At least 1: a backoff that shrinks as failures mount is not a backoff.
+    multiplier: Annotated[float, Field(ge=1, allow_inf_nan=False)] = 2.0
     #: The longest a server-supplied ``Retry-After`` is waited out, in seconds.
     #: A server asking for longer gets no retry at all - see :meth:`pause`.
-    max_retry_after: float = 120.0
+    max_retry_after: _Seconds = 120.0
 
     def backoff(self, attempt: int, *, retry_after: float | None = None) -> float:
         """Delay before ``attempt`` (1-based, so attempt 2 is the first retry).

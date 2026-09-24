@@ -107,9 +107,14 @@ ignore = [
 known-first-party = ["jmap"]
 
 [tool.ruff.lint.flake8-type-checking]
-# A checked function resolves its annotations when it is first called, so every
-# name in its signature must be imported at run time.
-runtime-evaluated-decorators = ["jmap.models.arguments.checked", "jmap.api.entity.builder"]
+# These resolve annotations at run time - a checked function's when it is first
+# called, a pydantic dataclass's when it is defined - so every name one uses must
+# be imported at run time.
+runtime-evaluated-decorators = [
+    "jmap.models.arguments.checked",
+    "jmap.api.entity.builder",
+    "pydantic.dataclasses.dataclass",
+]
 
 # --------------------------------------------------------------------------- #
 # Type checking

@@ -167,5 +167,10 @@ policy = RetryPolicy(max_attempts=5, initial_backoff=0.5, max_backoff=30.0, mult
 client = JMAPClient.connect(url, auth=auth, retry_policy=policy)
 ```
 
+A policy is checked when it is made: at least one attempt, delays that are
+finite and not negative, and a `multiplier` of at least 1. One that could not
+work raises `ValidationError` there, not `time.sleep`'s `ValueError` in the
+middle of a failing request.
+
 `Retry-After` from the server always wins over the computed backoff. A server
 asking to be left alone for thirty seconds means it.
