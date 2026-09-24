@@ -63,10 +63,21 @@ replayed - ten parallel refreshes would lock the user out.
 a one-method protocol; implement `save(token)` against whatever you use:
 
 ```python
+import dataclasses
+
+
 class MyStore:
     def save(self, token: OAuth2Token) -> None:
-        write_somewhere(token.access_token, token.refresh_token, token.expires_at)
+        write_somewhere(dataclasses.asdict(token))
+
+
+token = OAuth2Token(**read_back())
 ```
+
+`OAuth2Token` is a pydantic dataclass, and `dataclasses.asdict` gives all four of
+its fields. Each is checked when a token is made and whenever one is assigned,
+so a token restored with an expiry saved as a string, or an empty access token,
+fails there rather than inside the next request's auth flow.
 
 If `save` raises, the new token is used anyway - the refresh may already have
 retired the old one, and presenting that again is a replay a rotating server

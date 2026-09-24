@@ -25,9 +25,12 @@ from __future__ import annotations
 import base64
 import threading
 import time
-from typing import TYPE_CHECKING, Final, Protocol
+from dataclasses import KW_ONLY
+from typing import TYPE_CHECKING, Annotated, Final, Protocol
 
 import httpx
+from pydantic import ConfigDict, Field
+from pydantic.dataclasses import dataclass
 
 from jmap.auth.challenge import find_challenge, parse_challenges
 from jmap.core.errors import AuthenticationError
@@ -155,32 +158,35 @@ class TokenStore(Protocol):
     def save(self, token: OAuth2Token) -> None: ...
 
 
+@dataclass(
+    slots=True,
+    repr=False,
+    # Compared by identity, as it always was: a token that could be equal to
+    # another could not be hashed, and a store may key by one.
+    eq=False,
+    # Closed as well as strict: a misspelt field was otherwise dropped, and a
+    # token restored without its refresh token cannot be renewed.
+    config=ConfigDict(strict=True, extra="forbid", validate_assignment=True),
+)
 class OAuth2Token:
-    """An access token and what is needed to renew it."""
+    """An access token and what is needed to renew it.
 
-    __slots__ = ("access_token", "expires_at", "refresh_token", "scope")
+    A pydantic dataclass, checked when it is made and whenever a field is
+    assigned: a token is often rebuilt from storage, and an expiry stored as a
+    string used to fail much later, inside the auth flow of whichever request
+    came next. ``dataclasses.asdict(token)`` is what a :class:`TokenStore` needs
+    to keep, and ``OAuth2Token(**stored)`` restores it.
+    """
 
-    access_token: str
-    refresh_token: str | None
+    access_token: Annotated[str, Field(min_length=1)]
+    _: KW_ONLY
+    refresh_token: str | None = None
     #: Unix-time deadline (seconds since the epoch, compare against
     #: ``time.time()``), or ``None`` when the server did not say. Wall clock
     #: rather than monotonic because :class:`TokenStore` persists it, and a
     #: monotonic value is meaningless in any other process.
-    expires_at: float | None
-    scope: str | None
-
-    def __init__(
-        self,
-        access_token: str,
-        *,
-        refresh_token: str | None = None,
-        expires_at: float | None = None,
-        scope: str | None = None,
-    ) -> None:
-        self.access_token = access_token
-        self.refresh_token = refresh_token
-        self.expires_at = expires_at
-        self.scope = scope
+    expires_at: Annotated[float, Field(allow_inf_nan=False)] | None = None
+    scope: str | None = None
 
     def expires_within(self, seconds: float, *, now: float) -> bool:
         """Whether the token expires inside ``seconds``.

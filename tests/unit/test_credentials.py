@@ -8,10 +8,14 @@ auth objects - including that it stops when we stop yielding.
 from __future__ import annotations
 
 import base64
+import dataclasses
+import math
+import pickle
 import threading
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from jmap.auth import (
     AppPasswordAuth,
@@ -110,6 +114,63 @@ class TestOAuth2Token:
         text = repr(OAuth2Token("super-secret", scope="mail"))
         assert "super-secret" not in text
         assert "mail" in text
+
+
+class TestOAuth2TokenValidation:
+    """A token is often rebuilt from storage, and a field of the wrong type used
+    to surface much later - an expiry stored as a string raised TypeError from
+    inside the auth flow of whatever request came next."""
+
+    @pytest.mark.parametrize(
+        ("args", "fields"),
+        [
+            (("",), {}),
+            ((None,), {}),
+            (("a",), {"expires_at": "soon"}),
+            (("a",), {"expires_at": math.nan}),
+            (("a",), {"expires_at": math.inf}),
+            (("a",), {"refresh_token": 5}),
+            (("a",), {"scope": ["mail"]}),
+            # Misspelt: ignoring it would drop the refresh token unnoticed.
+            (("a",), {"refresh_tokn": "r"}),
+        ],
+    )
+    def test_a_field_of_the_wrong_kind_is_refused(self, args, fields):
+        with pytest.raises(ValidationError):
+            OAuth2Token(*args, **fields)
+
+    def test_an_expiry_in_whole_seconds_is_accepted(self):
+        assert OAuth2Token("a", expires_at=1786000000).expires_at == 1786000000.0
+
+    def test_only_the_access_token_is_positional(self):
+        with pytest.raises(ValidationError, match="positional"):
+            OAuth2Token("a", "refresh")  # type: ignore[call-arg]
+
+    def test_an_assignment_is_checked_too(self):
+        token = OAuth2Token("a")
+        with pytest.raises(ValidationError):
+            token.expires_at = "soon"  # type: ignore[assignment]
+        token.expires_at = 5.0
+        assert token.expires_at == 5.0
+
+    def test_it_round_trips_through_a_store(self):
+        # asdict() is what to persist, and the constructor checks it on the way back.
+        token = OAuth2Token("a", refresh_token="r", expires_at=5.0, scope="mail")
+        stored = dataclasses.asdict(token)
+        assert stored == {
+            "access_token": "a",
+            "refresh_token": "r",
+            "expires_at": 5.0,
+            "scope": "mail",
+        }
+        restored = OAuth2Token(**stored)
+        assert (restored.access_token, restored.refresh_token) == ("a", "r")
+        assert pickle.loads(pickle.dumps(token)).scope == "mail"
+
+    def test_it_is_compared_by_identity_as_it_always_was(self):
+        token = OAuth2Token("a")
+        assert token != OAuth2Token("a")
+        assert {token: 1}[token] == 1
 
 
 class TestOAuth2Refresh:
