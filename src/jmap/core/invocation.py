@@ -342,5 +342,7 @@ class Handle(Generic[R]):
         return self._resolved
 
     def __repr__(self) -> str:
-        state = "pending" if not self._resolved else ("error" if self._error else "ok")
+        # The properties, not the fields: a ChunkedHandle answers them from its
+        # chunks and never sets its own.
+        state = "pending" if not self.is_resolved else ("error" if self.error else "ok")
         return f"Handle({self.call.name!r}, id={self.call_id!r}, {state})"

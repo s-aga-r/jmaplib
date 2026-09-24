@@ -218,6 +218,13 @@ class TestChunkedHandle:
         assert handle.ref("/state").result_of == handle.chunks[0].call_id
         assert handle.ref("/accountId").path == "/accountId"
 
+    def test_its_repr_follows_its_chunks(self):
+        # It read the resolution flag of a handle nobody resolves, so a chunked
+        # /get that had finished still said "pending".
+        handle = self._handle([get_response("s", ["m1"]), get_response("s", ["m2"])])
+        assert "ok" in repr(handle)
+        assert "pending" not in repr(handle)
+
     def test_a_failed_chunk_surfaces_as_the_handles_error(self):
         ok: Handle[Any] = Handle("c0", MethodCall("Email/get", {}, parse=dict))
         ok.fulfil(get_response("s", ["m1"]))
@@ -226,6 +233,7 @@ class TestChunkedHandle:
 
         handle = ChunkedHandle([ok, bad])
         assert handle.error is not None
+        assert "error" in repr(handle)
         with pytest.raises(MethodError, match="requestTooLarge"):
             _ = handle.result
 
