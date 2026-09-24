@@ -261,6 +261,24 @@ class TestQueryViewApply:
         assert view.total == 2
         assert len(view.ids) == 2
 
+    def test_a_delta_without_a_total_leaves_none_rather_than_a_stale_one(self):
+        # The old total described the list before the delta; kept, it made
+        # len() report positions that had just been removed.
+        view = QueryView(
+            QuerySpec.build("Email", "a"),
+            ids=["m1", "m2", "m3"],
+            query_state="q1",
+            total=3,
+            can_calculate_changes=True,
+        )
+        view.apply(
+            QueryChangesResponse.model_validate(
+                {"oldQueryState": "q1", "newQueryState": "q2", "removed": ["m1", "m2"]}
+            )
+        )
+        assert view.total is None
+        assert len(view) == 1
+
     def test_a_delta_from_another_state_is_refused(self):
         # Applying out of order corrupts the list undetectably.
         view = self._view()

@@ -292,7 +292,10 @@ class QueryView:
         ids = splice(self.ids, removed=response.removed, added=response.added)
         if response.total is not None:
             del ids[_checked_total(response.total) :]
-            self.total = response.total
+        # A delta that reports no total leaves it unknown. The old one counted
+        # positions before this delta added or removed any, and kept, it had
+        # len() report rows that were gone.
+        self.total = response.total
         self.ids = ids
         self.query_state = response.new_query_state or ""
 
