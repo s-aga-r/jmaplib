@@ -341,6 +341,34 @@ class TestDiscovery:
             url == "https://jmap.example.com/.well-known/oauth-protected-resource/api?tenant=acme"
         )
 
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "https://auth.example.com/tok\nen",
+            "https://auth.example.com/tok en",
+            "https://auth.example.com:port/token",
+        ],
+    )
+    def test_an_endpoint_url_httpx_cannot_use_is_a_discovery_error(self, endpoint):
+        # urlsplit drops tabs and newlines, so the https check read a different
+        # URL from the one httpx was handed - and httpx.InvalidURL is no
+        # HTTPError, so it escaped every except around the request.
+        router = Router()
+        with (
+            OAuthClient(
+                metadata(token_endpoint=endpoint), client_id="c", http=router.client()
+            ) as client,
+            pytest.raises(DiscoveryError),
+        ):
+            client.refresh("rt")
+        assert router.requests == []
+
+    def test_a_discovery_url_httpx_cannot_use_is_a_discovery_error(self):
+        router = Router()
+        with pytest.raises(DiscoveryError):
+            OAuthClient.discover_from_issuer("https://auth.example.com:port", http=router.client())
+        assert router.requests == []
+
     def test_the_full_chain_closes_a_client_it_opened(self):
         # No `http=`, so it made its own. A leaked connection pool per discovery
         # is the kind of thing nothing notices until a long-running process dies.

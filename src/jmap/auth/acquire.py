@@ -86,6 +86,11 @@ _MAX_REDIRECTS: Final = 10
 #: URLs this module prints are the one line the user is told to trust.
 _CONTROL_CHARS: Final = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
+#: What no URL may contain: C0 controls, space and DEL. ``urlsplit`` deletes tabs
+#: and newlines before parsing, so a check made through it reads a different URL
+#: from the one httpx is given.
+_NOT_URL: Final = re.compile(r"[\x00-\x20\x7f]")
+
 
 def _require_https(url: str, *, purpose: str) -> str:
     """Refuse to carry credentials to a non-TLS endpoint.
@@ -97,15 +102,18 @@ def _require_https(url: str, *, purpose: str) -> str:
     then travel in the clear to an endpoint it controls.
     """
     split = urlsplit(url)
-    if split.scheme == "https":
-        return url
-    if split.scheme == "http" and (split.hostname or "").lower() in _LOOPBACK_HOSTS:
-        return url
-    raise DiscoveryError(
-        f"{purpose} must be https (or http on loopback for development), got {url!r}; "
-        f"OAuth credentials travel through this exchange and cleartext hands them "
-        f"to the network"
-    )
+    loopback = split.scheme == "http" and (split.hostname or "").lower() in _LOOPBACK_HOSTS
+    if split.scheme != "https" and not loopback:
+        raise DiscoveryError(
+            f"{purpose} must be https (or http on loopback for development), got {url!r}; "
+            f"OAuth credentials travel through this exchange and cleartext hands them "
+            f"to the network"
+        )
+    if _NOT_URL.search(url):
+        # What this check read is not what httpx would request: urlsplit
+        # deleted the tabs and newlines first.
+        raise DiscoveryError(f"{purpose} {url!r} contains whitespace or control characters")
+    return url
 
 
 def _printable(text: str) -> str:
@@ -601,6 +609,9 @@ class OAuthClient:
                 follow_redirects=False,
                 headers={"Accept": "application/json"},
             )
+        except httpx.InvalidURL as exc:
+            # Not an HTTPError, so it slipped past the clause below.
+            raise DiscoveryError(f"{endpoint!r} is not a usable URL: {exc}") from exc
         except httpx.HTTPError as exc:
             raise TransportError(f"could not reach {endpoint}: {exc}") from exc
 
@@ -650,7 +661,7 @@ def _fetch_json(client: httpx.Client, url: str) -> Any:
                 raise DiscoveryError(f"{url} redirected more than {_MAX_REDIRECTS} times")
             _require_https(str(hop.url), purpose="a redirect in the discovery chain")
             response = client.send(hop, auth=None, follow_redirects=False)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         raise DiscoveryError(f"could not fetch {url}: {exc}") from exc
     if response.status_code >= httpx.codes.BAD_REQUEST:
         raise DiscoveryError(f"{url} answered HTTP {response.status_code}")
