@@ -46,10 +46,13 @@ from jmap.models.responses import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from jmap.batch import Batch
     from jmap.capabilities.spec import CapabilitySpec, DataTypeSpec
 
 T = TypeVar("T")
+_F = TypeVar("_F", bound="Callable[..., Any]")
 
 #: An object to create: the wire mapping, or a typed model, which serialises
 #: itself through ``to_wire()``.
@@ -82,10 +85,16 @@ def _type_name(entity: EntityBase[Any]) -> str:
     return entity.type_name
 
 
-#: Wraps every builder: its arguments are checked on each call, and a failure
-#: is titled with the data type and the builder - ``Email.get`` - rather than
-#: with the mixin that implements it for every type.
-builder = checked(subject=_type_name)
+def builder(method: _F) -> _F:
+    """Wrap a builder so its arguments are checked on each call.
+
+    See :func:`~jmap.models.arguments.checked`. A failure is titled with the
+    data type and the builder - ``Email.get`` - rather than with the mixin
+    that implements it for every type.
+    """
+    # A function, not a name bound to what checked() returns: that would be a
+    # variable whose type is inferred, and the public API declares its types.
+    return checked(subject=_type_name)(method)
 
 
 class Gettable(EntityBase[T]):
