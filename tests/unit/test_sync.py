@@ -159,6 +159,22 @@ class TestQuerySpec:
             "Email", "a", sort=tuple(sort)
         )
 
+    @pytest.mark.parametrize(
+        ("args", "fields"),
+        [
+            (("Email", "a"), {"sort": "receivedAt"}),
+            (("Email", "a"), {"sort": [("receivedAt", True)]}),
+            (("Email", "a"), {"filter": ["inMailbox"]}),
+            (("Email", "a"), {"collapse_threads": "yes"}),
+            (("Email", 1), {}),
+        ],
+    )
+    def test_the_parts_of_a_query_are_checked(self, args, fields):
+        # A sort given as a string was keyed by its repr(): a spec for a query
+        # no server runs, since /query takes a list of comparators.
+        with pytest.raises(ValidationError, match=r"QuerySpec\.build"):
+            QuerySpec.build(*args, **fields)
+
     def test_any_mapping_is_keyed_by_its_contents(self):
         first = QuerySpec.build("Email", "a", filter={"inMailbox": "m1", "hasKeyword": "x"})
         second = QuerySpec.build(

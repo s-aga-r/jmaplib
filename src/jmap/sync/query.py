@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from jmap.core.errors import JMAPError
+from jmap.models.arguments import checked
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -133,6 +134,7 @@ class QuerySpec:
     collapse_threads: bool = False
 
     @classmethod
+    @checked
     def build(
         cls,
         type_name: str,
@@ -142,6 +144,11 @@ class QuerySpec:
         sort: Sequence[Mapping[str, Any]] | None = None,
         collapse_threads: bool = False,
     ) -> QuerySpec:
+        """The spec for one query, from the arguments it is sent with.
+
+        They are checked first: a sort given as a string was keyed by its
+        ``repr()``, making a spec - and a state key - no real query matches.
+        """
         return cls(
             type_name=type_name,
             account_id=account_id,
