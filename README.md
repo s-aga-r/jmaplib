@@ -62,7 +62,7 @@ misbehaves without it:
 
 ## Status
 
-**1.0.0** — the whole ecosystem. See [CHANGELOG.md](CHANGELOG.md).
+**1.1.0** — the whole ecosystem. See [CHANGELOG.md](CHANGELOG.md).
 
 | Milestone | Scope | State |
 |---|---|---|
@@ -665,8 +665,9 @@ Two behaviours here are correctness rather than preference:
   replayed, so concurrent 401s must produce exactly one refresh, and the new
   token must reach your `TokenStore` before the old one is dropped.
 
-Interactive OAuth *acquisition* (PKCE, device flow, RFC 9728/8414 discovery)
-lands after 0.1.0; for now you bring a token.
+Getting a token in the first place - PKCE in the browser, the device flow, and
+RFC 9728/8414 discovery of where to ask - is [Signing in](#signing-in) above, and
+[docs/auth.md](docs/auth.md) in full.
 
 Specs tracked: RFC 8620, 8621, 8887, 9007, 9219, 9404, 9425, 9553, 9555, 9610,
 9661, 9670, 9749, plus `draft-ietf-jmap-calendars-27` and

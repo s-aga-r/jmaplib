@@ -142,6 +142,19 @@ class TestEveryDocument:
                 pytest.fail(f"{path.name}: batch.add({name!r}) names no modelled method")
 
 
+class TestTheReadmeIsCurrent:
+    def test_the_status_names_this_release(self):
+        # It said 1.0.0 through the 1.1.0 release.
+        import jmap
+
+        assert f"**{jmap.__version__}**" in README.read_text()
+
+    def test_it_does_not_call_shipped_features_future_work(self):
+        # "Interactive OAuth acquisition ... lands after 0.1.0; for now you
+        # bring a token" - long after it shipped.
+        assert "for now you bring a token" not in README.read_text()
+
+
 class TestTheDocumentationIsWired:
     def test_every_guide_is_linked_from_the_index(self):
         index = (DOCS / "index.md").read_text()
