@@ -116,7 +116,15 @@ def to_wire_value(value: object, *, method: str, path: str) -> Any:
     Two JMAP-specific types can appear anywhere in an argument tree and neither
     is JSON: :class:`~jmap.core.ids.CreationRef` becomes its ``#id`` string, and
     a :class:`ResultRef` below the top level is refused outright.
+
+    Anything else with a ``to_wire()`` method - a typed model, a
+    :class:`~jmap.models.base.JMAPObject` - is replaced by what it returns,
+    converted in turn, so a model can go wherever its wire object can. Asked
+    for by name rather than by type: the kernel knows no models.
     """
+    if value is None or isinstance(value, (str, int, float)):
+        # Most of any argument tree, and none of it can hold anything to convert.
+        return value
     if isinstance(value, CreationRef):
         return str(value)
     if isinstance(value, ResultRef):
@@ -137,6 +145,9 @@ def to_wire_value(value: object, *, method: str, path: str) -> Any:
             to_wire_value(element, method=method, path=f"{path}/{index}")
             for index, element in enumerate(elements)
         ]
+    dump = getattr(value, "to_wire", None)
+    if callable(dump):
+        return to_wire_value(dump(), method=method, path=path)
     return value
 
 

@@ -188,7 +188,7 @@ with client.batch() as batch:
                 "subject": "Read receipt",
                 "disposition": Disposition(
                     action_mode=ACTION_MANUAL, sending_mode=SENDING_MANUAL, type=TYPE_DISPLAYED
-                ).to_wire(),
+                ),
             }
         },
     )

@@ -86,6 +86,62 @@ class TestCreationReferences:
         assert "#d1" in dumps(wire)
 
 
+class Wired:
+    """Anything with a ``to_wire()``, as a typed model has."""
+
+    def __init__(self, wire: Any) -> None:
+        self.wire = wire
+
+    def to_wire(self) -> Any:
+        return self.wire
+
+
+class TestObjectsThatSerialiseThemselves:
+    """A typed model goes wherever its wire object can: every object with a
+    ``to_wire()`` is replaced by what it returns."""
+
+    def test_an_object_is_replaced_by_its_wire_form(self):
+        args = call("Mailbox/set", create={"k": Wired({"name": "R"})}).to_wire_arguments()
+        assert args == {"create": {"k": {"name": "R"}}}
+
+    def test_a_top_level_argument_is_converted_too(self):
+        assert call("Mailbox/set", create=Wired({"k": {}})).to_wire_arguments() == {
+            "create": {"k": {}}
+        }
+
+    def test_the_wire_form_is_converted_in_turn(self):
+        wired = Wired({"parentId": CreationRef("p"), "tags": (Wired("t"),)})
+        args = call("Mailbox/set", create={"k": wired}).to_wire_arguments()
+        assert args["create"]["k"] == {"parentId": "#p", "tags": ["t"]}
+
+    def test_a_back_reference_it_hides_is_still_refused(self):
+        ref: ResultRef[Any] = ResultRef("c0", "Email/query", "/ids")
+        method = call("Mailbox/set", create={"k": Wired({"parentId": ref})})
+        with pytest.raises(NestedResultRefError) as excinfo:
+            method.to_wire_arguments()
+        assert excinfo.value.path == "/create/k/parentId"
+
+    def test_a_real_model_serialises_only_the_fields_it_was_given(self):
+        from jmap.core.ijson import dumps
+        from jmap.models.mail.objects import Mailbox
+
+        args = call("Mailbox/set", create={"k": Mailbox(name="R", parent_id=None)})
+        assert dumps(args.to_wire_arguments()) == '{"create":{"k":{"name":"R","parentId":null}}}'
+
+    @pytest.mark.parametrize("value", [object(), {1, 2}])
+    def test_anything_else_passes_through_for_json_to_judge(self, value):
+        # Unchanged, as before: serialisation is where a value JSON cannot
+        # carry is refused.
+        assert call(x=[value]).to_wire_arguments()["x"][0] is value
+
+    def test_a_to_wire_that_is_not_a_method_is_not_called(self):
+        class Named:
+            to_wire = "a property of the object, not a method"
+
+        value = Named()
+        assert call(x=value).to_wire_arguments() == {"x": value}
+
+
 class TestNestedBackReferences:
     """§3.7 renames the argument to carry a reference, so there is nowhere to put
     one that is not a whole top-level argument."""
