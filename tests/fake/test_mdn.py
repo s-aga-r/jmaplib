@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from jmap.auth import BasicAuth
 from jmap.capabilities.core import CORE, CORE_URN
@@ -21,6 +22,7 @@ from jmap.capabilities.registry import Registry
 from jmap.client import JMAPClient
 from jmap.models.mdn import (
     ACTION_MANUAL,
+    MDN,
     MDN_SENT_KEYWORD,
     SENDING_MANUAL,
     TYPE_DISPLAYED,
@@ -141,6 +143,35 @@ class TestSending:
         with connect(fake) as client, client.batch() as batch:
             batch.mdn.mdn.send(identity_id="i1", send={"k1": {"forEmailId": "m1"}})
         assert fake.requests[0]["methodCalls"][0][1]["send"]["k1"]["forEmailId"] == "m1"
+
+
+class TestArguments:
+    def test_a_receipt_may_be_a_model(self):
+        fake = server()
+        fake.respond("MDN/send", {"accountId": "a", "sent": {"k1": {"forEmailId": "m1"}}})
+        receipt_model = MDN(
+            for_email_id="m1",
+            disposition=Disposition(
+                action_mode=ACTION_MANUAL, sending_mode=SENDING_MANUAL, type=TYPE_DISPLAYED
+            ),
+        )
+        with connect(fake) as client, client.batch() as batch:
+            batch.mdn.mdn.send(identity_id="i1", send={"k1": receipt_model})
+        sent = fake.requests[0]["methodCalls"][0][1]["send"]["k1"]
+        assert sent["forEmailId"] == "m1"
+        assert sent["disposition"]["type"] == TYPE_DISPLAYED
+
+    def test_a_receipt_that_is_not_an_object_is_refused(self):
+        with connect(server()) as client, pytest.raises(ValidationError, match=r"MDN\.send"):
+            client.batch().mdn.mdn.send(identity_id="i1", send={"k1": "displayed"})
+
+    def test_blob_ids_to_parse_may_be_a_back_reference(self):
+        # EmailSubmission's mdnBlobIds is where receipts for mail you sent arrive.
+        with connect(server()) as client:
+            batch = client.batch()
+            submissions = batch.submission.email_submission.get(ids=["s1"])
+            parsed = batch.mdn.mdn.parse(blob_ids=submissions.ref_list("mdnBlobIds"))
+        assert parsed.call.to_wire_arguments()["#blobIds"]["path"] == "/list/*/mdnBlobIds"
 
 
 class TestUsingDerivation:

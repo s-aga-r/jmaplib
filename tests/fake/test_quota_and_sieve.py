@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from jmap.auth import BasicAuth
 from jmap.capabilities.blob import BLOB, BLOB_URN
@@ -15,6 +16,7 @@ from jmap.capabilities.registry import Registry
 from jmap.capabilities.sieve import SIEVE, SIEVE_URN
 from jmap.client import JMAPClient
 from jmap.core.errors import CapabilityFieldError
+from jmap.core.ids import CreationRef
 from jmap.models.blob import BlobUpload, DataSource
 from jmap.models.quota import ResourceType, Scope
 from jmap.testing import FakeJMAPServer
@@ -277,6 +279,15 @@ class TestActivation:
             batch.sieve.sieve_script.set(create={"A": {"blobId": "S7"}})
             batch.sieve.sieve_script.activate("#A")
         assert fake.requests[0]["methodCalls"][1][1]["onSuccessActivateScript"] == "#A"
+
+    def test_a_creation_ref_can_be_activated_as_well(self):
+        with connect(server()) as client:
+            activated = client.batch().sieve.sieve_script.activate(CreationRef("A"))
+        assert activated.call.to_wire_arguments()["onSuccessActivateScript"] == "#A"
+
+    def test_a_script_id_is_a_string(self):
+        with connect(server()) as client, pytest.raises(ValidationError, match="activate"):
+            client.batch().sieve.sieve_script.activate(7)
 
     def test_deactivate_sends_the_boolean(self):
         fake = server()

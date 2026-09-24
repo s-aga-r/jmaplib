@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from jmap.auth import BasicAuth
 from jmap.capabilities.blob import BLOB, BLOB_URN
@@ -467,13 +468,63 @@ class TestSurface:
             _ = batch.blob
 
 
+class TestArguments:
+    """Each builder checks its arguments before the call is queued."""
+
+    def test_a_range_is_unsigned(self):
+        with (
+            connect(server()) as client,
+            pytest.raises(ValidationError, match=r"Blob\.get") as excinfo,
+        ):
+            client.batch().blob.blob.get(ids=["G1"], offset=-1)
+        assert [error["loc"] for error in excinfo.value.errors()] == [("offset",)]
+
+    def test_type_names_are_a_list_not_one_name(self):
+        # tuple("Email") would ask about five one-letter types.
+        with connect(server()) as client, pytest.raises(ValidationError, match=r"Blob\.lookup"):
+            client.batch().blob.blob.lookup(type_names="Email", ids=["G1"])
+
+    def test_properties_given_as_a_back_reference_skip_the_digest_check(self):
+        # They name properties that do not exist yet; the server resolves them.
+        with connect(server(supportedDigestAlgorithms=[])) as client:
+            batch = client.batch()
+            echo = batch.add("Core/echo", {"properties": ["digest:md5"]})
+            fetched = batch.blob.blob.get(ids=["G1"], properties=echo.ref("/properties"))
+        assert fetched.call.to_wire_arguments()["#properties"]["path"] == "/properties"
+
+    def test_blob_ids_to_copy_may_be_a_back_reference(self):
+        with connect(server()) as client:
+            batch = client.batch()
+            uploaded = batch.blob.blob.upload(create={"k": {"data": []}})
+            copied = batch.core.blob.copy(
+                from_account_id="b", blob_ids=uploaded.ref("/created/k/id")
+            )
+        assert copied.call.to_wire_arguments()["#blobIds"]["path"] == "/created/k/id"
+
+    def test_blob_ids_to_copy_go_out_as_a_list(self):
+        with connect(server()) as client:
+            copied = client.batch().core.blob.copy(from_account_id="b", blob_ids=("G1", "G2"))
+        assert copied.call.arguments["blobIds"] == ["G1", "G2"]
+
+
 class TestEdges:
-    def test_an_upload_object_that_is_not_an_object_has_no_sources_to_check(self):
-        # Nothing local to validate, so it goes out and the server rejects it -
-        # which is the right division of labour for a malformed request.
-        fake = server(maxDataSources=0)
+    def test_an_upload_object_that_is_not_an_object_is_refused_locally(self):
+        fake = server()
+        with (
+            connect(fake) as client,
+            pytest.raises(ValidationError, match=r"Blob\.upload") as excinfo,
+            client.batch() as batch,
+        ):
+            batch.blob.blob.upload(create={"x": "not an object"})
+        assert {error["loc"][:2] for error in excinfo.value.errors()} == {("create", "x")}
+        assert fake.requests == []
+
+    def test_the_raw_path_still_reaches_the_server_which_refuses_it(self):
+        # batch.add checks nothing, so the fake must answer as a server would:
+        # notCreated, rather than falling over.
+        fake = server()
         with connect(fake) as client, client.batch() as batch:
-            failed = batch.blob.blob.upload(create={"x": "not an object"})
+            failed = batch.add("Blob/upload", {"create": {"x": "not an object"}})
         assert failed.result.has_errors
 
     def test_a_property_the_server_does_not_recognise_is_simply_absent(self):

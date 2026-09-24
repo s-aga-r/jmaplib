@@ -20,9 +20,10 @@ required to reject.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-from jmap.api.entity import EntityBase
+from jmap.api.entity import EntityBase, builder
 from jmap.capabilities.blob import (
     BLOB_URN,
     DIGEST_PREFIX,
@@ -33,36 +34,20 @@ from jmap.capabilities.blob import (
     check_lookup_types,
 )
 from jmap.capabilities.sieve import SIEVE_URN, SieveAccountCapability, check_script_name
+from jmap.core.ids import CreationRef, Id
+from jmap.core.invocation import Handle, ResultRef
 from jmap.core.narrow import as_list_of, as_object, is_object
-from jmap.models.base import UNSET, Unset, omit_unset
-from jmap.models.mdn import mdn_sent_patch
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-
-    from jmap.core.ids import Id
-    from jmap.core.invocation import Handle, ResultRef
-    from jmap.models.blob import Blob, BlobCopyResponse, BlobLookupResponse, BlobUpload
-    from jmap.models.mdn import MDNParseResponse, MDNSendResponse
-    from jmap.models.responses import GetResponse, SetResponse
-    from jmap.models.sieve import SieveValidateResponse
+from jmap.models.arguments import UnsignedInt
+from jmap.models.base import UNSET, JMAPModel, Unset, omit_unset
+from jmap.models.blob import Blob, BlobCopyResponse, BlobLookupResponse, BlobUpload
+from jmap.models.mdn import MDNParseResponse, MDNSendResponse, mdn_sent_patch
+from jmap.models.responses import GetResponse, SetResponse
+from jmap.models.sieve import SieveValidateResponse
 
 
-def _to_wire(value: Any) -> Any:
-    """Serialise a model, or pass a mapping straight through.
-
-    Callers should be able to hand these builders either a typed model or the raw
-    dict the wire wants, the way every other builder in the library accepts both.
-    """
-    dump = getattr(value, "to_wire", None)
-    return dump() if callable(dump) else value
-
-
-def _sources_of(upload: Any) -> list[Any]:
+def _sources_of(upload: Mapping[str, Any]) -> list[Any]:
     """The ``data`` array of one upload object, whatever shape it arrived in."""
-    if is_object(upload):
-        return as_list_of(as_object(upload).get("data") or [])
-    return []
+    return as_list_of(upload.get("data") or [])
 
 
 def _inline_octets(sources: list[Any]) -> int:
@@ -87,11 +72,19 @@ def _inline_octets(sources: list[Any]) -> int:
     return total
 
 
+def _ids(
+    ids: Sequence[Id | CreationRef] | ResultRef[Any],
+) -> list[Id | CreationRef] | ResultRef[Any]:
+    """A list of ids as the wire wants it, or a back-reference as it is."""
+    return ids if isinstance(ids, ResultRef) else list(ids)
+
+
 class BlobUploadable(EntityBase[Any]):
     """``Blob/upload`` (RFC 9404 §4.1)."""
 
     __slots__ = ()
 
+    @builder
     def upload(
         self,
         *,
@@ -110,7 +103,11 @@ class BlobUploadable(EntityBase[Any]):
         whether or not one was passed, so ``#creationId`` works from any later call
         in the same request.
         """
-        wire = {key: _to_wire(value) for key, value in create.items()}
+        # The wire form now, not at serialisation: the checks below read it.
+        wire: dict[str, Mapping[str, Any]] = {
+            key: value.to_wire() if isinstance(value, BlobUpload) else value
+            for key, value in create.items()
+        }
         capability = BlobCapability.of(self._batch.capability_value(BLOB_URN))
         for upload in wire.values():
             sources = _sources_of(upload)
@@ -124,13 +121,14 @@ class BlobGettable(EntityBase[Any]):
 
     __slots__ = ()
 
+    @builder
     def get(
         self,
         *,
-        ids: Sequence[Id] | ResultRef[Any] | Unset | None = UNSET,
-        properties: Sequence[str] | Unset | None = UNSET,
-        offset: int | Unset | None = UNSET,
-        length: int | Unset | None = UNSET,
+        ids: Sequence[Id | CreationRef] | ResultRef[Any] | Unset | None = UNSET,
+        properties: Sequence[str] | ResultRef[Any] | Unset | None = UNSET,
+        offset: UnsignedInt | ResultRef[Any] | Unset | None = UNSET,
+        length: UnsignedInt | ResultRef[Any] | Unset | None = UNSET,
         **extra: Any,
     ) -> Handle[GetResponse[Blob]]:
         """Fetch blob content and metadata.
@@ -142,9 +140,10 @@ class BlobGettable(EntityBase[Any]):
         Any ``digest:<algorithm>`` property is checked against the account's
         ``supportedDigestAlgorithms`` first: an unsupported one is a wasted round
         trip, and the names are lowercased in JMAP even though RFC 3230 spells them
-        in upper case.
+        in upper case. A back-reference names properties that do not exist
+        yet, so there is nothing to check it against.
         """
-        if not isinstance(properties, Unset) and properties is not None:
+        if isinstance(properties, Sequence):
             self._check_digests(properties)
         return self._add(
             "get",
@@ -165,11 +164,12 @@ class BlobLookupable(EntityBase[Any]):
 
     __slots__ = ()
 
+    @builder
     def lookup(
         self,
         *,
         type_names: Sequence[str],
-        ids: Sequence[Id] | ResultRef[Any],
+        ids: Sequence[Id | CreationRef] | ResultRef[Any],
         **extra: Any,
     ) -> Handle[BlobLookupResponse]:
         """Find which objects reference each blob.
@@ -192,11 +192,12 @@ class BlobCopyable(EntityBase[Any]):
 
     __slots__ = ()
 
+    @builder
     def copy(
         self,
         *,
-        from_account_id: Id,
-        blob_ids: Sequence[Id],
+        from_account_id: Id | ResultRef[Any],
+        blob_ids: Sequence[Id | CreationRef] | ResultRef[Any],
         **extra: Any,
     ) -> Handle[BlobCopyResponse]:
         """Move blobs between accounts without a download and re-upload.
@@ -205,7 +206,7 @@ class BlobCopyable(EntityBase[Any]):
         ``copied`` map out. The account it copies *into* is this batch's account.
         """
         return self._add(
-            "copy", {"fromAccountId": from_account_id, "blobIds": list(blob_ids), **extra}
+            "copy", {"fromAccountId": from_account_id, "blobIds": _ids(blob_ids), **extra}
         )
 
 
@@ -214,8 +215,9 @@ class SieveValidatable(EntityBase[Any]):
 
     __slots__ = ()
 
+    @builder
     def validate(
-        self, *, blob_id: Id | ResultRef[Any], **extra: Any
+        self, *, blob_id: Id | CreationRef | ResultRef[Any], **extra: Any
     ) -> Handle[SieveValidateResponse]:
         """Check a script without storing it.
 
@@ -225,12 +227,16 @@ class SieveValidatable(EntityBase[Any]):
         """
         return self._add("validate", {"blobId": blob_id, **extra})
 
-    def activate(self, script_id: Id | str, **extra: Any) -> Handle[SetResponse[Any]]:
+    @builder
+    def activate(
+        self, script_id: Id | CreationRef | ResultRef[Any], **extra: Any
+    ) -> Handle[SetResponse[Any]]:
         """Make one script the active one, deactivating whatever held it.
 
         A ``/set`` with no changes beyond the activation, which is how RFC 9661
-        models it - ``isActive`` is server-set and cannot be patched. Pass
-        ``#creationId`` to activate a script created earlier in the same call.
+        models it - ``isActive`` is server-set and cannot be patched. Pass a
+        :class:`~jmap.core.ids.CreationRef`, or ``#creationId``, to activate a
+        script created earlier in the same call.
         """
         return self._add("set", {"onSuccessActivateScript": script_id, **extra})
 
@@ -243,6 +249,7 @@ class SieveValidatable(EntityBase[Any]):
         """
         return self._add("set", {"onSuccessDeactivateScript": True, **extra})
 
+    @builder
     def check_name(self, name: str) -> None:
         """Validate a script name against this account's advertised limits.
 
@@ -259,11 +266,12 @@ class MDNSendable(EntityBase[Any]):
 
     __slots__ = ()
 
+    @builder
     def send(
         self,
         *,
-        identity_id: Id,
-        send: Mapping[str, Any],
+        identity_id: Id | ResultRef[Any],
+        send: Mapping[str, Mapping[str, Any] | JMAPModel],
         on_success_update_email: Mapping[str, Any] | None = None,
         **extra: Any,
     ) -> Handle[MDNSendResponse]:
@@ -289,19 +297,26 @@ class MDNSendable(EntityBase[Any]):
             "send",
             {
                 "identityId": identity_id,
-                "send": {key: _to_wire(value) for key, value in send.items()},
+                "send": {
+                    key: value.to_wire() if isinstance(value, JMAPModel) else value
+                    for key, value in send.items()
+                },
                 "onSuccessUpdateEmail": updates,
                 **extra,
             },
         )
 
-    def parse(self, *, blob_ids: Sequence[Id], **extra: Any) -> Handle[MDNParseResponse]:
+    @builder
+    def parse(
+        self, *, blob_ids: Sequence[Id | CreationRef] | ResultRef[Any], **extra: Any
+    ) -> Handle[MDNParseResponse]:
         """Read blobs as MDN messages.
 
         Pairs with ``EmailSubmission``'s ``mdnBlobIds``, which is where receipts
-        for messages *you* sent turn up.
+        for messages *you* sent turn up - ``blob_ids`` can be a back-reference
+        to them.
         """
-        return self._add("parse", {"blobIds": list(blob_ids), **extra})
+        return self._add("parse", {"blobIds": _ids(blob_ids), **extra})
 
 
 #: Method name -> the mixin that builds it. Consulted alongside the six standard
