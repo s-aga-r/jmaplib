@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import re
 from contextlib import suppress
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Annotated, Final
+
+from pydantic import AfterValidator, ConfigDict, Field, ValidationError
+from pydantic.dataclasses import dataclass
 
 from jmap.core.errors import JMAPError
 
@@ -72,19 +74,33 @@ class DiscoveryUnavailableError(JMAPError):
         )
 
 
-@dataclass(frozen=True, slots=True)
+def _host_name(value: str) -> str:
+    if not _HOSTNAME.match(value):
+        raise ValueError(f"{value!r} is not a host name a URL can carry")
+    return value
+
+
+#: RFC 2782 carries priority and weight as unsigned 16-bit numbers.
+_UnsignedShort = Annotated[int, Field(ge=0, le=65535)]
+
+
+@dataclass(frozen=True, slots=True, config=ConfigDict(strict=True, extra="forbid"))
 class SRVTarget:
     """One ``_jmap._tcp`` record.
 
     ``priority`` ascends and ``weight`` descends within a priority, which is the
     ordering RFC 2782 defines; the resolver's own ordering is not authoritative,
     so it is redone here.
+
+    A pydantic dataclass, and :attr:`session_url` is built from its fields, so
+    each is checked when it is made: ``host`` must be a host name a URL can
+    carry and ``port`` one a connection can be made to.
     """
 
-    host: str
-    port: int = DEFAULT_PORT
-    priority: int = 0
-    weight: int = 0
+    host: Annotated[str, AfterValidator(_host_name)]
+    port: Annotated[int, Field(gt=0, le=65535)] = DEFAULT_PORT
+    priority: _UnsignedShort = 0
+    weight: _UnsignedShort = 0
 
     @property
     def session_url(self) -> str:
@@ -152,10 +168,11 @@ def lookup_srv(domain: str, *, resolver: object | None = None) -> list[SRVTarget
     normal answer meaning "use the well-known URL", not a failure. Only a missing
     dependency raises.
 
-    A record naming no host a URL can carry, or port 0, is left out: RFC 2782's
-    "." target says the service is not offered there, and a label DNS allows but
-    a URL does not - ``a:b`` - made httpx raise InvalidURL, which ended
-    discovery before the well-known URL was tried.
+    A record that makes no :class:`SRVTarget` - one naming no host a URL can
+    carry, or port 0 - is left out: RFC 2782's "." target says the service is
+    not offered there, and a label DNS allows but a URL does not - ``a:b`` -
+    made httpx raise InvalidURL, which ended discovery before the well-known
+    URL was tried.
     """
     dns_resolver = resolver if resolver is not None else _default_resolver()
     query = getattr(dns_resolver, "resolve", None)
@@ -167,17 +184,19 @@ def lookup_srv(domain: str, *, resolver: object | None = None) -> list[SRVTarget
         # NXDOMAIN, NoAnswer, Timeout and friends all mean the same thing to a
         # caller: there is nothing here, try the well-known URL.
         return []
-    targets = [
-        SRVTarget(
-            host=str(record.target).rstrip("."),
-            port=int(record.port),
-            priority=int(record.priority),
-            weight=int(record.weight),
-        )
-        for record in answers
-    ]
-    usable = [t for t in targets if _HOSTNAME.match(t.host) and 0 < t.port <= 65535]
-    return order_targets(usable)
+    targets: list[SRVTarget] = []
+    for record in answers:
+        try:
+            target = SRVTarget(
+                host=str(record.target).rstrip("."),
+                port=int(record.port),
+                priority=int(record.priority),
+                weight=int(record.weight),
+            )
+        except ValidationError:
+            continue
+        targets.append(target)
+    return order_targets(targets)
 
 
 def _default_resolver() -> object:

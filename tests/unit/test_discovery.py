@@ -6,9 +6,11 @@ fallback chain are testable without DNS.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from jmap.discovery import (
     DEFAULT_PORT,
@@ -80,6 +82,33 @@ class TestSRVTarget:
     def test_a_non_default_port_is_kept(self):
         target = SRVTarget(host="jmap.example.net", port=8443)
         assert target.session_url == f"https://jmap.example.net:8443{WELL_KNOWN_PATH}"
+
+    @pytest.mark.parametrize(
+        "fields",
+        [
+            {"host": ""},
+            {"host": "a:b.example.com"},
+            {"host": "bad host.example.com"},
+            {"host": "x" * 254},
+            {"host": "jmap.example.net", "port": 0},
+            {"host": "jmap.example.net", "port": 65536},
+            {"host": "jmap.example.net", "priority": -1},
+            {"host": "jmap.example.net", "weight": 65536},
+            {"host": "jmap.example.net", "port": "443"},
+            {"host": "jmap.example.net", "prio": 1},
+        ],
+    )
+    def test_a_target_no_url_can_carry_cannot_be_made(self, fields):
+        # Its session_url is built from these fields, so each is checked first.
+        with pytest.raises(ValidationError):
+            SRVTarget(**fields)
+
+    def test_it_is_a_frozen_hashable_value(self):
+        target = SRVTarget("jmap.example.net", 8443)
+        assert target == SRVTarget(host="jmap.example.net", port=8443)
+        assert len({target, SRVTarget("jmap.example.net", 8443)}) == 1
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            target.port = 443  # type: ignore[misc]
 
 
 class TestOrdering:
