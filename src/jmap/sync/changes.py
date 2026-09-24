@@ -77,9 +77,10 @@ class ResyncRequiredError(JMAPError):
 class ChangeSet:
     """Everything that changed across one or more pages.
 
-    Ids are deduplicated but their *category* is not merged: a record created and
-    then updated inside one sync window appears in both lists, which is what the
-    server reported and what a caller reconciling against a cache needs to see.
+    Ids are deduplicated within each list, in the order first reported, but
+    their *category* is not merged: a record created and then updated inside one
+    sync window appears in both lists, which is what the server reported and
+    what a caller reconciling against a cache needs to see.
     """
 
     type_name: str
@@ -90,6 +91,16 @@ class ChangeSet:
     new_state: str = ""
     #: How many round trips this took, for callers tuning ``max_changes``.
     pages: int = 0
+    #: What each list already holds, so absorbing a page costs its own length.
+    _seen: tuple[set[str], set[str], set[str]] = field(
+        init=False, repr=False, compare=False, default_factory=lambda: (set(), set(), set())
+    )
+
+    def __post_init__(self) -> None:
+        self.created = list(dict.fromkeys(self.created))
+        self.updated = list(dict.fromkeys(self.updated))
+        self.destroyed = list(dict.fromkeys(self.destroyed))
+        self._seen = (set(self.created), set(self.updated), set(self.destroyed))
 
     @property
     def is_empty(self) -> bool:
@@ -104,9 +115,13 @@ class ChangeSet:
 
     def absorb(self, response: ChangesResponse) -> None:
         """Fold one page into the set."""
-        self.created.extend(response.created)
-        self.updated.extend(response.updated)
-        self.destroyed.extend(response.destroyed)
+        lists = (self.created, self.updated, self.destroyed)
+        incoming = (response.created, response.updated, response.destroyed)
+        for listed, seen, ids in zip(lists, self._seen, incoming, strict=True):
+            for id_ in ids:
+                if id_ not in seen:
+                    seen.add(id_)
+                    listed.append(id_)
         self.new_state = response.new_state or self.new_state
         self.pages += 1
 

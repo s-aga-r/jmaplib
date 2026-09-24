@@ -385,6 +385,24 @@ class TestStateKeys:
 
 
 class TestChangeSet:
+    def test_an_id_reported_on_two_pages_is_listed_once(self):
+        # The docstring promised deduplicated ids; each page was appended whole,
+        # so an id updated twice in one window was updated twice.
+        changes = ChangeSet("Email")
+        for updated in (["m1"], ["m1", "m2"]):
+            changes.absorb(
+                ChangesResponse.model_validate(
+                    {"newState": "s", "updated": updated, "hasMoreChanges": True}
+                )
+            )
+        assert changes.updated == ["m1", "m2"]
+        assert len(changes) == 2
+
+    def test_ids_given_up_front_are_deduplicated_too(self):
+        changes = ChangeSet("Email", created=["m1", "m1"])
+        changes.absorb(ChangesResponse.model_validate({"newState": "s", "created": ["m1"]}))
+        assert changes.created == ["m1"]
+
     def test_absorbing_pages_accumulates(self):
         changes = ChangeSet("Email")
         changes.absorb(
