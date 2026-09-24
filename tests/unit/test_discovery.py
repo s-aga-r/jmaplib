@@ -186,6 +186,30 @@ class TestCandidates:
             lookup_srv("example.com")
 
 
+class TestTargetsThatAreNotHosts:
+    @pytest.mark.parametrize(
+        "target", ["a:b.example.com.", ".", "", "bad host.example.com.", "-x.example.com."]
+    )
+    def test_a_target_that_is_not_a_hostname_is_dropped(self, target):
+        # DNS carries labels no URL can: "a:b" made httpx.InvalidURL, which is
+        # no HTTPError, escape discover() before the well-known URL was tried.
+        # "." is RFC 2782's "decidedly not available here".
+        resolver = FakeResolver([FakeRecord(target, 443, 0, 0)])
+        assert lookup_srv("example.com", resolver=resolver) == []
+
+    def test_a_port_of_zero_is_dropped(self):
+        resolver = FakeResolver([FakeRecord("jmap.example.com.", 0, 0, 0)])
+        assert lookup_srv("example.com", resolver=resolver) == []
+
+    def test_the_rest_of_the_answer_survives(self):
+        resolver = FakeResolver(
+            [FakeRecord("a:b.example.com.", 443, 0, 0), FakeRecord("jmap.example.com.", 443, 1, 0)]
+        )
+        assert lookup_srv("example.com", resolver=resolver) == [
+            SRVTarget(host="jmap.example.com", priority=1)
+        ]
+
+
 class TestTargetsOutsideTheDomain:
     """RFC 6186 §6: ask before connecting to an SRV target outside the domain.
 

@@ -29,6 +29,7 @@ or because its resolver validates.
 
 from __future__ import annotations
 
+import re
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
@@ -48,6 +49,16 @@ SRV_SERVICE: Final = "_jmap._tcp"
 SCHEME: Final = "https"
 
 DEFAULT_PORT: Final = 443
+
+#: A host name a URL can carry: dot-separated labels of letters, digits,
+#: hyphens and underscores, none starting or ending with a hyphen, at most 253
+#: characters in all. DNS itself allows far more - a ":" in a label made httpx
+#: refuse the whole URL.
+_HOSTNAME: Final = re.compile(
+    r"(?=.{1,253}\Z)"
+    r"[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?"
+    r"(?:\.[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*\Z"
+)
 
 
 class DiscoveryUnavailableError(JMAPError):
@@ -140,6 +151,11 @@ def lookup_srv(domain: str, *, resolver: object | None = None) -> list[SRVTarget
     Returns an empty list when the domain simply has no records - that is a
     normal answer meaning "use the well-known URL", not a failure. Only a missing
     dependency raises.
+
+    A record naming no host a URL can carry, or port 0, is left out: RFC 2782's
+    "." target says the service is not offered there, and a label DNS allows but
+    a URL does not - ``a:b`` - made httpx raise InvalidURL, which ended
+    discovery before the well-known URL was tried.
     """
     dns_resolver = resolver if resolver is not None else _default_resolver()
     query = getattr(dns_resolver, "resolve", None)
@@ -160,7 +176,8 @@ def lookup_srv(domain: str, *, resolver: object | None = None) -> list[SRVTarget
         )
         for record in answers
     ]
-    return order_targets(targets)
+    usable = [t for t in targets if _HOSTNAME.match(t.host) and 0 < t.port <= 65535]
+    return order_targets(usable)
 
 
 def _default_resolver() -> object:
