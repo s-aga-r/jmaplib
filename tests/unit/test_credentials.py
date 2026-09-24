@@ -362,6 +362,94 @@ class TestInsufficientScope:
             assert client.get("https://x/", auth=BearerAuth("t")).status_code == 403
 
 
+class TestProactiveRefresh:
+    """docs/auth.md promises a refresh near expiry; nothing read expires_at."""
+
+    def clock(self, monkeypatch: pytest.MonkeyPatch, start: float) -> dict[str, float]:
+        now = {"t": start}
+        monkeypatch.setattr("jmap.auth.credentials.time.time", lambda: now["t"])
+        return now
+
+    def test_a_token_about_to_expire_is_refreshed_before_it_is_sent(self, monkeypatch):
+        # Sent anyway, it drew a 401 - and one without a Bearer challenge never
+        # led to a refresh at all.
+        now = self.clock(monkeypatch, 900.0)
+        auth = OAuth2Auth(
+            OAuth2Token("old", expires_at=1010.0),
+            refresh=lambda _t: OAuth2Token("new", expires_at=4600.0),
+        )
+        now["t"] = 1000.0
+        transport, seen = recording_transport(httpx.Response(200))
+        with httpx.Client(transport=transport) as client:
+            client.get("https://x/", auth=auth)
+        assert seen == ["Bearer new"]
+
+    def test_a_token_with_time_to_spare_is_left_alone(self, monkeypatch):
+        self.clock(monkeypatch, 1000.0)
+        refreshed: list[int] = []
+
+        def refresh(_old: OAuth2Token) -> OAuth2Token:
+            refreshed.append(1)
+            return OAuth2Token("new")
+
+        auth = OAuth2Auth(OAuth2Token("old", expires_at=4600.0), refresh=refresh)
+        transport, seen = recording_transport(httpx.Response(200))
+        with httpx.Client(transport=transport) as client:
+            client.get("https://x/", auth=auth)
+        assert seen == ["Bearer old"]
+        assert refreshed == []
+
+    def test_an_expired_token_is_refreshed_whatever_its_lifetime(self, monkeypatch):
+        self.clock(monkeypatch, 1000.0)
+        auth = OAuth2Auth(
+            OAuth2Token("old", expires_at=900.0), refresh=lambda _t: OAuth2Token("new")
+        )
+        transport, seen = recording_transport(httpx.Response(200))
+        with httpx.Client(transport=transport) as client:
+            client.get("https://x/", auth=auth)
+        assert seen == ["Bearer new"]
+
+    def test_a_short_lived_token_is_not_refreshed_on_every_request(self, monkeypatch):
+        # Thirty seconds ahead of a token that only lives twenty is always:
+        # the lead shrinks to half the token's lifetime instead.
+        now = self.clock(monkeypatch, 1000.0)
+        refreshed: list[int] = []
+
+        def refresh(_old: OAuth2Token) -> OAuth2Token:
+            refreshed.append(1)
+            return OAuth2Token(f"t{len(refreshed)}", expires_at=now["t"] + 20)
+
+        auth = OAuth2Auth(OAuth2Token("t0", expires_at=1020.0), refresh=refresh)
+        transport, seen = recording_transport()
+        with httpx.Client(transport=transport) as client:
+            client.get("https://x/", auth=auth)
+            now["t"] = 1011.0
+            client.get("https://x/", auth=auth)
+            client.get("https://x/", auth=auth)
+        assert seen == ["Bearer t0", "Bearer t1", "Bearer t1"]
+        assert refreshed == [1]
+
+    def test_nothing_is_refreshed_without_a_deadline_or_a_callable(self, monkeypatch):
+        self.clock(monkeypatch, 1000.0)
+        transport, seen = recording_transport()
+        with httpx.Client(transport=transport) as client:
+            client.get("https://x/", auth=OAuth2Auth(OAuth2Token("a")))
+            client.get("https://x/", auth=OAuth2Auth(OAuth2Token("b", expires_at=900.0)))
+        assert seen == ["Bearer a", "Bearer b"]
+
+    @pytest.mark.asyncio
+    async def test_the_async_flow_refreshes_ahead_too(self, monkeypatch):
+        now = self.clock(monkeypatch, 900.0)
+        auth = OAuth2Auth(
+            OAuth2Token("old", expires_at=1005.0), refresh=lambda _t: OAuth2Token("new")
+        )
+        now["t"] = 1000.0
+        transport, seen = recording_transport(httpx.Response(200))
+        async with httpx.AsyncClient(transport=transport) as client:
+            await client.get("https://x/", auth=auth)
+        assert seen == ["Bearer new"]
+
+
 class TestOAuth2RefreshAsync:
     """The async flow is a separate code path in httpx and must behave the same."""
 

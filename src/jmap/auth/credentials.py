@@ -24,7 +24,8 @@ from __future__ import annotations
 
 import base64
 import threading
-from typing import TYPE_CHECKING, Protocol
+import time
+from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 
@@ -195,8 +196,27 @@ class OAuth2Token:
         return f"OAuth2Token(expires_at={self.expires_at!r}, scope={self.scope!r})"
 
 
+#: How long before its expiry a token is renewed, at most. Less for a token whose
+#: whole life is shorter - see :func:`_lead_for`.
+REFRESH_AHEAD_SECONDS: Final = 30.0
+
+
+def _lead_for(token: OAuth2Token, *, now: float) -> float:
+    """How far ahead of ``token``'s expiry to renew it.
+
+    :data:`REFRESH_AHEAD_SECONDS`, or half the life the token had left when it
+    was adopted if that is shorter: thirty seconds ahead of a token that lives
+    twenty is every request, and half its life is at most one renewal per half
+    life. An expired token gets no lead and is renewed at once.
+    """
+    if token.expires_at is None:
+        return 0.0
+    return min(REFRESH_AHEAD_SECONDS, max(0.0, token.expires_at - now) / 2)
+
+
 class OAuth2Auth(JMAPAuth):
-    """A bearer token that can be renewed once, in response to a 401.
+    """A bearer token that renews itself: ahead of its expiry, and once in
+    response to a 401 carrying a Bearer challenge.
 
     ``refresh`` is supplied by the caller: this class owns *when* to renew and
     the concurrency around it, not the wire format of the grant.
@@ -218,6 +238,8 @@ class OAuth2Auth(JMAPAuth):
         #: through this same credential and gets a 401 back would otherwise
         #: wait on the lock that thread holds, forever.
         self._refreshing: int | None = None
+        #: How far ahead of expiry the current token is renewed.
+        self._lead = _lead_for(token, now=time.time())
 
     @property
     def token(self) -> OAuth2Token:
@@ -245,6 +267,21 @@ class OAuth2Auth(JMAPAuth):
             return False
         return find_challenge(_challenges_of(response), "bearer") is not None
 
+    def _refresh_if_expiring(self) -> None:
+        """Renew ahead of expiry rather than send a token about to be refused.
+
+        Waiting for the 401 costs a round trip, and a server whose 401 carries
+        no Bearer challenge never prompts a refresh at all. Skipped inside a
+        refresh: that thread is already renewing this very token.
+        """
+        if (
+            self._refresh is None
+            or self._refreshing == threading.get_ident()
+            or not self._token.expires_within(self._lead, now=time.time())
+        ):
+            return
+        self._refresh_once(self._generation)
+
     def _apply_token(self, token: OAuth2Token) -> None:
         # Persist first. A server that rotates refresh tokens invalidates the old
         # one the moment this succeeds, so a crash after swapping but before
@@ -257,6 +294,7 @@ class OAuth2Auth(JMAPAuth):
             # already, and presenting it again is a replay - which Fastmail
             # answers by revoking the grant outright.
             self._token = token
+            self._lead = _lead_for(token, now=time.time())
             self._generation += 1
 
     def _refresh_once(self, seen_generation: int) -> bool:
@@ -284,6 +322,7 @@ class OAuth2Auth(JMAPAuth):
             return True
 
     def sync_auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response]:
+        self._refresh_if_expiring()
         seen = self._generation
         self.apply(request)
         response = yield request
@@ -295,6 +334,8 @@ class OAuth2Auth(JMAPAuth):
     async def async_auth_flow(
         self, request: httpx.Request
     ) -> AsyncGenerator[httpx.Request, httpx.Response]:
+        # The refresh callable is synchronous by contract - see below.
+        self._refresh_if_expiring()
         seen = self._generation
         self.apply(request)
         response = yield request

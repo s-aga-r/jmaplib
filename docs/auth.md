@@ -40,7 +40,9 @@ something else in your process refreshes the token.
 
 ### OAuth 2 with refresh
 
-`OAuth2Auth` refreshes when the token is near expiry, and handles the hard part:
+`OAuth2Auth` refreshes a token shortly before it expires - thirty seconds ahead,
+or halfway through a shorter life - and once more if the server refuses it with a
+Bearer challenge anyway. It also handles the hard part:
 
 ```python
 from jmap.auth import OAuth2Auth, OAuth2Token
