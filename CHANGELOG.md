@@ -267,6 +267,12 @@ for exactly which revision of each spec this build implements.
   `before`, and a window wider than `maxExpandedQueryDuration` - each of which
   the server answers with an error and no ids. The guide's example used UTCDates
   where the draft has LocalDateTimes; it no longer does.
+- **A sort the server did not advertise failed the whole query.** A comparator on
+  a property outside `emailQuerySortOptions` or `fileNodeQuerySortOptions`, or
+  with a collation outside `collationAlgorithms`, earns `unsupportedSort` and no
+  ids. The batch now refuses one as the call is queued - `batch.add` included -
+  checking the list of the account the call targets, and only a list the server
+  advertised.
 
 ### Added
 
@@ -330,6 +336,13 @@ for exactly which revision of each spec this build implements.
   round-trips unchanged. A card's `members` and `media` are `member_uids` and
   `media_resources` in Python, since `members()` and `media()` already existed.
 - `jmap.models.jsobject.JSObject`, the forgiving base, and `wire_property()`.
+- **RFC 8621's capability objects.** `jmap.capabilities.mail.MailCapability` and
+  `SubmissionCapability` read what an account says about its mail and
+  submission, from `maxSizeMailboxName` to `maxDelayedSend`; a field left out
+  reads as not said. `SubmissionCapability.supports()` finds an SMTP extension
+  whatever its case.
+- `jmap.capabilities.mail.check_mailbox_name()`, `DataTypeSpec.sort_options_field`,
+  and `jmap.api.names`, the `/set` builders that check names.
 
 - `Batch.requests()`, which yields a batch's requests one at a time, each carrying
   the creation ids learnt so far - the lazy form of `plan()` that both clients now
@@ -405,6 +418,11 @@ for exactly which revision of each spec this build implements.
   `jmap.models.contacts`.
 - **Calendars (experimental):** `Calendar`'s default alerts hold `Alert` models,
   and `CalendarEventNotification.event` an `Event`, where both held dicts.
+- **`/set` checks mailbox, Sieve script and file node names.** A name the
+  account's limits rule out - too many octets, a forbidden character, a reserved
+  name - raises `CapabilityFieldError` from `mailbox.set`, `sieve_script.set` or
+  `file_node.set` rather than going out to fail as a SetError, and a mailbox with
+  no parent does where `mayCreateTopLevelMailbox` is false.
 
 ## 1.1.0
 
