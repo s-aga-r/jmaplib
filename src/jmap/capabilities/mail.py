@@ -154,6 +154,7 @@ EMAIL_TYPE: Final = DataTypeSpec(
     default_get_properties=EMAIL_DEFAULT_PROPERTIES,
     adds_properties=_SMIME_PROPERTIES,
     adds_filter_fields=_SMIME_FILTERS,
+    sort_options_field="emailQuerySortOptions",
 )
 
 #: RFC 8621 §11. Arrives only over the push channel and has no methods, but must

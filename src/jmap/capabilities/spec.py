@@ -145,6 +145,10 @@ class DataTypeSpec:
     adds_filter_fields: Mapping[str, str] = field(default_factory=lambda: _NO_STRINGS)
     #: Comparator property -> URN that gates it.
     adds_sort_options: Mapping[str, str] = field(default_factory=lambda: _NO_STRINGS)
+    #: The field of the owning capability's object that lists every property a
+    #: ``/query`` comparator may name - ``emailQuerySortOptions`` - for a type
+    #: whose server says which sorts it supports.
+    sort_options_field: str | None = None
     #: A type that only ever arrives over the push channel and has no methods:
     #: ``EmailDelivery``. It must still be a legal value in
     #: ``PushSubscription.types`` and the EventSource ``types`` parameter.

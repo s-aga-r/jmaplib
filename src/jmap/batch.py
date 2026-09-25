@@ -13,6 +13,7 @@ failure into a local one:
 * a mutation on a read-only account raises instead of earning ``forbidden``;
 * ``accountId`` is resolved from ``primaryAccounts`` rather than guessed;
 * properties the server refuses to return are rejected before being asked for;
+* a sort the server did not advertise raises instead of failing the query;
 * an oversized ``/set`` raises rather than being split, because splitting it
   would break the ``ifInState`` guarantee that makes it atomic.
 
@@ -31,6 +32,7 @@ from jmap.capabilities.spec import MethodKind
 from jmap.chunking import ChunkedHandle, chunk_get_call
 from jmap.core.errors import CapabilityFieldError, JMAPError, MethodError
 from jmap.core.invocation import Handle, MethodCall
+from jmap.core.limits import FIELD_COLLATION_ALGORITHMS, URN_CORE
 from jmap.core.request import plan_requests
 from jmap.core.response import dispatch
 
@@ -172,6 +174,7 @@ class Batch:
 
         self._check_read_only(name, spec, args)
         self._check_properties(name, spec, args)
+        self._check_sort(name, spec, args)
 
         # Only a literal array can be inspected. Both of these arguments are
         # routinely back-references - RFC 9425 §4.3 feeds `/updatedProperties`
@@ -292,6 +295,61 @@ class Batch:
         if forbidden:
             raise CapabilityFieldError(
                 spec.type_name, "properties", "never returned by the server", forbidden
+            )
+
+    def _check_sort(self, name: str, spec: MethodSpec, args: Mapping[str, Any]) -> None:
+        """Refuse a sort the server said it cannot do.
+
+        Either mistake earns ``unsupportedSort`` for the whole query (RFC 8620
+        §5.5) and no ids at all: a collation outside ``collationAlgorithms``, or
+        a comparator on a property outside the type's advertised sort options.
+        Each is checked only against a list the server actually advertised.
+        """
+        comparators = [
+            fields for item in _array(args.get("sort")) or () if (fields := _object(item))
+        ]
+        if comparators:
+            self._check_collations(comparators)
+            self._check_sort_options(name, spec, args, comparators)
+
+    def _check_collations(self, comparators: Sequence[Mapping[str, Any]]) -> None:
+        core = self._capabilities.session.capability_value(URN_CORE)
+        advertised = _array(core.get(FIELD_COLLATION_ALGORITHMS))
+        if advertised is None:
+            return
+        for fields in comparators:
+            collation = fields.get("collation")
+            if isinstance(collation, str) and collation not in advertised:
+                raise CapabilityFieldError(
+                    URN_CORE, FIELD_COLLATION_ALGORITHMS, tuple(advertised), collation
+                )
+
+    def _check_sort_options(
+        self,
+        name: str,
+        spec: MethodSpec,
+        args: Mapping[str, Any],
+        comparators: Sequence[Mapping[str, Any]],
+    ) -> None:
+        data_type = self._capabilities.data_type(spec.type_name)
+        owner = self._capabilities.owner_of(name)
+        if data_type is None or data_type.sort_options_field is None or owner is None:
+            return
+        # The account the call targets: a shared one may advertise other sorts.
+        account = args.get("accountId")
+        scoped = cast("Id", account) if isinstance(account, str) else None
+        value = self._capabilities.session.capability_value(owner.urn, scoped)
+        advertised = _array(value.get(data_type.sort_options_field))
+        if advertised is None:
+            return
+        unsupported = tuple(
+            wanted
+            for fields in comparators
+            if isinstance(wanted := fields.get("property"), str) and wanted not in advertised
+        )
+        if unsupported:
+            raise CapabilityFieldError(
+                owner.urn, data_type.sort_options_field, tuple(advertised), unsupported
             )
 
     # -- planning and absorbing --------------------------------------------- #

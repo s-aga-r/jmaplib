@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from jmap.capabilities.mail import MAIL_URN, MailCapability
+from jmap.core.errors import CapabilityFieldError
 from jmap.core.ids import CreationRef
 from jmap.models.mail.headers import text
 from jmap.models.mail.irregular import EmailImport
@@ -123,6 +125,39 @@ class TestMailboxes:
             handle = batch.mail.mailbox.get(ids=query.ref_ids())
         # The back-reference was resolved server-side.
         assert len(handle.result.items) == len(query.result.ids)
+
+
+@requires_server
+class TestSorting:
+    def test_an_advertised_sort_and_collation_are_answered(self, alice):
+        requires_method(alice, "Email/query")
+        collations = alice.capabilities.limits.collation_algorithms
+        if not collations:
+            pytest.skip("server advertises no collation algorithms")
+        with alice.batch() as batch:
+            found = batch.mail.email.query(
+                sort=[
+                    {"property": "receivedAt"},
+                    {"property": "subject", "collation": collations[0]},
+                ],
+                limit=5,
+            )
+        assert isinstance(found.result.ids, list)
+
+    def test_a_sort_the_server_did_not_advertise_never_leaves(self, alice):
+        requires_method(alice, "Email/query")
+        mail = MailCapability.of(
+            alice.session.capability_value(
+                MAIL_URN, alice.session.capability_account(MAIL_URN, alice.default_account)
+            )
+        )
+        if mail.email_query_sort_options is None:
+            pytest.skip("server does not say which Email sorts it supports")
+        with (
+            alice.batch() as batch,
+            pytest.raises(CapabilityFieldError, match="emailQuerySortOptions"),
+        ):
+            batch.mail.email.query(sort=[{"property": "jmaplibNoSuchSort"}])
 
 
 @requires_server

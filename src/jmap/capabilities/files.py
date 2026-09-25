@@ -152,7 +152,14 @@ FILENODE: Final = CapabilitySpec(
     reference="draft-ietf-jmap-filenode-14",
     experimental=True,
     account_value=FileNodeCapability,
-    data_types=(DataTypeSpec(name="FileNode", model=FileNode, shareable=True),),
+    data_types=(
+        DataTypeSpec(
+            name="FileNode",
+            model=FileNode,
+            shareable=True,
+            sort_options_field="fileNodeQuerySortOptions",
+        ),
+    ),
     methods=(
         MethodSpec(
             "FileNode/get",
