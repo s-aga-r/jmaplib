@@ -344,6 +344,30 @@ for exactly which revision of each spec this build implements.
 - `jmap.capabilities.mail.check_mailbox_name()`, `DataTypeSpec.sort_options_field`,
   and `jmap.api.names`, the `/set` builders that check names.
 
+- **JSCalendar's Task and Group (jscalendarbis §2.2, §2.3).**
+  `jmap.models.jscalendar` models all three object types now: `Task` and `Group`
+  beside `Event`, sharing `CalendarObject` and `Entry`. A Group's entries read as
+  an `Event` or a `Task` by their `@type`, and an entry of another type is kept
+  as an `UnknownEntry`.
+- **RFC 8984's JSCalendar properties read typed too** - `recurrenceRules`,
+  `replyTo`, a participant's `sendTo`, `localizations`, inline `timeZones` (as
+  `TimeZone` and `TimeZoneRule`) and the rest jscalendarbis dropped or renamed -
+  beside their successors, so data from a 1.0 source is typed as well. Nothing
+  converts between the revisions. jscalendarbis's top-level `sentBy`, which was
+  missing, is modelled.
+- **Dates in the JSContact and JSCalendar models are datetimes.**
+  `jmap.models.jsdates.UTCDateTime` reads an instant as an aware datetime in UTC,
+  and `LocalDateTime` a wall-clock time as a naive one; each refuses the other
+  kind, and both go back out in the exact wire form.
+- **More mail limits are checked.** `batch.mail.email.set` and `.import_()` count
+  each email's mailboxes against `maxMailboxesPerEmail`, and
+  `batch.submission.email_submission.set` measures a `HOLDFOR` or `HOLDUNTIL`
+  against `maxDelayedSend`. `check_mailbox_depth()` and `check_attachment_size()`
+  check the two a request cannot show, for a caller who knows the tree or the
+  sizes.
+- `jmap.api.entity.wire_objects()`, and `check_mailboxes_per_email()` and
+  `check_delayed_send()` in `jmap.capabilities.mail`.
+
 - `Batch.requests()`, which yields a batch's requests one at a time, each carrying
   the creation ids learnt so far - the lazy form of `plan()` that both clients now
   send from.
@@ -418,6 +442,12 @@ for exactly which revision of each spec this build implements.
   `jmap.models.contacts`.
 - **Calendars (experimental):** `Calendar`'s default alerts hold `Alert` models,
   and `CalendarEventNotification.event` an `Event`, where both held dicts.
+- **Calendars track draft-ietf-jmap-calendars-29 and jscalendarbis-20,** from -27
+  and -17. Nothing changed on the wire: -29 adds rules the server enforces about
+  `privacy`, and a Link's `rel` now defaults to `enclosure`.
+- **An `Event`, `Task` or `Group` built in Python carries its `@type`,** as
+  JSCalendar requires of one standing alone; a `CalendarEvent` still leaves it to
+  the server.
 - **`/set` checks mailbox, Sieve script and file node names.** A name the
   account's limits rule out - too many octets, a forbidden character, a reserved
   name - raises `CapabilityFieldError` from `mailbox.set`, `sieve_script.set` or
