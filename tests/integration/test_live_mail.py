@@ -126,6 +126,20 @@ class TestMailboxes:
         # The back-reference was resolved server-side.
         assert len(handle.result.items) == len(query.result.ids)
 
+    def test_a_name_past_the_advertised_limit_never_leaves(self, alice):
+        requires_method(alice, "Mailbox/set")
+        mail = MailCapability.of(
+            alice.session.capability_value(
+                MAIL_URN, alice.session.capability_account(MAIL_URN, alice.default_account)
+            )
+        )
+        name = "x" * (mail.max_size_mailbox_name + 1)
+        with (
+            alice.batch() as batch,
+            pytest.raises(CapabilityFieldError, match="maxSizeMailboxName"),
+        ):
+            batch.mail.mailbox.set(create={"m": {"name": name}})
+
 
 @requires_server
 class TestSorting:

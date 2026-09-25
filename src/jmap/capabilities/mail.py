@@ -23,6 +23,7 @@ from typing import Any, Final
 from pydantic import Field
 
 from jmap.capabilities.spec import CapabilitySpec, DataTypeSpec, MethodKind, MethodSpec
+from jmap.core.errors import CapabilityFieldError
 from jmap.core.limits import LimitKey
 from jmap.models.base import JMAPModel
 from jmap.models.mail.objects import (
@@ -93,6 +94,22 @@ class SubmissionCapability(JMAPModel):
             return cls.model_validate(dict(value))
         except (ValueError, TypeError):
             return cls()
+
+
+def check_mailbox_name(name: str, capability: MailCapability) -> None:
+    """Reject a mailbox name the server is required to refuse (RFC 8621 §2).
+
+    It must be at least one character, and within ``maxSizeMailboxName``
+    **octets** - which a name in accented or CJK characters reaches long before
+    its character count suggests.
+    """
+    if not name:
+        raise CapabilityFieldError(MAIL_URN, "name", "at least one character", "")
+    octets = len(name.encode())
+    if octets > capability.max_size_mailbox_name:
+        raise CapabilityFieldError(
+            MAIL_URN, "maxSizeMailboxName", capability.max_size_mailbox_name, octets
+        )
 
 
 #: RFC 8621 §4.2. What ``Email/get`` returns when ``properties`` is null. Worth

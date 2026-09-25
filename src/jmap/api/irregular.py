@@ -31,6 +31,7 @@ from jmap.api.groupware import (
     ContactCardParsable,
 )
 from jmap.api.mail import EmailImportable, EmailParsable, SearchSnippetGettable
+from jmap.api.names import FileNodeSettable, MailboxSettable, SieveScriptSettable
 from jmap.capabilities.blob import (
     BLOB_URN,
     DIGEST_PREFIX,
@@ -260,10 +261,8 @@ class SieveValidatable(EntityBase[Any]):
     def check_name(self, name: str) -> None:
         """Validate a script name against this account's advertised limits.
 
-        Not called automatically: a name only reaches the wire inside a ``create``
-        or ``update`` object, which is opaque to the generic ``/set`` builder.
-        Calling it costs nothing and turns a per-script ``SetError`` into a local
-        one.
+        ``set()`` does this for every name it is given; this is for checking one
+        before there is anything to set, as a user types it.
         """
         check_script_name(name, SieveAccountCapability.of(self._batch.capability_value(SIEVE_URN)))
 
@@ -329,13 +328,17 @@ class MDNSendable(EntityBase[Any]):
 #: Method name -> the mixin that builds it. Consulted alongside the six standard
 #: shapes, so an irregular method still yields a typed builder and, like the
 #: standard ones, only appears when the server declares the method. The mail and
-#: groupware ones live in :mod:`jmap.api.mail` and :mod:`jmap.api.groupware`.
+#: groupware ones live in :mod:`jmap.api.mail` and :mod:`jmap.api.groupware`, and
+#: the ``/set`` builders that check names in :mod:`jmap.api.names`.
 CUSTOM_BUILDERS: dict[str, type[EntityBase[Any]]] = {
     "Blob/upload": BlobUploadable,
     "Blob/get": BlobGettable,
     "Blob/lookup": BlobLookupable,
     "Blob/copy": BlobCopyable,
     "SieveScript/validate": SieveValidatable,
+    "SieveScript/set": SieveScriptSettable,
+    "Mailbox/set": MailboxSettable,
+    "FileNode/set": FileNodeSettable,
     "MDN/send": MDNSendable,
     "MDN/parse": MDNSendable,
     "Email/import": EmailImportable,
