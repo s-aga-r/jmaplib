@@ -9,6 +9,7 @@ from jmap.models.jscalendar.links import Link, Relation
 from jmap.models.jscalendar.locations import Location, VirtualLocation
 from jmap.models.jscalendar.participants import Participant
 from jmap.models.jscalendar.recurrence import RecurrenceRule
+from jmap.models.jscalendar.timezones import TimeZone
 from jmap.models.jsobject import JSObject, wire_property
 
 
@@ -81,6 +82,8 @@ class Entry(CalendarObject):
     privacy: str | None = None
     #: The organizer's scheduling URI - RFC 8984's ``replyTo``, reshaped.
     organizer_calendar_address: str | None = None
+    #: Who sent this, if not the organizer: a calendar address.
+    sent_by: str | None = None
     participants: dict[str, Participant] | None = None
 
     # -- alerts (§3.5) and time zone (§3.6) --------------------------------- #
@@ -95,3 +98,19 @@ class Entry(CalendarObject):
     may_invite_others: bool | None = None
     #: Only owners see every participant.
     hide_attendees: bool | None = None
+
+    # -- RFC 8984, which jscalendarbis replaced ------------------------------ #
+    #: Several rules, where jscalendarbis has one ``recurrence_rule``.
+    recurrence_rules: list[RecurrenceRule] | None = None
+    excluded_recurrence_rules: list[RecurrenceRule] | None = None
+    #: On an override: this occurrence is dropped.
+    excluded: bool | None = None
+    #: Scheduling method -> URI, e.g. ``{"imip": "mailto:..."}``, where
+    #: jscalendarbis has ``organizer_calendar_address``.
+    reply_to: dict[str, str] | None = None
+    #: An iTIP REQUEST-STATUS, on a reply.
+    request_status: str | None = None
+    #: Language tag -> a PatchObject over this object.
+    localizations: dict[str, dict[str, Any]] | None = None
+    #: Zones defined inline, by the id ``time_zone`` names.
+    time_zones: dict[str, TimeZone] | None = None

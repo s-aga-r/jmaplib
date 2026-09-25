@@ -23,6 +23,7 @@ from jmap.models.jscalendar import (
     Participant,
     RecurrenceRule,
     Task,
+    TimeZone,
     UnknownEntry,
     UnknownTrigger,
 )
@@ -369,3 +370,142 @@ class TestStandingAlone:
 
     def test_a_calendar_event_leaves_that_to_the_server(self):
         assert CalendarEvent(title="Lunch").to_wire() == {"title": "Lunch"}
+
+
+class TestRfc8984:
+    """JSCalendar 1.0's shapes, which jscalendarbis dropped or renamed, read typed."""
+
+    PARTICIPANTS: ClassVar[dict[str, Any]] = {
+        "@type": "Event",
+        "title": "FooBar team meeting",
+        "start": "2020-01-08T09:00:00",
+        "timeZone": "Africa/Johannesburg",
+        "recurrenceRules": [{"@type": "RecurrenceRule", "frequency": "weekly"}],
+        "replyTo": {"imip": "mailto:f245f875-7f63-4a5e-a2c8@schedule.example.com"},
+        "participants": {
+            "dG9tQGZvb2Jhci5xlLmNvbQ": {
+                "@type": "Participant",
+                "name": "Tom Tool",
+                "sendTo": {"imip": "mailto:tom@calendar.example.com"},
+                "participationStatus": "accepted",
+                "roles": {"attendee": True},
+            }
+        },
+        "recurrenceOverrides": {
+            "2020-03-04T09:00:00": {
+                "participants/dG9tQGZvb2Jhci5xlLmNvbQ/participationStatus": "declined"
+            }
+        },
+    }
+
+    def test_rfc_8984s_recurring_event_with_participants(self):
+        # RFC 8984 §6.10.
+        event = Event.from_wire(self.PARTICIPANTS)
+        assert event.model_extra == {}
+        assert event.recurrence_rules == [
+            RecurrenceRule(at_type="RecurrenceRule", frequency="weekly")
+        ]
+        assert event.reply_to == {"imip": "mailto:f245f875-7f63-4a5e-a2c8@schedule.example.com"}
+        assert event.participants is not None
+        tom = event.participants["dG9tQGZvb2Jhci5xlLmNvbQ"]
+        assert tom.send_to == {"imip": "mailto:tom@calendar.example.com"}
+        assert event.to_wire() == self.PARTICIPANTS
+
+    def test_rfc_8984s_localized_event(self):
+        # RFC 8984 §6.8, whose Location carries a description.
+        wire = {
+            "@type": "Event",
+            "title": "Live from Music Bowl: The Band",
+            "locale": "en",
+            "locations": {
+                "c0": {
+                    "@type": "Location",
+                    "name": "The Music Bowl",
+                    "description": "Music Bowl, Central Park, New York",
+                    "coordinates": "geo:40.7829,-73.9654",
+                }
+            },
+            "localizations": {"de": {"title": "Live von der Music Bowl: The Band!"}},
+        }
+        event = Event.from_wire(wire)
+        assert event.model_extra == {}
+        assert event.locations is not None
+        assert event.locations["c0"].description == "Music Bowl, Central Park, New York"
+        assert event.localizations == {"de": {"title": "Live von der Music Bowl: The Band!"}}
+        assert event.to_wire() == wire
+
+    def test_a_time_zone_defined_inline(self):
+        wire = {
+            "@type": "Event",
+            "timeZone": "/example.com/tz/Europe/Vienna",
+            "timeZones": {
+                "/example.com/tz/Europe/Vienna": {
+                    "@type": "TimeZone",
+                    "tzId": "Europe/Vienna",
+                    "validUntil": "2030-01-01T00:00:00Z",
+                    "aliases": {"Europe/Wien": True},
+                    "standard": [
+                        {
+                            "@type": "TimeZoneRule",
+                            "start": "1996-10-27T03:00:00",
+                            "offsetFrom": "+0200",
+                            "offsetTo": "+0100",
+                            "recurrenceRules": [{"frequency": "yearly", "byMonth": ["10"]}],
+                            "names": {"CET": True},
+                            "comments": ["winter"],
+                        }
+                    ],
+                    "daylight": [
+                        {"start": "1981-03-29T02:00:00", "offsetFrom": "+0100", "offsetTo": "+0200"}
+                    ],
+                }
+            },
+        }
+        event = Event.from_wire(wire)
+        assert event.model_extra == {}
+        assert event.time_zones is not None
+        vienna = event.time_zones["/example.com/tz/Europe/Vienna"]
+        assert isinstance(vienna, TimeZone)
+        assert vienna.standard is not None
+        assert (vienna.standard[0].offset_to, vienna.standard[0].names) == ("+0100", {"CET": True})
+        assert event.to_wire() == wire
+
+    def test_the_rest_of_1_0_reads_typed_too(self):
+        wire = {
+            "@type": "Task",
+            "sentBy": "mailto:boss@example.com",
+            "excluded": False,
+            "excludedRecurrenceRules": [{"frequency": "yearly"}],
+            "requestStatus": "2.0;Success",
+            "progressUpdated": "2020-01-10T08:00:00Z",
+            "links": {
+                "a": {
+                    "href": "cid:logo@example.com",
+                    "cid": "logo@example.com",
+                    "display": "badge",
+                },
+                "b": {"href": "https://example.com/big.png", "display": {"fullsize": True}},
+            },
+            "virtualLocations": {"v": {"uri": "tel:+1-555-0100", "description": "Dial in"}},
+            "participants": {
+                "p": {
+                    "locationId": "l1",
+                    "language": "de",
+                    "participationComment": "Late",
+                    "scheduleAgent": "client",
+                    "scheduleForceSend": True,
+                    "scheduleStatus": ["2.0"],
+                    "invitedBy": "o",
+                    "progressUpdated": "2020-01-10T08:00:00Z",
+                }
+            },
+            "locations": {"l1": {"relativeTo": "start", "timeZone": "Europe/Berlin"}},
+        }
+        task = Task.from_wire(wire)
+        assert task.model_extra == {}
+        assert task.links is not None
+        assert (task.links["a"].display, task.links["a"].cid) == ("badge", "logo@example.com")
+        assert task.links["b"].display == {"fullsize": True}
+        assert task.participants is not None
+        assert task.participants["p"].schedule_agent == "client"
+        assert task.to_wire() == wire

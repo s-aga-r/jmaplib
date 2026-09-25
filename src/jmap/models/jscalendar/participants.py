@@ -41,3 +41,19 @@ class Participant(JSObject):
     #: participant, to discard older ones that arrive late.
     schedule_sequence: int | None = None
     schedule_updated: str | None = None
+
+    # -- RFC 8984, which jscalendarbis replaced ------------------------------ #
+    #: Scheduling method -> URI, where jscalendarbis has ``calendar_address``.
+    send_to: dict[str, str] | None = None
+    #: A key of the event's ``locations``: where this participant will be.
+    location_id: str | None = None
+    language: str | None = None
+    participation_comment: str | None = None
+    #: ``server`` (the default), ``client`` or ``none``: who sends the invitations.
+    schedule_agent: str | None = None
+    schedule_force_send: bool | None = None
+    #: iTIP REQUEST-STATUS codes from the last delivery attempts.
+    schedule_status: list[str] | None = None
+    #: The participant id of whoever invited this one.
+    invited_by: str | None = None
+    progress_updated: str | None = None

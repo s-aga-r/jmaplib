@@ -16,6 +16,12 @@ class Location(JSObject):
     coordinates: str | None = None
     links: dict[str, Link] | None = None
 
+    # -- RFC 8984, which jscalendarbis replaced ------------------------------ #
+    description: str | None = None
+    #: ``start`` or ``end``: the location applies to that end of the event.
+    relative_to: str | None = None
+    time_zone: str | None = None
+
 
 class VirtualLocation(JSObject):
     """A video call, chat room or dial-in (§3.2.7)."""
@@ -25,3 +31,5 @@ class VirtualLocation(JSObject):
     #: A set-as-map of ``audio``, ``chat``, ``feed``, ``moderator``, ``phone``,
     #: ``screen`` and ``video``.
     features: dict[str, bool] | None = None
+    #: RFC 8984; jscalendarbis dropped it.
+    description: str | None = None

@@ -27,3 +27,5 @@ class Task(Entry):
     #: ``needs-action``, ``in-process``, ``completed``, ``failed`` or
     #: ``cancelled``. Unset, it follows the participants' progress.
     progress: str | None = None
+    #: RFC 8984: when ``progress`` last changed.
+    progress_updated: str | None = None

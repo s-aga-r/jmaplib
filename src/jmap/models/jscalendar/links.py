@@ -28,6 +28,9 @@ class Link(JSObject):
     #: A link relation (RFC 8288). Unset means ``enclosure``: an attachment.
     #: ``icon`` marks an image to show, and is the only one ``display`` goes with.
     rel: str | None = None
-    #: A set-as-map of ``badge``, ``graphic``, ``fullsize`` and ``thumbnail``.
-    display: dict[str, bool] | None = None
+    #: A set-as-map of ``badge``, ``graphic``, ``fullsize`` and ``thumbnail`` -
+    #: or, in RFC 8984, one of them as a plain string.
+    display: dict[str, bool] | str | None = None
     title: str | None = None
+    #: RFC 8984: a Content-ID, for a resource in the same MIME message.
+    cid: str | None = None
