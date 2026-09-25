@@ -72,8 +72,9 @@ Five things:
   batch them rather than combining them. Check the engine's `sieve_extensions`
   before relying on `fileinto`, `vacation` or anything else optional.
 - **Script names are measured in octets.** `maxSizeScriptName` counts the UTF-8
-  encoding, so a four-character CJK name is twelve. The builder's `check_name()`
-  applies the account's limits before the server refuses a name.
+  encoding, so a four-character CJK name is twelve. `sieve_script.set()` checks
+  every name against the account's limits before the server can refuse it, and
+  `check_name()` checks one on its own - as a user types it, say.
 - **There is no `SieveScript/changes`.** RFC 9661 defines none, so when push says
   scripts changed, fetch them again with `/get` - cheap for a handful of scripts.
 

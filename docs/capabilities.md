@@ -119,25 +119,27 @@ locally rather than letting you discover them from an error. Each check raises
 |---|---|
 | `maxSizeUpload` | `client.upload` |
 | `maxObjectsInSet` | an oversized `/set` |
+| `collationAlgorithms` | a `sort` naming a collation, on any `/query` |
+| `emailQuerySortOptions`, `fileNodeQuerySortOptions` | a `sort` on `Email/query` or `FileNode/query` |
 | `supportedDigestAlgorithms` | requesting `digest:<alg>` through `batch.blob.blob.get` |
 | `supportedTypeNames` | naming types in `batch.blob.blob.lookup` |
 | `maxDataSources`, `maxSizeBlobSet` | creating a blob with `batch.blob.blob.upload` |
 | `maxExpandedQueryDuration` | an expanding `batch.calendars.calendar_event.query` |
 | `maxAvailabilityDuration` | asking `batch.principals.principal.get_availability` |
+| `maxSizeMailboxName`, `mayCreateTopLevelMailbox` | naming or creating a mailbox with `batch.mail.mailbox.set` |
+| `maxSizeScriptName` | naming a script with `batch.sieve.sieve_script.set` |
+| `forbiddenNameChars`, `forbiddenNodeNames`, `maxSizeFileNodeName` | naming a node with `batch.files.file_node.set` |
 
-The blob, calendar and availability checks live in those builders; a call queued
-with `batch.add` goes out unchecked. Others are functions for you to call before
-queueing the request - nothing calls them for you:
+The sort checks run in the batch itself, so a call queued with `batch.add` gets
+them too; every other one lives in its builder, and `batch.add` skips it. Each
+list is checked only if the server advertised it - one left out refuses
+nothing. `maxFileNodeDepth` needs to know where in the tree a node goes, which a
+`/set` does not say, so `jmap.capabilities.files.check_depth` is yours to call.
 
-| Field | Function |
-|---|---|
-| `collationAlgorithms` | `jmap.core.limits.check_collation` |
-| `forbiddenNameChars`, `forbiddenNodeNames`, `maxSizeFileNodeName` | `jmap.capabilities.files.check_node_name` |
-| `maxFileNodeDepth` | `jmap.capabilities.files.check_depth` |
-| `fileNodeQuerySortOptions` | `jmap.capabilities.files.check_sort` |
-
-`emailQuerySortOptions` and `maxDelayedSend` are not checked at all; read them
-from the capability when you need them.
+`maxDelayedSend`, `maxMailboxDepth`, `maxMailboxesPerEmail` and
+`maxSizeAttachmentsPerEmail` are not checked; read them with
+`jmap.capabilities.mail.MailCapability` and `SubmissionCapability`, as
+`BlobCapability` is read above.
 
 A check is a real round trip saved, but more importantly it is a better error:
 the exception names the field and the value the server advertised, which a
