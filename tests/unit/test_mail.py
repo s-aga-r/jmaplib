@@ -401,8 +401,9 @@ class TestCapabilityObjects:
         assert submission.supports("futurerelease")
         assert not submission.supports("DSN")
 
-    def test_a_server_that_cannot_delay_says_zero(self):
-        assert SubmissionCapability.of({}).max_delayed_send == 0
+    def test_a_server_that_cannot_delay_says_zero_and_one_that_says_nothing_none(self):
+        assert SubmissionCapability.of({"maxDelayedSend": 0}).max_delayed_send == 0
+        assert SubmissionCapability.of({}).max_delayed_send is None
 
     @pytest.mark.parametrize("value", [None, [], "nope", {"maxSizeMailboxName": "big"}])
     def test_a_malformed_object_reads_as_defaults(self, value):

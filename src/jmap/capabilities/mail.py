@@ -75,9 +75,9 @@ class MailCapability(JMAPModel):
 class SubmissionCapability(JMAPModel):
     """The per-account ``urn:ietf:params:jmap:submission`` object (RFC 8621 §1.3.2)."""
 
-    #: Seconds a submission may be held before sending; 0 when the server
-    #: cannot hold one at all.
-    max_delayed_send: int = 0
+    #: Seconds a submission may be held before sending: 0 when the server
+    #: cannot hold one at all, ``None`` if not advertised.
+    max_delayed_send: int | None = None
     #: SMTP extensions a submission may use: EHLO keyword -> its arguments, e.g.
     #: ``{"FUTURERELEASE": ["86400", "2026-10-01T00:00:00Z"], "DSN": []}``.
     submission_extensions: dict[str, list[str]] = Field(default_factory=dict)
@@ -117,6 +117,13 @@ def check_mailboxes_per_email(count: int, capability: MailCapability) -> None:
     limit = capability.max_mailboxes_per_email
     if limit is not None and count > limit:
         raise CapabilityFieldError(MAIL_URN, "maxMailboxesPerEmail", limit, count)
+
+
+def check_delayed_send(seconds: float, capability: SubmissionCapability) -> None:
+    """Reject a hold longer than the account allows (§1.3.2); a limit of 0 allows none."""
+    limit = capability.max_delayed_send
+    if limit is not None and seconds > limit:
+        raise CapabilityFieldError(SUBMISSION_URN, "maxDelayedSend", limit, seconds)
 
 
 #: RFC 8621 §4.2. What ``Email/get`` returns when ``properties`` is null. Worth

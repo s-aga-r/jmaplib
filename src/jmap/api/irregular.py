@@ -30,7 +30,13 @@ from jmap.api.groupware import (
     CalendarEventQueryable,
     ContactCardParsable,
 )
-from jmap.api.mail import EmailImportable, EmailParsable, EmailSettable, SearchSnippetGettable
+from jmap.api.mail import (
+    EmailImportable,
+    EmailParsable,
+    EmailSettable,
+    EmailSubmissionSettable,
+    SearchSnippetGettable,
+)
 from jmap.api.names import FileNodeSettable, MailboxSettable, SieveScriptSettable
 from jmap.capabilities.blob import (
     BLOB_URN,
@@ -343,6 +349,7 @@ CUSTOM_BUILDERS: dict[str, type[EntityBase[Any]]] = {
     "MDN/parse": MDNSendable,
     "Email/import": EmailImportable,
     "Email/set": EmailSettable,
+    "EmailSubmission/set": EmailSubmissionSettable,
     "Email/parse": EmailParsable,
     "SearchSnippet/get": SearchSnippetGettable,
     "CalendarEvent/query": CalendarEventQueryable,

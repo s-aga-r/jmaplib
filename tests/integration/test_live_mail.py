@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from jmap.capabilities.mail import MAIL_URN, MailCapability
+from jmap.capabilities.mail import MAIL_URN, SUBMISSION_URN, MailCapability, SubmissionCapability
 from jmap.core.errors import CapabilityFieldError
 from jmap.core.ids import CreationRef
 from jmap.models.mail.headers import text
@@ -172,6 +172,27 @@ class TestSorting:
             pytest.raises(CapabilityFieldError, match="emailQuerySortOptions"),
         ):
             batch.mail.email.query(sort=[{"property": "jmaplibNoSuchSort"}])
+
+
+@requires_server
+class TestSubmissionLimits:
+    def test_a_hold_past_the_advertised_limit_never_leaves(self, alice):
+        requires_method(alice, "EmailSubmission/set")
+        account = alice.session.capability_account(SUBMISSION_URN, alice.default_account)
+        submission = SubmissionCapability.of(
+            alice.session.capability_value(SUBMISSION_URN, account)
+        )
+        if submission.max_delayed_send is None:
+            pytest.skip("server does not say how long a submission may be held")
+        hold = {"HOLDFOR": str(submission.max_delayed_send + 1)}
+        envelope = {"mailFrom": {"email": ALICE, "parameters": hold}, "rcptTo": [{"email": ALICE}]}
+        with (
+            alice.batch() as batch,
+            pytest.raises(CapabilityFieldError, match="maxDelayedSend"),
+        ):
+            batch.submission.email_submission.set(
+                create={"s": {"identityId": "I", "emailId": "E", "envelope": envelope}}
+            )
 
 
 @requires_server

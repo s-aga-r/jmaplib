@@ -1,11 +1,12 @@
 """The mail and submission limits an account advertises (RFC 8621 §1.3).
 
 Checked where a builder can see them: an email's mailboxes on ``Email/set`` and
-``Email/import``.
+``Email/import``, and a held submission on ``EmailSubmission/set``.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -80,3 +81,67 @@ class TestMailboxesPerEmail:
         batch = namespaces()
         source = batch.mail.email.get(ids=["e1"])
         assert batch.mail.email.set(create=source.ref("/list/0"))
+
+
+def held(**parameters: Any) -> dict[str, Any]:
+    """A submission whose envelope asks for the given SMTP parameters."""
+    return {
+        "identityId": "I1",
+        "emailId": "E1",
+        "envelope": {
+            "mailFrom": {"email": "alice@example.com", "parameters": parameters},
+            "rcptTo": [{"email": "bob@example.com"}],
+        },
+    }
+
+
+def in_days(days: float) -> str:
+    return (datetime.now(UTC) + timedelta(days=days)).isoformat()
+
+
+WEEK = {"maxDelayedSend": 7 * 86400}
+
+
+class TestDelayedSend:
+    @pytest.mark.parametrize(
+        "submission",
+        [
+            held(HOLDFOR="3600"),
+            held(HOLDUNTIL=in_days(1)),
+            # Already due: no hold at all.
+            held(HOLDUNTIL="2020-01-01T00:00:00Z"),
+            {"identityId": "I1", "emailId": "E1"},
+            # Values it cannot read are the server's to judge.
+            held(HOLDFOR="soon"),
+            held(HOLDUNTIL="tomorrow"),
+            held(HOLDUNTIL="2030-01-01T00:00:00"),
+        ],
+    )
+    def test_a_hold_within_the_limit_goes_out(self, submission):
+        batch = namespaces(submission=WEEK)
+        assert batch.submission.email_submission.set(create={"s": submission})
+
+    @pytest.mark.parametrize(
+        "submission",
+        [held(HOLDFOR=str(8 * 86400)), held(holdfor="700000"), held(HOLDUNTIL=in_days(10))],
+    )
+    def test_a_longer_hold_is_refused(self, submission):
+        batch = namespaces(submission=WEEK)
+        with pytest.raises(CapabilityFieldError, match="maxDelayedSend"):
+            batch.submission.email_submission.set(create={"s": submission})
+
+    def test_a_server_that_cannot_hold_refuses_any_hold(self):
+        batch = namespaces(submission={"maxDelayedSend": 0})
+        with pytest.raises(CapabilityFieldError, match="maxDelayedSend"):
+            batch.submission.email_submission.set(create={"s": held(HOLDFOR="60")})
+
+    def test_a_server_that_said_nothing_refuses_nothing(self):
+        batch = namespaces(submission={})
+        assert batch.submission.email_submission.set(create={"s": held(HOLDFOR="99999999")})
+
+    def test_the_other_arguments_go_out_as_given(self):
+        handle = namespaces(submission=WEEK).submission.email_submission.set(
+            create={"s": held(HOLDFOR="60")},
+            onSuccessDestroyEmail=["#s"],
+        )
+        assert handle.call.to_wire_arguments()["onSuccessDestroyEmail"] == ["#s"]

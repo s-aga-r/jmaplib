@@ -5,17 +5,26 @@
 model (see :mod:`jmap.models.mail.irregular`), which these builders ask for; a
 raw ``batch.add`` of the same method still answers with the wire dict.
 
-``Email/set`` has the standard shape; its builder here only checks each email's
-mailboxes against the account's limit first, as the import does.
+``Email/set`` and ``EmailSubmission/set`` have the standard shape; their
+builders here only check the account's limits first - an email's mailboxes, as
+the import does, and how long a submission asks to be held.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from jmap.api.entity import Creation, EntityBase, Settable, builder, wire_objects
-from jmap.capabilities.mail import MAIL_URN, MailCapability, check_mailboxes_per_email
+from jmap.capabilities.mail import (
+    MAIL_URN,
+    SUBMISSION_URN,
+    MailCapability,
+    SubmissionCapability,
+    check_delayed_send,
+    check_mailboxes_per_email,
+)
 from jmap.core.ids import CreationRef, Id
 from jmap.core.invocation import Handle, ResultRef
 from jmap.models.arguments import UnsignedInt
@@ -63,6 +72,63 @@ class EmailSettable(Settable[Any]):
         capability = MailCapability.of(self._batch.capability_value(MAIL_URN))
         _check_mailbox_counts([*wire_objects(create), *wire_objects(update)], capability)
         return super().set(create=create, update=update, **extra)
+
+
+class EmailSubmissionSettable(Settable[Any]):
+    """``EmailSubmission/set`` (RFC 8621 §7.5)."""
+
+    __slots__ = ()
+
+    @builder
+    def set(
+        self,
+        *,
+        create: Mapping[str, Creation] | ResultRef[Any] | Unset | None = UNSET,
+        **extra: Any,
+    ) -> Handle[SetResponse[Any]]:
+        """Send messages, and update or cancel sends still pending.
+
+        A submission held with ``HOLDFOR`` or ``HOLDUNTIL`` (RFC 4865) is checked
+        against the account's ``maxDelayedSend`` first; a ``HOLDUNTIL`` is
+        measured from this machine's clock. See
+        :meth:`jmap.api.entity.Settable.set`.
+        """
+        capability = SubmissionCapability.of(self._batch.capability_value(SUBMISSION_URN))
+        now = datetime.now(UTC)
+        for submission in wire_objects(create):
+            seconds = _hold_seconds(submission, now)
+            if seconds is not None:
+                check_delayed_send(seconds, capability)
+        return super().set(create=create, **extra)
+
+
+def _hold_seconds(submission: Mapping[str, Any], now: datetime) -> float | None:
+    """How long a submission asks to be held, or ``None`` if it does not ask.
+
+    The hold is a parameter on the envelope's ``mailFrom``: ``HOLDFOR`` in
+    seconds, or ``HOLDUNTIL`` as a date-time. A value this cannot read is the
+    server's to judge.
+    """
+    envelope = _mapping(submission.get("envelope"))
+    parameters = _mapping(_mapping(envelope.get("mailFrom")).get("parameters"))
+    # SMTP parameter names ignore case.
+    named = {str(name).upper(): value for name, value in parameters.items()}
+    hold_for, hold_until = named.get("HOLDFOR"), named.get("HOLDUNTIL")
+    if isinstance(hold_for, str) and hold_for.isdigit():
+        return float(hold_for)
+    if not isinstance(hold_until, str):
+        return None
+    try:
+        until = datetime.fromisoformat(hold_until)
+    except ValueError:
+        return None
+    if until.utcoffset() is None:
+        return None
+    return max(0.0, (until - now).total_seconds())
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return cast("Mapping[str, Any]", value) if isinstance(value, Mapping) else {}
 
 
 class EmailImportable(EntityBase[Any]):
