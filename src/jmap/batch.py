@@ -151,11 +151,16 @@ class Batch:
         arguments: Mapping[str, Any] | None = None,
         *,
         account_id: Id | None = None,
+        response_model: type[Any] | None = None,
     ) -> Handle[Any]:
         """Queue ``name`` and return its handle.
 
         The handle is usable as a back-reference source straight away; its result
         only becomes readable once the batch has been executed.
+
+        ``response_model`` parses the answer into that model instead of the
+        method's usual result. Typed builders pass it for methods whose raw call
+        has always answered with the wire dict, so that answer does not change.
         """
         spec = self._require_method(name)
         args = dict(arguments or {})
@@ -199,7 +204,9 @@ class Batch:
         call_id = f"c{self._counter}"
         # The parser is chosen from the method's shape and the type it acts on,
         # so `Email/get` really does yield a GetResponse[Email] rather than a dict.
-        parse = parser_for(spec, self._capabilities.data_type(spec.type_name))
+        parse = parser_for(
+            spec, self._capabilities.data_type(spec.type_name), response_model=response_model
+        )
         call = MethodCall(name, args, parse=parse)
 
         chunks = self._split_if_oversized(spec, call)

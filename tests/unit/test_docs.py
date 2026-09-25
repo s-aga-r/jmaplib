@@ -87,6 +87,8 @@ SURFACE, METHOD_NAMES = registry_surface()
 #: without the registry naming a separate method.
 _ALIASES = {
     "query_changes": "queryChanges",
+    # `import` is a keyword.
+    "import_": "import",
     # SieveScript/set drives both, through onSuccessActivateScript.
     "activate": "set",
     "deactivate": "set",

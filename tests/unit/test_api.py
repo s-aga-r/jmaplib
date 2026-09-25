@@ -31,7 +31,7 @@ from jmap.capabilities.mail import (
     VACATION_URN,
 )
 from jmap.capabilities.registry import ActiveCapabilities, Registry
-from jmap.capabilities.spec import MethodKind
+from jmap.capabilities.spec import DataTypeSpec, MethodKind
 from jmap.core.errors import JMAPError
 from jmap.core.ids import CreationRef, Id
 from jmap.core.session import Session
@@ -290,13 +290,19 @@ class TestComposition:
         assert hasattr(entity, "set")
         assert not hasattr(entity, "query")
 
-    def test_a_type_with_no_standard_methods_falls_back_to_the_base(self, batch):
-        # SearchSnippet/get is CUSTOM, not a standard /get.
+    def test_a_type_with_no_methods_falls_back_to_the_base(self, batch):
+        entity = entity_for(batch, MAIL, DataTypeSpec(name="Unknown"))
+        assert type(entity) is entity_class(frozenset())
+        assert entity_class(frozenset()).__bases__ == (EntityBase,)
+        assert not hasattr(entity, "get")
+
+    def test_an_irregular_get_comes_from_its_own_builder(self, batch):
+        # SearchSnippet/get is CUSTOM, not a standard /get: it takes emailIds.
         data_type = MAIL.data_type("SearchSnippet")
         assert data_type is not None
         entity = entity_for(batch, MAIL, data_type)
-        assert isinstance(entity, EntityBase)
-        assert not hasattr(entity, "get")
+        assert not isinstance(entity, Gettable)
+        assert hasattr(entity, "get")
 
     def test_classes_are_cached_per_shape(self):
         first = entity_class(frozenset({MethodKind.GET}))

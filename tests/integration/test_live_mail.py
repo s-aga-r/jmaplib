@@ -18,12 +18,14 @@ overstates what works.
 from __future__ import annotations
 
 import os
+import uuid
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from jmap.core.ids import CreationRef
 from jmap.models.mail.headers import text
+from jmap.models.mail.irregular import EmailImport
 from tests.integration.conftest import connect
 
 if TYPE_CHECKING:
@@ -171,6 +173,65 @@ class TestEmailLifecycle:
         # Every id is unknown, so they all come back in notFound - which is
         # exactly what proves the chunks were merged rather than truncated.
         assert len(handle.result.not_found) == len(ids)
+
+
+def _message(subject: str) -> bytes:
+    """A minimal RFC 5322 message, as an uploaded blob would hold one."""
+    return (
+        f"From: <{ALICE}>\r\nTo: <{ALICE}>\r\nSubject: {subject}\r\n"
+        f"Message-ID: <{uuid.uuid4()}@jmaplib.test>\r\n"
+        "Date: Thu, 24 Sep 2026 10:00:00 +0000\r\n"
+        "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        f"Body of {subject}.\r\n"
+    ).encode()
+
+
+@requires_server
+class TestImportParseAndSnippets:
+    """The mail methods with no standard shape, through their typed builders."""
+
+    def test_a_blob_parses_as_a_message_without_being_stored(self, alice):
+        requires_method(alice, "Email/parse")
+        subject = f"jmaplib parse {uuid.uuid4().hex[:8]}"
+        uploaded = alice.upload(_message(subject), content_type="message/rfc822")
+
+        with alice.batch() as batch:
+            parsed = batch.mail.email.parse(
+                blob_ids=[uploaded.blob_id], properties=["subject", "from"]
+            )
+
+        email = parsed.result.email_of(uploaded.blob_id)
+        assert email is not None, parsed.result
+        assert email.subject == subject
+        assert email.from_ is not None
+        assert email.from_[0].email == ALICE
+
+    def test_a_blob_imports_as_a_message_and_snippets_find_it(self, alice):
+        requires_method(alice, "Email/import")
+        inbox = mailbox_by_role(alice, "inbox")
+        word = f"jmaplibsnippet{uuid.uuid4().hex[:8]}"
+        uploaded = alice.upload(_message(f"Import {word}"), content_type="message/rfc822")
+
+        with alice.batch() as batch:
+            imported = batch.mail.email.import_(
+                emails={"k1": EmailImport(blob_id=uploaded.blob_id, mailbox_ids={inbox: True})}
+            )
+        assert not imported.result.has_errors, imported.result.creation_errors
+        email_id = imported.result.created_id("k1")
+        assert email_id
+        try:
+            if alice.capabilities.supports("SearchSnippet/get"):
+                with alice.batch() as batch:
+                    snippets = batch.mail.search_snippet.get(
+                        filter={"subject": word}, email_ids=[email_id]
+                    )
+                snippet = snippets.result.snippet_of(email_id)
+                assert snippet is not None, snippets.result
+                assert snippet.subject is not None
+                assert f"<mark>{word}</mark>" in snippet.subject
+        finally:
+            with alice.batch() as batch:
+                batch.mail.email.set(destroy=[email_id])
 
 
 @requires_server

@@ -240,13 +240,14 @@ receipts_id = created.result.created_id("r")
 
 Every method has a raw path, taking wire-spelled arguments and returning the
 response as a dict. It is how you reach the few methods without a typed builder
-(`Email/import`, `Email/parse` and others) and vendor extensions:
+(`CalendarEvent/parse`, `Principal/getAvailability` and others) and vendor
+extensions:
 
 ```python
 result = client.call("Mailbox/get", {"ids": None})  # one call, no batch
 
 with client.batch() as batch:
-    parsed = batch.add("Email/parse", {"blobIds": [blob_id]})
+    parsed = batch.add("Email/parse", {"blobIds": [blob_id]})  # parsed.result is a dict
 ```
 
 The raw path skips the typed surface and the argument checks, but not the rest:
@@ -273,8 +274,10 @@ print(found.result.total, "flagged messages")
 ```
 
 Ask for the properties you need; a bare `Email/get` returns the whole, large
-object. Page with `position=` or `anchor=` (not both). Message bodies arrive
-separately from their structure, so ask for them explicitly:
+object. Page with `position=` or `anchor=` (not both). To show *why* each result
+matched, add `batch.mail.search_snippet.get(filter=..., email_ids=found.ref_ids())`
+to the same batch. Message bodies arrive separately from their structure, so ask
+for them explicitly:
 
 ```python
 with client.batch() as batch:

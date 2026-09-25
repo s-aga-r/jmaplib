@@ -74,8 +74,16 @@ class EntityBase(Generic[T]):
         """The data type these builders build calls for - ``Email``."""
         return self._type_name
 
-    def _add(self, suffix: str, arguments: Mapping[str, Any]) -> Handle[Any]:
-        return self._batch.add(f"{self._type_name}/{suffix}", arguments)
+    def _add(
+        self,
+        suffix: str,
+        arguments: Mapping[str, Any],
+        *,
+        response_model: type[Any] | None = None,
+    ) -> Handle[Any]:
+        return self._batch.add(
+            f"{self._type_name}/{suffix}", arguments, response_model=response_model
+        )
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}({self._type_name!r})"

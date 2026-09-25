@@ -24,6 +24,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from jmap.api.entity import EntityBase, builder
+from jmap.api.mail import EmailImportable, EmailParsable, SearchSnippetGettable
 from jmap.capabilities.blob import (
     BLOB_URN,
     DIGEST_PREFIX,
@@ -321,7 +322,8 @@ class MDNSendable(EntityBase[Any]):
 
 #: Method name -> the mixin that builds it. Consulted alongside the six standard
 #: shapes, so an irregular method still yields a typed builder and, like the
-#: standard ones, only appears when the server declares the method.
+#: standard ones, only appears when the server declares the method. The mail
+#: ones live in :mod:`jmap.api.mail`.
 CUSTOM_BUILDERS: dict[str, type[EntityBase[Any]]] = {
     "Blob/upload": BlobUploadable,
     "Blob/get": BlobGettable,
@@ -330,4 +332,7 @@ CUSTOM_BUILDERS: dict[str, type[EntityBase[Any]]] = {
     "SieveScript/validate": SieveValidatable,
     "MDN/send": MDNSendable,
     "MDN/parse": MDNSendable,
+    "Email/import": EmailImportable,
+    "Email/parse": EmailParsable,
+    "SearchSnippet/get": SearchSnippetGettable,
 }

@@ -141,13 +141,10 @@ from jmap import CreationRef
 
 with client.batch() as batch:
     batch.blob.blob.upload(create={"b": BlobUpload(data=[DataSource.text(source)])})
-    batch.add(
-        "Email/import",
-        {"emails": {"e1": {"blobId": CreationRef("b"), "mailboxIds": {inbox_id: True}}}},
+    batch.mail.email.import_(
+        emails={"e1": {"blobId": CreationRef("b"), "mailboxIds": {inbox_id: True}}}
     )
 ```
-
-(`Email/import` has no typed builder - see [Batching](batching.md#methods-without-a-builder).)
 
 Servers vary on how far they honour this outside a `/set`. Stalwart resolves it
 in `Blob/get`'s `ids` but not in `SieveScript/validate`'s `blobId`, where it

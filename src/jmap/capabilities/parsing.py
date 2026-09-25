@@ -67,20 +67,26 @@ def _response_model(kind: MethodKind, model: type[Any]) -> type[Any]:
 
 
 def parser_for(
-    method: MethodSpec, data_type: DataTypeSpec | None
+    method: MethodSpec,
+    data_type: DataTypeSpec | None,
+    *,
+    response_model: type[Any] | None = None,
 ) -> Callable[[Mapping[str, Any]], Any]:
     """The function that turns this method's response arguments into a result.
 
-    A method may name its own ``response_model``, which wins over everything: it
-    is how a standard shape carrying one extra argument stays typed, and how an
-    irregular method still gets a model rather than a mapping.
+    A model passed as ``response_model`` wins over everything: it is how a typed
+    builder gets a model for a method whose raw call has always answered with a
+    mapping. Next comes the method's own ``response_model``, which is how a
+    standard shape carrying one extra argument stays typed, and how an irregular
+    method still gets a model rather than a mapping.
 
     Otherwise this falls back to the spec's own parser when the shape is irregular
     or the data type is unknown - an advertised-but-unmodelled capability still has
     to return *something*, and a raw mapping is more useful than an error.
     """
-    if method.response_model is not None:
-        return _validator(method.response_model)
+    model = response_model or method.response_model
+    if model is not None:
+        return _validator(model)
     if method.kind is MethodKind.CUSTOM or data_type is None:
         return method.parse
     return _validator(_response_model(method.kind, data_type.model))

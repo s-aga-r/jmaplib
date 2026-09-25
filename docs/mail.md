@@ -81,6 +81,27 @@ batch.mail.email.query(filter=..., anchor=last_id, anchor_offset=1, limit=25)
 
 For a result set you intend to keep current, see [Staying in sync](sync.md).
 
+### Search snippets
+
+`SearchSnippet/get` shows why each result matched: its subject and preview with
+the matching terms marked. Pass the query's own filter and the ids it found, in
+the same request:
+
+```python
+search = {"text": "invoice"}
+
+with client.batch() as batch:
+    found = batch.mail.email.query(filter=search, limit=20)
+    snippets = batch.mail.search_snippet.get(filter=search, email_ids=found.ref_ids())
+
+for snippet in snippets.result.items:
+    print(snippet.email_id, snippet.subject, snippet.preview)
+```
+
+Both are HTML - `&`, `<` and `>` escaped, each match wrapped in `<mark>` - and
+either is `None` when nothing in it matched. `snippets.result.snippet_of(email_id)`
+finds one email's snippet.
+
 ## Reading a message
 
 Bodies arrive separately from structure. Ask for `bodyValues` with a fetch flag:
@@ -286,29 +307,39 @@ does the mailbox exist, is the blob still there - is left to the server.
 
 ## Importing and parsing
 
-`Email/import` takes a blob you have already uploaded and files it as a message;
+`Email/import` files a blob you have already uploaded as a message;
 `Email/parse` reads a blob as a message *without* storing it, which is how you
 inspect an attached `.eml`.
 
-Neither has a typed builder yet, so they go through `batch.add` with wire-spelled
-arguments - everything else still applies, including `using` derivation and the
-local gates:
+```python
+from jmap.models.mail.irregular import EmailImport
+
+uploaded = client.upload(eml_bytes, content_type="message/rfc822")
+
+with client.batch() as batch:
+    imported = batch.mail.email.import_(
+        emails={"k1": EmailImport(blob_id=uploaded.blob_id, mailbox_ids={inbox_id: True})}
+    )
+
+print(imported.result.created_id("k1"))
+```
+
+The trailing underscore is because `import` is a Python keyword. The call
+half-succeeds like a `/set`, so a failure is a value in
+`imported.result.creation_errors` - `alreadyExists`, carrying the existing id,
+when the message is already in the account. Pass `if_in_state` to make a retry
+safe.
 
 ```python
 with client.batch() as batch:
-    parsed = batch.add(
-        "Email/parse",
-        {
-            "blobIds": [blob_id],
-            "properties": ["subject", "from"],
-        },
-    )
+    parsed = batch.mail.email.parse(blob_ids=[blob_id], properties=["subject", "from"])
 
-print(parsed.result["parsed"])
+email = parsed.result.email_of(blob_id)
 ```
 
-See [Batching](batching.md#methods-without-a-builder) for the full list, and
-[Blobs](blobs.md) for getting the blob there in the first place.
+Each blob yields one email, stored nowhere - so it has no `id` or `mailbox_ids`.
+Blobs that are not messages are listed in `not_parsable`. See [Blobs](blobs.md)
+for getting the blob there in the first place.
 
 ## Threads
 
