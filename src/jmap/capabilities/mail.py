@@ -10,14 +10,21 @@ request.
 
 ``Identity`` lives under ``:submission`` rather than ``:mail``: it exists to name
 what you may send *from*, so a server without submission has no use for it.
+
+Both carry their fields per account (§1.3), empty at session level. A field a
+server leaves out reads as "not said" rather than as a limit of nothing, so an
+absent ``emailQuerySortOptions`` refuses no sort.
 """
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Any, Final
+
+from pydantic import Field
 
 from jmap.capabilities.spec import CapabilitySpec, DataTypeSpec, MethodKind, MethodSpec
 from jmap.core.limits import LimitKey
+from jmap.models.base import JMAPModel
 from jmap.models.mail.objects import (
     Email,
     EmailSubmission,
@@ -32,6 +39,61 @@ MAIL_URN: Final = "urn:ietf:params:jmap:mail"
 SUBMISSION_URN: Final = "urn:ietf:params:jmap:submission"
 VACATION_URN: Final = "urn:ietf:params:jmap:vacationresponse"
 SMIME_URN: Final = "urn:ietf:params:jmap:smimeverify"
+
+#: RFC 8621 §1.3.1: ``maxSizeMailboxName`` is at least this, in octets.
+MIN_SIZE_MAILBOX_NAME: Final = 100
+
+
+class MailCapability(JMAPModel):
+    """The per-account ``urn:ietf:params:jmap:mail`` object (RFC 8621 §1.3.1)."""
+
+    #: How many mailboxes one email may be in; ``None`` for no limit.
+    max_mailboxes_per_email: int | None = None
+    #: One more than the most ancestors a mailbox may have; ``None`` for no limit.
+    max_mailbox_depth: int | None = None
+    #: In UTF-8 **octets**, not characters.
+    max_size_mailbox_name: int = MIN_SIZE_MAILBOX_NAME
+    #: The sum of the *unencoded* attachment sizes one email may carry.
+    max_size_attachments_per_email: int | None = None
+    #: Every ``property`` an ``Email/query`` comparator may name, vendor ones
+    #: included; ``None`` if not advertised.
+    email_query_sort_options: list[str] | None = None
+    #: Whether a mailbox may be created with a null ``parentId``; ``None`` if
+    #: not advertised.
+    may_create_top_level_mailbox: bool | None = None
+
+    @classmethod
+    def of(cls, value: Any) -> MailCapability:
+        """Parse an advertised capability object, tolerating a malformed one."""
+        try:
+            return cls.model_validate(dict(value))
+        except (ValueError, TypeError):
+            return cls()
+
+
+class SubmissionCapability(JMAPModel):
+    """The per-account ``urn:ietf:params:jmap:submission`` object (RFC 8621 §1.3.2)."""
+
+    #: Seconds a submission may be held before sending; 0 when the server
+    #: cannot hold one at all.
+    max_delayed_send: int = 0
+    #: SMTP extensions a submission may use: EHLO keyword -> its arguments, e.g.
+    #: ``{"FUTURERELEASE": ["86400", "2026-10-01T00:00:00Z"], "DSN": []}``.
+    submission_extensions: dict[str, list[str]] = Field(default_factory=dict)
+
+    def supports(self, extension: str) -> bool:
+        """Whether an SMTP extension is offered. EHLO keywords ignore case."""
+        wanted = extension.upper()
+        return any(keyword.upper() == wanted for keyword in self.submission_extensions)
+
+    @classmethod
+    def of(cls, value: Any) -> SubmissionCapability:
+        """Parse an advertised capability object, tolerating a malformed one."""
+        try:
+            return cls.model_validate(dict(value))
+        except (ValueError, TypeError):
+            return cls()
+
 
 #: RFC 8621 §4.2. What ``Email/get`` returns when ``properties`` is null. Worth
 #: stating because it is a *subset* - notably it excludes ``bodyStructure`` and
@@ -102,6 +164,7 @@ MAIL: Final = CapabilitySpec(
     urn=MAIL_URN,
     attr="mail",
     reference="RFC 8621",
+    account_value=MailCapability,
     data_types=(
         DataTypeSpec(name="Mailbox", model=Mailbox, shareable=True),
         DataTypeSpec(name="Thread", model=Thread),
@@ -209,6 +272,7 @@ SUBMISSION: Final = CapabilitySpec(
     urn=SUBMISSION_URN,
     attr="submission",
     reference="RFC 8621 §6-7",
+    account_value=SubmissionCapability,
     # Sending needs the message, so submission always drags mail in with it.
     requires=frozenset({MAIL_URN}),
     data_types=(

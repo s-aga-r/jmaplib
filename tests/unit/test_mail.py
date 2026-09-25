@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -13,12 +13,15 @@ from jmap.capabilities.mail import (
     EMAIL_DEFAULT_PROPERTIES,
     MAIL,
     MAIL_URN,
+    MIN_SIZE_MAILBOX_NAME,
     SMIME_URN,
     SMIME_VERIFY,
     SUBMISSION,
     SUBMISSION_URN,
     VACATION,
     VACATION_URN,
+    MailCapability,
+    SubmissionCapability,
 )
 from jmap.capabilities.registry import Registry
 from jmap.core.errors import CapabilityNotSupportedError
@@ -353,6 +356,64 @@ class TestSpecDetails:
         spec = MAIL.data_type("Mailbox")
         assert spec is not None
         assert spec.shareable
+
+
+class TestCapabilityObjects:
+    """RFC 8621 §1.3's per-account objects, as Stalwart 0.16.17 advertises them."""
+
+    MAIL: ClassVar[dict[str, Any]] = {
+        "maxMailboxesPerEmail": None,
+        "maxMailboxDepth": 10,
+        "maxSizeMailboxName": 255,
+        "maxSizeAttachmentsPerEmail": 50000000,
+        "emailQuerySortOptions": ["receivedAt", "size", "from", "to", "subject", "sentAt"],
+        "mayCreateTopLevelMailbox": True,
+    }
+    SUBMISSION: ClassVar[dict[str, Any]] = {
+        "maxDelayedSend": 2592000,
+        "submissionExtensions": {"FUTURERELEASE": [], "SIZE": [], "MT-PRIORITY": ["MIXER"]},
+    }
+
+    def test_the_mail_object_parses(self):
+        mail = MailCapability.of(self.MAIL)
+        assert mail.max_mailboxes_per_email is None
+        assert (mail.max_mailbox_depth, mail.max_size_mailbox_name) == (10, 255)
+        assert mail.max_size_attachments_per_email == 50000000
+        assert mail.email_query_sort_options is not None
+        assert "receivedAt" in mail.email_query_sort_options
+        assert mail.may_create_top_level_mailbox is True
+
+    def test_an_absent_field_says_nothing(self):
+        # Not "sorts by nothing" or "may create nothing": the checks built on
+        # these stay out of the way of a server that left them out.
+        mail = MailCapability.of({})
+        assert mail.email_query_sort_options is None
+        assert mail.may_create_top_level_mailbox is None
+        assert mail.max_size_mailbox_name == MIN_SIZE_MAILBOX_NAME
+
+    def test_the_submission_object_parses(self):
+        submission = SubmissionCapability.of(self.SUBMISSION)
+        assert submission.max_delayed_send == 2592000
+        assert submission.submission_extensions["MT-PRIORITY"] == ["MIXER"]
+
+    def test_an_extension_is_found_whatever_its_case(self):
+        submission = SubmissionCapability.of(self.SUBMISSION)
+        assert submission.supports("futurerelease")
+        assert not submission.supports("DSN")
+
+    def test_a_server_that_cannot_delay_says_zero(self):
+        assert SubmissionCapability.of({}).max_delayed_send == 0
+
+    @pytest.mark.parametrize("value", [None, [], "nope", {"maxSizeMailboxName": "big"}])
+    def test_a_malformed_object_reads_as_defaults(self, value):
+        assert MailCapability.of(value) == MailCapability()
+
+    def test_a_malformed_submission_object_reads_as_defaults(self):
+        assert SubmissionCapability.of(["x"]) == SubmissionCapability()
+
+    def test_each_spec_names_its_account_object(self):
+        assert MAIL.account_value is MailCapability
+        assert SUBMISSION.account_value is SubmissionCapability
 
 
 class TestSmimeVerify:
