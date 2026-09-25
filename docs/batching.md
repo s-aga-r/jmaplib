@@ -213,27 +213,21 @@ except MethodError as error:
     print(error.type)  # e.g. "cannotCalculateChanges"
 ```
 
-## Methods without a builder
+## The raw path
 
-Most methods have one of six shapes, which is why they can be generated. A few
-do not, and of those, most have a hand-written builder - `Blob/upload`,
-`Email/import`, `SearchSnippet/get`, `SieveScript/validate`, `MDN/send`. Three
-modelled methods have none yet and go through `batch.add` with wire-spelled
-arguments:
+Most methods have one of six shapes, which is why their builders can be
+generated. The rest have hand-written ones - `Blob/upload`, `Email/import`,
+`SearchSnippet/get`, `SieveScript/validate`, `MDN/send`, `CalendarEvent/parse`
+and the others - so every modelled method has a builder except `Core/echo`, which
+has `client.echo(**arguments)`.
 
-| Method | Reach it with |
-|---|---|
-| `CalendarEvent/parse` | `batch.add("CalendarEvent/parse", {...})` |
-| `ContactCard/parse` | `batch.add("ContactCard/parse", {...})` |
-| `Principal/getAvailability` | `batch.add("Principal/getAvailability", {...})` |
-
-(`Core/echo` is in the same position but has `client.echo(**arguments)`.)
-
-`batch.add` is not a lesser path. It resolves the account, derives `using`,
-enforces the read-only and limit gates, and returns a normal handle you can
-reference from other calls. What you give up is the typed response - the result
-is the raw response dict rather than a parsed model - and the argument checks,
-since there is no signature to check against; the arguments go out as given:
+Underneath them all is `batch.add`, which takes the method name and
+wire-spelled arguments. It is not a lesser path: it resolves the account,
+derives `using`, enforces the read-only and limit gates, and returns a normal
+handle you can reference from other calls. What you give up is the typed
+response - the result is the raw response dict rather than a parsed model - and
+the argument checks, since there is no signature to check against; the
+arguments go out as given:
 
 ```python
 with client.batch() as batch:

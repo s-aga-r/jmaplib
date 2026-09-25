@@ -350,19 +350,34 @@ def entity_class(
     return cached
 
 
-def entity_for(batch: Batch, spec: CapabilitySpec, data_type: DataTypeSpec) -> EntityBase[Any]:
-    """The façade for one data type, exposing only the methods it supports."""
+def entity_for(
+    batch: Batch,
+    spec: CapabilitySpec,
+    data_type: DataTypeSpec,
+    companions: Sequence[CapabilitySpec] = (),
+) -> EntityBase[Any]:
+    """The façade for one data type, exposing only the methods it supports.
+
+    ``companions`` are capabilities with no namespace of their own that add
+    methods to this type: ``:calendars:parse`` gives ``CalendarEvent`` its
+    ``parse``, and ``:principals:availability`` gives ``Principal`` its
+    ``get_availability``. Their methods appear here only when the server
+    advertises them, like every other method.
+    """
     # Local import: `irregular` builds on this module, so importing it at module
     # scope would close a cycle.
     from jmap.api.irregular import CUSTOM_BUILDERS
 
-    methods = [method for method in spec.methods if method.type_name == data_type.name]
+    methods = [
+        method
+        for owner in (spec, *companions)
+        for method in owner.methods
+        if method.type_name == data_type.name
+    ]
     kinds = frozenset(method.kind for method in methods if method.kind in _MIXINS)
     custom = tuple(
         dict.fromkeys(
-            builder
-            for method in methods
-            if (builder := CUSTOM_BUILDERS.get(method.name)) is not None
+            mixin for method in methods if (mixin := CUSTOM_BUILDERS.get(method.name)) is not None
         )
     )
     return entity_class(kinds, custom)(batch, data_type.name, data_type.model)

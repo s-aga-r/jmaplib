@@ -1,8 +1,9 @@
-"""Typed builders for the mail methods with no standard shape.
+"""Typed builders for the mail, calendar and contact methods with no standard shape.
 
-``Email/import``, ``Email/parse`` and ``SearchSnippet/get``. Their builders
-answer with typed models, while the raw ``batch.add`` path keeps answering with
-the wire dict.
+``Email/import``, ``Email/parse``, ``SearchSnippet/get``, ``CalendarEvent/parse``,
+``ContactCard/parse`` and ``Principal/getAvailability``. The last three live in
+companion capabilities with no namespace of their own, so they are lent to the
+namespace holding their data type.
 """
 
 from __future__ import annotations
@@ -14,9 +15,14 @@ from pydantic import ValidationError
 
 from jmap.api.namespace import Namespaces
 from jmap.batch import Batch
+from jmap.capabilities.calendars import AVAILABILITY_URN, CALENDARS_PARSE_URN
+from jmap.capabilities.contacts import CONTACTS_PARSE_URN
+from jmap.core.errors import CapabilityFieldError
 from jmap.core.ids import Id
 from jmap.core.session import Session
 from jmap.defaults import default_registry
+from jmap.models.calendars import AvailabilityResponse, ParsedEvents
+from jmap.models.contacts import ParsedCards
 from jmap.models.mail.irregular import (
     EmailImport,
     EmailImportResponse,
@@ -28,23 +34,37 @@ if TYPE_CHECKING:
     from jmap.capabilities.registry import ActiveCapabilities
     from jmap.core.invocation import Handle
 
-URNS = ("urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail")
+URNS = (
+    "urn:ietf:params:jmap:core",
+    "urn:ietf:params:jmap:mail",
+    "urn:ietf:params:jmap:calendars",
+    CALENDARS_PARSE_URN,
+    "urn:ietf:params:jmap:principals",
+    AVAILABILITY_URN,
+    "urn:ietf:params:jmap:contacts",
+    CONTACTS_PARSE_URN,
+)
 
 
-def active() -> ActiveCapabilities:
-    capabilities: dict[str, Any] = {urn: {} for urn in URNS}
+def active(
+    *, without: tuple[str, ...] = (), availability: dict[str, Any] | None = None
+) -> ActiveCapabilities:
+    urns = [urn for urn in URNS if urn not in without]
+    account_capabilities: dict[str, Any] = {urn: {} for urn in urns}
+    if availability is not None:
+        account_capabilities[AVAILABILITY_URN] = availability
     session = Session.from_wire(
         {
-            "capabilities": capabilities,
-            "accounts": {"a": {"name": "alice", "accountCapabilities": capabilities}},
-            "primaryAccounts": dict.fromkeys(URNS, "a"),
+            "capabilities": {urn: {} for urn in urns},
+            "accounts": {"a": {"name": "alice", "accountCapabilities": account_capabilities}},
+            "primaryAccounts": dict.fromkeys(urns, "a"),
         }
     )
-    return default_registry().resolve(session, Id("a"))
+    return default_registry().resolve(session, Id("a"), experimental=True)
 
 
-def namespaces() -> Any:
-    capabilities = active()
+def namespaces(**options: Any) -> Any:
+    capabilities = active(**options)
     return Namespaces(Batch(capabilities), capabilities)
 
 
@@ -171,3 +191,89 @@ class TestSearchSnippets:
         assert snippet.subject == "<mark>Invoice</mark>"
         assert result.snippet_of("M2") is None
         assert result.not_found == []
+
+
+class TestCompanionsLendTheirMethods:
+    def test_each_method_appears_on_its_type(self):
+        batch = namespaces()
+        assert callable(batch.calendars.calendar_event.parse)
+        assert callable(batch.contacts.contact_card.parse)
+        assert callable(batch.principals.principal.get_availability)
+
+    @pytest.mark.parametrize(
+        ("urn", "path"),
+        [
+            (CALENDARS_PARSE_URN, ("calendars", "calendar_event", "parse")),
+            (CONTACTS_PARSE_URN, ("contacts", "contact_card", "parse")),
+            (AVAILABILITY_URN, ("principals", "principal", "get_availability")),
+        ],
+    )
+    def test_a_companion_the_server_lacks_lends_nothing(self, urn, path):
+        capability, data_type, method = path
+        entity = getattr(getattr(namespaces(without=(urn,)), capability), data_type)
+        assert not hasattr(entity, method)
+
+
+class TestParsingCalendarsAndCards:
+    def test_events_are_a_list_per_blob(self):
+        handle = namespaces().calendars.calendar_event.parse(blob_ids=["B1"], properties=None)
+        assert wire(handle) == {"blobIds": ["B1"], "properties": None}
+        result = handle.call.parse({"parsed": {"B1": [{"title": "a"}, {"title": "b"}]}})
+        assert isinstance(result, ParsedEvents)
+        assert len(result.events_of("B1")) == 2
+
+    def test_a_card_is_one_per_blob(self):
+        handle = namespaces().contacts.contact_card.parse(blob_ids=["B1"])
+        assert wire(handle) == {"blobIds": ["B1"]}
+        result = handle.call.parse({"parsed": {"B1": {"name": {"full": "Alice"}}}})
+        assert isinstance(result, ParsedCards)
+        assert result.card_of("B1") is not None
+
+    def test_blob_ids_are_a_list(self):
+        with pytest.raises(ValidationError):
+            namespaces().contacts.contact_card.parse(blob_ids="B1")
+
+
+class TestAvailability:
+    START = "2026-10-01T00:00:00Z"
+
+    def test_the_window_goes_out_as_given(self):
+        handle = namespaces().principals.principal.get_availability(
+            id="P1", utc_start=self.START, utc_end="2026-10-02T00:00:00Z", show_details=True
+        )
+        assert handle.call.name == "Principal/getAvailability"
+        assert wire(handle) == {
+            "id": "P1",
+            "utcStart": self.START,
+            "utcEnd": "2026-10-02T00:00:00Z",
+            "showDetails": True,
+        }
+
+    def test_a_window_the_server_would_refuse_is_refused_here(self):
+        batch = namespaces(availability={"maxAvailabilityDuration": "P1D"})
+        with pytest.raises(CapabilityFieldError, match="maxAvailabilityDuration"):
+            batch.principals.principal.get_availability(
+                id="P1", utc_start=self.START, utc_end="2026-10-03T00:00:00Z"
+            )
+
+    def test_a_window_from_a_back_reference_is_the_servers_to_judge(self):
+        batch = namespaces(availability={"maxAvailabilityDuration": "P1D"})
+        source = batch.principals.principal.get(ids=["P1"])
+        handle = batch.principals.principal.get_availability(
+            id="P1", utc_start=self.START, utc_end=source.ref("/list/0/until")
+        )
+        assert "#utcEnd" in wire(handle)
+
+    def test_the_instants_are_utc_dates(self):
+        with pytest.raises(ValidationError, match="invalid date"):
+            namespaces().principals.principal.get_availability(
+                id="P1", utc_start="2026-10-01", utc_end="2026-10-02T00:00:00Z"
+            )
+
+    def test_the_answer_is_typed(self):
+        handle = namespaces().principals.principal.get_availability(
+            id="P1", utc_start=self.START, utc_end="2026-10-02T00:00:00Z"
+        )
+        result = handle.call.parse({"list": [{"utcStart": self.START, "utcEnd": self.START}]})
+        assert isinstance(result, AvailabilityResponse)
+        assert result.items[0].status == "unavailable"

@@ -236,12 +236,11 @@ with client.batch() as batch:
 receipts_id = created.result.created_id("r")
 ```
 
-### Calls without a builder
+### The raw path
 
-Every method has a raw path, taking wire-spelled arguments and returning the
-response as a dict. It is how you reach the few methods without a typed builder
-(`CalendarEvent/parse`, `Principal/getAvailability` and others) and vendor
-extensions:
+Every modelled method has a typed builder. Underneath them is a raw path, which
+takes the method name and wire-spelled arguments and returns the response as a
+dict - for anything the typed surface does not cover:
 
 ```python
 result = client.call("Mailbox/get", {"ids": None})  # one call, no batch
@@ -504,8 +503,8 @@ with client.batch() as batch:
 
 | For | Namespace | Notes |
 |---|---|---|
-| Contacts | `batch.contacts` | JSContact cards (RFC 9610). Older Fastmail and Cyrus APIs are `batch.fastmail_contacts` and `batch.cyrus_contacts`. |
-| Calendars | `batch.calendars` | Experimental: connect with `experimental=True`. |
+| Contacts | `batch.contacts` | JSContact cards (RFC 9610), and parsing vCards where the server offers it. Older Fastmail and Cyrus APIs are `batch.fastmail_contacts` and `batch.cyrus_contacts`. |
+| Calendars | `batch.calendars` | Experimental: connect with `experimental=True`. Includes parsing `.ics` files and free/busy (`batch.principals.principal.get_availability`) where the server offers them. |
 | Files | `batch.files` | Experimental: connect with `experimental=True`. |
 | Quotas | `batch.quota` | Read-only; `quota.remaining` is the headroom left. |
 | Mail filters | `batch.sieve` | Upload, validate and activate Sieve scripts. |

@@ -101,10 +101,12 @@ layer around it, which is where the traps live.
 **Parsing vCards server-side** is a Stalwart extension, behind
 `urn:ietf:params:jmap:contacts:parse` - an IETF-spelled URN that no RFC defines;
 RFC 9610 has no `/parse` at all. Upload the vCard as a blob, then
-`batch.add("ContactCard/parse", {"blobIds": [blob_id]})`. Each blob parses to
-**one** Card - not an array, which is what the calendars `/parse` returns - and
-the per-call blob cap is server configuration advertised nowhere, so an oversized
-call answers `requestTooLarge`; halve the batch and retry.
+`batch.contacts.contact_card.parse(blob_ids=[blob_id])` - the method appears on
+`contact_card` only when the server advertises that URN. Each blob parses to
+**one** Card, read with `result.card_of(blob_id)` - not an array, which is what
+the calendars `/parse` returns - and the per-call blob cap is server
+configuration advertised nowhere, so an oversized call answers
+`requestTooLarge`; halve the batch and retry.
 
 ## Calendars (draft, experimental)
 
@@ -127,6 +129,28 @@ discovering the limit from an error.
 
 As with contacts, JSCalendar bodies are carried through rather than modelled
 field by field.
+
+**Parsing iCalendar** is optional for a server, behind
+`urn:ietf:params:jmap:calendars:parse`. When it is advertised,
+`batch.calendars.calendar_event.parse(blob_ids=[blob_id])` reads uploaded `.ics`
+files without storing them, and `result.events_of(blob_id)` is a **list**: one
+file can hold many events.
+
+**Free/busy** comes from `urn:ietf:params:jmap:principals:availability`, which
+lends `get_availability` to the principal:
+
+```python
+with client.batch() as batch:
+    busy = batch.principals.principal.get_availability(
+        id=principal_id, utc_start="2026-10-01T00:00:00Z", utc_end="2026-10-08T00:00:00Z"
+    )
+
+for period in busy.result.items:
+    print(period.utc_start, period.utc_end, period.status)
+```
+
+The window is checked against the account's `maxAvailabilityDuration` first,
+because a wider one fails the whole call with `tooLarge`.
 
 ## Files (draft, experimental)
 

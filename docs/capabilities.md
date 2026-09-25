@@ -122,10 +122,11 @@ locally rather than letting you discover them from an error. Each check raises
 | `supportedDigestAlgorithms` | requesting `digest:<alg>` through `batch.blob.blob.get` |
 | `supportedTypeNames` | naming types in `batch.blob.blob.lookup` |
 | `maxDataSources`, `maxSizeBlobSet` | creating a blob with `batch.blob.blob.upload` |
+| `maxAvailabilityDuration` | asking `batch.principals.principal.get_availability` |
 
-The blob checks live in those builders; a call queued with `batch.add` goes out
-unchecked. Others are functions for you to call before queueing the request -
-nothing calls them for you:
+The blob and availability checks live in those builders; a call queued with
+`batch.add` goes out unchecked. Others are functions for you to call before
+queueing the request - nothing calls them for you:
 
 | Field | Function |
 |---|---|
@@ -134,7 +135,6 @@ nothing calls them for you:
 | `maxFileNodeDepth` | `jmap.capabilities.files.check_depth` |
 | `fileNodeQuerySortOptions` | `jmap.capabilities.files.check_sort` |
 | `maxExpandedQueryDuration` | `jmap.capabilities.calendars.check_expand_window` |
-| `maxAvailabilityDuration` | `jmap.capabilities.calendars.check_availability_window` |
 
 `emailQuerySortOptions` and `maxDelayedSend` are not checked at all; read them
 from the capability when you need them.

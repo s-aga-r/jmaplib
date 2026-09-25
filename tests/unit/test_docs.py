@@ -63,21 +63,24 @@ def registry_surface() -> tuple[dict[str, dict[str, set[str]]], set[str]]:
     surface: dict[str, dict[str, set[str]]] = {}
     method_names: set[str] = set()
     registry = default_registry()
-    for urn in registry.urns:
-        for spec in registry.specs_for(urn):
-            for method in spec.methods:
-                method_names.add(method.name)
-            if spec.attr is None:
-                continue
-            entities = surface.setdefault(spec.attr, {})
-            for data_type in spec.data_types:
-                suffixes = {
-                    method.name.split("/", 1)[1]
-                    for method in spec.methods
-                    if method.name.split("/", 1)[0] == data_type.name
-                }
-                if suffixes:
-                    entities[attribute_name(data_type.name)] = suffixes
+    specs = [spec for urn in registry.urns for spec in registry.specs_for(urn)]
+    # A capability with no attribute lends its methods to the namespace that
+    # holds their data type, as the client's Namespaces does.
+    lent = [method for spec in specs if spec.attr is None for method in spec.methods]
+    for spec in specs:
+        for method in spec.methods:
+            method_names.add(method.name)
+        if spec.attr is None:
+            continue
+        entities = surface.setdefault(spec.attr, {})
+        for data_type in spec.data_types:
+            suffixes = {
+                method.name.split("/", 1)[1]
+                for method in (*spec.methods, *lent)
+                if method.name.split("/", 1)[0] == data_type.name
+            }
+            if suffixes:
+                entities[attribute_name(data_type.name)] = suffixes
     return surface, method_names
 
 
@@ -89,6 +92,7 @@ _ALIASES = {
     "query_changes": "queryChanges",
     # `import` is a keyword.
     "import_": "import",
+    "get_availability": "getAvailability",
     # SieveScript/set drives both, through onSuccessActivateScript.
     "activate": "set",
     "deactivate": "set",

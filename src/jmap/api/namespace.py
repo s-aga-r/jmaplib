@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Final
 from jmap.api.entity import entity_for
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
     from jmap.batch import Batch
     from jmap.capabilities.registry import ActiveCapabilities
@@ -42,10 +42,12 @@ class CapabilityNamespace:
 
     __slots__ = ("_entities", "_spec")
 
-    def __init__(self, batch: Batch, spec: CapabilitySpec) -> None:
+    def __init__(
+        self, batch: Batch, spec: CapabilitySpec, companions: Sequence[CapabilitySpec] = ()
+    ) -> None:
         self._spec = spec
         self._entities: dict[str, Any] = {
-            attribute_name(data_type.name): entity_for(batch, spec, data_type)
+            attribute_name(data_type.name): entity_for(batch, spec, data_type, companions)
             for data_type in spec.data_types
             # A push-only pseudo-type has no methods to expose.
             if not data_type.push_only
@@ -78,8 +80,13 @@ class Namespaces:
 
     def __init__(self, batch: Batch, capabilities: ActiveCapabilities) -> None:
         self._capabilities = capabilities
+        # A capability with no attribute of its own - `:calendars:parse`,
+        # `:contacts:parse`, `:principals:availability` - only adds methods to
+        # types another capability declares, so it lends them to that namespace.
+        companions = tuple(spec for spec in capabilities.specs.values() if spec.attr is None)
         self._namespaces: dict[str, CapabilityNamespace] = {
-            attr: CapabilityNamespace(batch, spec) for attr, spec in capabilities.attrs.items()
+            attr: CapabilityNamespace(batch, spec, companions)
+            for attr, spec in capabilities.attrs.items()
         }
 
     def __getattr__(self, name: str) -> CapabilityNamespace:
