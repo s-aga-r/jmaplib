@@ -253,6 +253,21 @@ for exactly which revision of each spec this build implements.
   serializable`. Any object with a `to_wire()` is now serialised through it,
   wherever in the arguments it sits.
 
+- **A tuple went out without the checks a list got.** The batch derives `using`
+  from the properties, filter, sort and type names a call names, refuses
+  properties the server never returns, and counts a `/set` against
+  `maxObjectsInSet` - but read only a list as an array, and only a dict as an
+  object. A typed builder passes a tuple through as given, so
+  `email.get(properties=("id", "smimeStatus"))` went out without the S/MIME
+  capability in `using`, and a tuple `destroy` was not counted. A tuple is an
+  array now, and any mapping an object.
+- **An expanding `CalendarEvent/query` was not checked,** though the calendars
+  guide said it was. `batch.calendars.calendar_event.query` now refuses, before
+  sending, a filter that is not a single condition naming both `after` and
+  `before`, and a window wider than `maxExpandedQueryDuration` - each of which
+  the server answers with an error and no ids. The guide's example used UTCDates
+  where the draft has LocalDateTimes; it no longer does.
+
 ### Added
 
 - **Arguments are checked with pydantic before anything is sent.** Every builder
@@ -300,6 +315,21 @@ for exactly which revision of each spec this build implements.
 - `jmap.core.session.check_endpoint()`, and the `Executor` and `AsyncExecutor`
   protocols that `BatchContext` and `AsyncBatchContext` now accept in place of
   a client.
+
+- **Encrypted pushes can be read (RFC 8291).** `jmap.push.PushKeyPair.generate()`
+  makes the keys a push subscription is encrypted to - `.keys` to subscribe with,
+  `private_key` and `auth` to keep - and `read_push(body, keys)` decrypts what the
+  server POSTs and returns the `StateChange` or `PushVerification` inside, raising
+  `PushPayloadError` for a body to discard. Without keys it reads a plain push.
+  Needs `jmaplib[push]`, which until now installed a dependency nothing used.
+- **JSContact and JSCalendar are modelled.** `jmap.models.jscontact` has RFC
+  9553's Card and every object in it, `jmap.models.jscalendar` JSCalendar 2.0's
+  Event and every object in it, and `ContactCard` and `CalendarEvent` are built
+  on them. Every object is forgiving: a value that does not fit its type is kept
+  as it arrived rather than failing the object, so a card or an event still
+  round-trips unchanged. A card's `members` and `media` are `member_uids` and
+  `media_resources` in Python, since `members()` and `media()` already existed.
+- `jmap.models.jsobject.JSObject`, the forgiving base, and `wire_property()`.
 
 - `Batch.requests()`, which yields a batch's requests one at a time, each carrying
   the creation ids learnt so far - the lazy form of `plan()` that both clients now
@@ -368,6 +398,13 @@ for exactly which revision of each spec this build implements.
 - **`new_subscription` needs a non-empty `device_client_id`,** and an `expires`
   that is a UTCDate; `event_source_url` a `close_after` of `"state"` or `"no"`
   and a `ping` of at least 0.
+
+- **`ContactCard.uid` and `.kind` are fields rather than properties,** and
+  `jscontact(name)` and `jscalendar(name)` answer in wire form for modelled
+  properties too. `Media` moved to `jmap.models.jscontact`, and still imports from
+  `jmap.models.contacts`.
+- **Calendars (experimental):** `Calendar`'s default alerts hold `Alert` models,
+  and `CalendarEventNotification.event` an `Event`, where both held dicts.
 
 ## 1.1.0
 
