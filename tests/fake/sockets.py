@@ -8,9 +8,11 @@ receive that would read them.
 from __future__ import annotations
 
 import json
+import math
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
+import anyio
 from httpx_ws import WebSocketDisconnect
 
 from jmap.capabilities.core import CORE_URN
@@ -83,3 +85,45 @@ class SyncSocket:
 
     def close(self, code: int = 1000, reason: str | None = None) -> None:
         self.closed_with = (code, reason)
+
+
+class AsyncSocket:
+    """The async twin. It stays open until ``end()`` or ``close()``."""
+
+    def __init__(self, respond: Respond = answer_requests, *, subprotocol: str | None = "jmap"):
+        self.subprotocol = subprotocol
+        self.respond = respond
+        self.sent: list[dict[str, Any]] = []
+        self.closed_with: tuple[int, str | None] | None = None
+        self.send_error: BaseException | None = None
+        self.end_code = 1000
+        self._writer, self._reader = anyio.create_memory_object_stream[Any](math.inf)
+
+    def say(self, *items: Any) -> None:
+        for item in items:
+            self._writer.send_nowait(item)
+
+    def end(self, code: int = 1000) -> None:
+        """The server closes, once what it already said has been read."""
+        self.end_code = code
+        self._writer.close()
+
+    async def send_text(self, text: str) -> None:
+        if self.send_error is not None:
+            raise self.send_error
+        frame = json.loads(text)
+        self.sent.append(frame)
+        self.say(*self.respond(frame))
+
+    async def receive_text(self, timeout: float | None = None) -> str:
+        try:
+            item = await self._reader.receive()
+        except anyio.EndOfStream:
+            raise WebSocketDisconnect(self.end_code) from None
+        if isinstance(item, BaseException):
+            raise item
+        return str(item)
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.closed_with = (code, reason)
+        self._writer.close()

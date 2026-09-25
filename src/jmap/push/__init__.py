@@ -48,6 +48,7 @@ from jmap.push.websocket import (
     WebSocketProtocolError,
     should_reauthenticate,
 )
+from jmap.push.websocket_aio import AsyncWebSocketClient
 from jmap.push.websocket_client import WebSocketClient, WebSocketUnavailableError
 
 __all__ = [
@@ -56,6 +57,7 @@ __all__ = [
     "CLOSE_AFTER_STATE",
     "SUBPROTOCOL",
     "AsyncEventSourceClient",
+    "AsyncWebSocketClient",
     "EventSourceClient",
     "EventSourceError",
     "EventStream",

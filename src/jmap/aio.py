@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import functools
 import time
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import anyio
 import httpx
@@ -61,12 +61,22 @@ if TYPE_CHECKING:
     from jmap.discovery import SRVTarget
 
 
+class AsyncExecutor(Protocol):
+    """What an :class:`AsyncBatchContext` sends its batch through: the HTTP
+    client, or a :class:`~jmap.push.websocket_aio.AsyncWebSocketClient`."""
+
+    @property
+    def capabilities(self) -> ActiveCapabilities: ...
+
+    async def execute(self, batch: Batch, *, extra_using: frozenset[str] = ...) -> None: ...
+
+
 class AsyncBatchContext:
     """A batch that executes when its ``async with`` block exits."""
 
     __slots__ = ("_batch", "_client", "_extra_using", "_namespaces")
 
-    def __init__(self, client: AsyncJMAPClient, batch: Batch, extra_using: frozenset[str]) -> None:
+    def __init__(self, client: AsyncExecutor, batch: Batch, extra_using: frozenset[str]) -> None:
         self._client = client
         self._batch = batch
         self._extra_using = extra_using

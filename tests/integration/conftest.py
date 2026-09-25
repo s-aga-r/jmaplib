@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from jmap.aio import AsyncJMAPClient
 from jmap.auth import BasicAuth
 from jmap.client import JMAPClient
 
@@ -61,6 +62,15 @@ def connect(username: str, password: str) -> JMAPClient:
         JMAP_URL,
         auth=BasicAuth(username, password),
         http=httpx.Client(verify=tls_context(), follow_redirects=True),
+    )
+
+
+async def aconnect(username: str, password: str) -> AsyncJMAPClient:
+    """The async twin of :func:`connect`. Close its ``http`` client when done."""
+    return await AsyncJMAPClient.connect(
+        JMAP_URL,
+        auth=BasicAuth(username, password),
+        http=httpx.AsyncClient(verify=tls_context(), follow_redirects=True),
     )
 
 

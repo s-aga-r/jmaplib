@@ -4,7 +4,7 @@
 owns the socket. A :class:`WebSocketClient` opens one on a connected client's
 session and credentials, sends batches over it with the same builders the HTTP
 client offers, and yields the state changes the server pushes. It needs
-``jmaplib[ws]``.
+``jmaplib[ws]``. :mod:`jmap.push.websocket_aio` is the async twin.
 
 Three things differ from the HTTP path:
 

@@ -25,6 +25,7 @@ import time
 import uuid
 from typing import TYPE_CHECKING
 
+import anyio
 import pytest
 
 from jmap.capabilities.push import (
@@ -36,12 +37,14 @@ from jmap.capabilities.push import (
 from jmap.models.push import PushSubscription, StateChange
 from jmap.push import EventSourceClient, Ping, new_subscription
 from jmap.push.eventsource import MIN_PORTABLE_PING
+from jmap.push.websocket_aio import AsyncWebSocketClient
 from jmap.push.websocket_client import WebSocketClient
-from tests.integration.conftest import connect
+from tests.integration.conftest import aconnect, connect
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncIterator, Iterator
 
+    from jmap.aio import AsyncJMAPClient
     from jmap.client import JMAPClient
 
 pytestmark = pytest.mark.integration
@@ -354,6 +357,51 @@ class TestWebSocket:
                 destroy(alice, email_id)
         assert change is not None, f"no StateChange over the WebSocket within {PUSH_TIMEOUT}s"
         assert "Email" in change.types()
+
+
+@requires_server
+class TestAsyncWebSocket:
+    @pytest.mark.asyncio
+    async def test_requests_in_flight_together_are_each_answered(self, alice):
+        requires_websocket(alice)
+        answers: dict[str, int] = {}
+
+        async def count(socket: AsyncWebSocketClient, key: str) -> None:
+            async with socket.batch() as batch:
+                mailboxes = batch.mail.mailbox.get(ids=None)
+            answers[key] = len(mailboxes.result.items)
+
+        async with async_client() as client, AsyncWebSocketClient(client) as socket:
+            with anyio.fail_after(PUSH_TIMEOUT):
+                async with anyio.create_task_group() as group:
+                    for key in ("first", "second", "third"):
+                        group.start_soon(count, socket, key)
+        assert len(answers) == 3
+        assert len(set(answers.values())) == 1
+
+    @pytest.mark.asyncio
+    async def test_a_change_is_pushed_over_the_socket(self, alice, drafts):
+        requires_websocket(alice, push=True)
+        async with async_client() as client, AsyncWebSocketClient(client) as socket:
+            await socket.enable_push(["Email"])
+            email_id = make_draft(alice, drafts, f"jmaplib async ws {uuid.uuid4().hex[:8]}")
+            try:
+                with anyio.fail_after(PUSH_TIMEOUT):
+                    async with contextlib.aclosing(socket.notifications()) as changes:
+                        change = await anext(changes)
+            finally:
+                destroy(alice, email_id)
+        assert "Email" in change.types()
+
+
+@contextlib.asynccontextmanager
+async def async_client() -> AsyncIterator[AsyncJMAPClient]:
+    """Alice's async client, closing the HTTP client it was given."""
+    client = await aconnect(ALICE, ALICE_PASSWORD)
+    try:
+        yield client
+    finally:
+        await client.http.aclose()
 
 
 def _first_within(changes: Iterator[StateChange], seconds: float) -> StateChange | None:
