@@ -119,9 +119,9 @@ locally rather than letting you discover them from an error. Each check raises
 |---|---|
 | `maxSizeUpload` | `client.upload` |
 | `maxObjectsInSet` | an oversized `/set` |
-| `supportedDigestAlgorithms` | requesting `digest:<alg>` through `batch.core.blob.get` |
-| `supportedTypeNames` | naming types in `batch.core.blob.lookup` |
-| `maxDataSources`, `maxSizeBlobSet` | creating a blob with `batch.core.blob.upload` |
+| `supportedDigestAlgorithms` | requesting `digest:<alg>` through `batch.blob.blob.get` |
+| `supportedTypeNames` | naming types in `batch.blob.blob.lookup` |
+| `maxDataSources`, `maxSizeBlobSet` | creating a blob with `batch.blob.blob.upload` |
 
 The blob checks live in those builders; a call queued with `batch.add` goes out
 unchecked. Others are functions for you to call before queueing the request -
