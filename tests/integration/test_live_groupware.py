@@ -1,4 +1,4 @@
-"""Calendars (draft-ietf-jmap-calendars) against a real server.
+"""Contacts (RFC 9610) and calendars (draft-ietf-jmap-calendars) against a real server.
 
 Deselected unless ``JMAP_TEST_URL`` is set, like the rest of ``tests/integration``.
 Calendars track an Internet-Draft, so the client connects with
@@ -16,6 +16,17 @@ import pytest
 from jmap.capabilities.calendars import CALENDARS_URN, CalendarsCapability, duration_seconds
 from jmap.core.errors import CapabilityFieldError
 from jmap.core.ijson import format_local_date, parse_local_date
+from jmap.models.contacts import ContactCard
+from jmap.models.jscontact import (
+    Anniversary,
+    EmailAddress,
+    Name,
+    NameComponent,
+    Organization,
+    PartialDate,
+    Timestamp,
+    Title,
+)
 from tests.integration.conftest import connect
 
 if TYPE_CHECKING:
@@ -81,3 +92,58 @@ class TestExpandingQueries:
             batch.calendars.calendar_event.query(
                 filter={"after": START, "before": before}, expandRecurrences=True
             )
+
+
+@requires_server
+class TestContactCards:
+    def test_a_card_built_from_models_comes_back_as_models(self, alice):
+        requires_method(alice, "ContactCard/set")
+        with alice.batch() as batch:
+            books = batch.contacts.address_book.get(ids=None)
+        book = next(book for book in books.result.items if book.is_default)
+        card = ContactCard(
+            address_book_ids={str(book.id): True},
+            kind="individual",
+            name=Name(
+                components=[
+                    NameComponent(kind="given", value="Ada"),
+                    NameComponent(kind="surname", value="Lovelace"),
+                ],
+                is_ordered=True,
+            ),
+            emails={"e1": EmailAddress(address="ada@example.com", contexts={"work": True})},
+            organizations={"o1": Organization(name="Analytical Society")},
+            titles={"t1": Title(name="Mathematician", organization_id="o1")},
+            anniversaries={
+                "b1": Anniversary(kind="birth", date=PartialDate(year=1815, month=12, day=10)),
+                "d1": Anniversary(kind="death", date=Timestamp(utc="1852-11-27T12:00:00Z")),
+            },
+        )
+        with alice.batch() as batch:
+            created = batch.contacts.contact_card.set(create={"c": card})
+        card_id = str(created.result.created_id("c"))
+        try:
+            with alice.batch() as batch:
+                fetched = batch.contacts.contact_card.get(ids=[card_id])
+            stored = fetched.result.items[0]
+            # Everything the server sends back is something RFC 9553 models.
+            assert stored.model_extra == {}
+            # A server may fill in more than was sent - Stalwart adds the full
+            # name and a title's default kind - so only what was sent is compared.
+            assert stored.name is not None
+            assert card.name is not None
+            assert stored.name.components == card.name.components
+            assert stored.emails == card.emails
+            assert stored.titles is not None
+            title = stored.titles["t1"]
+            assert (title.name, title.organization_id) == ("Mathematician", "o1")
+            assert stored.anniversaries is not None
+            birth = stored.anniversaries["b1"].date
+            assert isinstance(birth, PartialDate)
+            assert (birth.year, birth.month, birth.day) == (1815, 12, 10)
+            death = stored.anniversaries["d1"].date
+            assert isinstance(death, Timestamp)
+            assert death.utc == "1852-11-27T12:00:00Z"
+        finally:
+            with alice.batch() as batch:
+                batch.contacts.contact_card.set(destroy=[card_id])

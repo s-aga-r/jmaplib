@@ -1,0 +1,157 @@
+{
+  "version": "1.0",
+  "preferredLanguages": {
+    "l1": {
+      "language": "en",
+      "pref": 1
+    }
+  },
+  "speakToAs": {
+    "grammaticalGender": "feminine",
+    "pronouns": {
+      "pr1": {
+        "pronouns": "she/her"
+      }
+    }
+  },
+  "kind": "individual",
+  "nicknames": {
+    "n1": {
+      "name": "Countess"
+    }
+  },
+  "@type": "Card",
+  "notes": {
+    "n1": {
+      "note": "First programmer",
+      "author": {
+        "name": "Charles"
+      }
+    }
+  },
+  "keywords": {
+    "vip": true
+  },
+  "organizations": {
+    "o1": {
+      "name": "Analytical Society",
+      "units": [
+        {
+          "name": "Engines"
+        }
+      ]
+    }
+  },
+  "onlineServices": {
+    "s1": {
+      "uri": "https://example.social/@ada",
+      "service": "Mastodon",
+      "user": "@ada@example.social"
+    }
+  },
+  "addresses": {
+    "a1": {
+      "contexts": {
+        "private": true
+      },
+      "countryCode": "GB",
+      "components": [
+        {
+          "kind": "number",
+          "value": "12"
+        },
+        {
+          "kind": "name",
+          "value": "St James's Square"
+        },
+        {
+          "kind": "locality",
+          "value": "London"
+        }
+      ],
+      "isOrdered": true
+    }
+  },
+  "titles": {
+    "t1": {
+      "name": "Mathematician",
+      "kind": "role",
+      "organizationId": "o1"
+    }
+  },
+  "name": {
+    "components": [
+      {
+        "kind": "given",
+        "value": "Ada"
+      },
+      {
+        "kind": "surname",
+        "value": "Lovelace"
+      }
+    ],
+    "isOrdered": true,
+    "full": "Ada Lovelace"
+  },
+  "links": {
+    "k1": {
+      "uri": "https://example.com/ada",
+      "kind": "contact"
+    }
+  },
+  "phones": {
+    "p1": {
+      "number": "+44 20 7946 0000",
+      "features": {
+        "voice": true,
+        "mobile": true
+      }
+    }
+  },
+  "personalInfo": {
+    "pi1": {
+      "value": "mathematics",
+      "kind": "expertise",
+      "level": "high"
+    }
+  },
+  "emails": {
+    "e1": {
+      "address": "ada@example.com",
+      "contexts": {
+        "work": true
+      },
+      "pref": 1,
+      "label": "main"
+    }
+  },
+  "relatedTo": {
+    "urn:uuid:babbage": {
+      "relation": {
+        "colleague": true
+      }
+    }
+  },
+  "anniversaries": {
+    "b1": {
+      "date": {
+        "@type": "PartialDate",
+        "year": 1815,
+        "month": 12,
+        "day": 10
+      },
+      "kind": "birth"
+    },
+    "d1": {
+      "date": {
+        "@type": "Timestamp",
+        "utc": "1852-11-27T12:00:00Z"
+      },
+      "kind": "death"
+    }
+  },
+  "id": "b",
+  "addressBookIds": {
+    "b": true
+  }
+}

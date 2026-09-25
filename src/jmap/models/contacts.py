@@ -1,11 +1,10 @@
 """Contacts (RFC 9610, JSContact RFC 9553).
 
-A ContactCard *is* a JSContact Card with two JMAP properties bolted on, so the
-same choice applies as for calendars: the JMAP layer is modelled here and the
-JSContact body rides losslessly through ``extra``. Unlike calendars, that is not
-because the target is moving - RFC 9553 is stable - but because a JSContact Card
-is a large, deeply nested vocabulary whose value to a JMAP *client* is mostly in
-being round-tripped intact.
+A ContactCard *is* a JSContact Card with two JMAP properties bolted on: the
+Card and everything in it are modelled in :mod:`jmap.models.jscontact`, and
+this adds the JMAP layer. A card's value to a JMAP client is mostly in being
+round-tripped intact, so the models keep what they cannot read - a vendor
+property, or a value of the wrong shape - exactly as it arrived.
 
 Three things about this type are easy to get wrong:
 
@@ -27,12 +26,12 @@ and one that base64-encodes every face into the response.
 
 from __future__ import annotations
 
-from typing import Any
-
-from pydantic import Field
-
 from jmap.core.narrow import as_object, is_object
 from jmap.models.base import JMAPModel
+from jmap.models.jscontact import Card
+
+# Re-exported: Media lived here before JSContact had a module of its own.
+from jmap.models.jscontact import Media as Media
 
 #: RFC 9610 §2.3. Destroying an address book that still holds cards, with
 #: ``onDestroyRemoveContents`` false.
@@ -83,33 +82,11 @@ class AddressBook(JMAPModel):
     my_rights: AddressBookRights | None = None
 
 
-class Media(JMAPModel):
-    """One photo, sound or logo attached to a card (RFC 9553 §2.6.4).
-
-    RFC 9610 §3 adds ``blobId`` and has servers prefer it over a ``data:`` URI, so
-    a contact list fetches thumbnails on demand rather than carrying every face
-    base64-encoded in the response. ``mediaType`` must be set alongside it.
-    """
-
-    #: The JSContact discriminator, e.g. ``"Media"``.
-    at_type: str | None = Field(default=None, alias="@type")
-    kind: str | None = None
-    uri: str | None = None
-    #: RFC 9610 §7.5.3's addition. Present instead of ``uri`` for binary content.
-    blob_id: str | None = None
-    media_type: str | None = None
-
-    @property
-    def is_blob_backed(self) -> bool:
-        return self.blob_id is not None
-
-
-class ContactCard(JMAPModel):
+class ContactCard(Card):
     """A person, company or group (RFC 9610 §3).
 
-    A JSContact Card plus ``id`` and ``addressBookIds``. Read the JSContact half
-    with :meth:`jscontact`; it round-trips unchanged whether or not this library
-    knows the property.
+    A JSContact :class:`~jmap.models.jscontact.Card` plus ``id`` and
+    ``addressBookIds``.
     """
 
     id: str | None = None
@@ -122,16 +99,6 @@ class ContactCard(JMAPModel):
         return [key for key, value in (self.address_book_ids or {}).items() if value]
 
     @property
-    def uid(self) -> str | None:
-        """The JSContact ``uid`` - *not* :attr:`id`. See the module docstring."""
-        return _text(self.jscontact("uid"))
-
-    @property
-    def kind(self) -> str | None:
-        """``individual``, ``group``, ``org`` and friends (RFC 9553 §2.1.4)."""
-        return _text(self.jscontact("kind"))
-
-    @property
     def is_group(self) -> bool:
         return self.kind == KIND_GROUP
 
@@ -142,23 +109,17 @@ class ContactCard(JMAPModel):
         and the keys are what matter. They are **uids**, not JMAP ids, so
         resolving them needs a ``uid`` filter rather than a ``/get``.
         """
-        members = self.jscontact("members")
-        if not is_object(members):
-            return []
-        return [key for key, value in as_object(members).items() if value]
+        return [uid for uid, member in (self.member_uids or {}).items() if member]
 
     def media(self) -> dict[str, Media]:
-        """The card's photos, sounds and logos, validated (RFC 9553 §2.6.4).
+        """The card's photos, sounds and logos (RFC 9553 §2.6.4).
 
-        A map keyed by JSContact's own media id. Provided because the interesting
-        property - whether an entry is blob-backed rather than a ``data:`` URI -
-        is otherwise reachable only by validating the raw dicts by hand, and that
-        distinction is the whole reason a contact list can stream thumbnails
-        instead of carrying every face inline.
-
-        Entries that do not validate are skipped rather than raising: ``media`` is
-        an extension point, and one odd entry should not cost the rest.
+        A map keyed by JSContact's own media id - ``media_resources``, or, when
+        one entry kept that from validating, every other entry: ``media`` is an
+        extension point, and one odd entry should not cost the rest.
         """
+        if self.media_resources is not None:
+            return dict(self.media_resources)
         raw = self.jscontact("media")
         if not is_object(raw):
             return {}
@@ -173,10 +134,6 @@ class ContactCard(JMAPModel):
     def photos(self) -> dict[str, Media]:
         """Just the ``photo``-kind media, which is what a contact list shows."""
         return {key: item for key, item in self.media().items() if item.kind == "photo"}
-
-    def jscontact(self, name: str) -> Any:
-        """Read a JSContact property by its exact wire name."""
-        return (self.__pydantic_extra__ or {}).get(name)
 
 
 class ParsedCards(JMAPModel):
@@ -200,13 +157,3 @@ class ParsedCards(JMAPModel):
     def card_of(self, blob_id: str) -> ContactCard | None:
         """The card parsed out of one blob, or ``None`` if it yielded nothing."""
         return (self.parsed or {}).get(blob_id)
-
-
-def _text(value: Any) -> str | None:
-    """A JSContact string property, or ``None`` for anything else.
-
-    These come out of ``extra``, so nothing has type-checked them; a server
-    sending a number where a string belongs should not make the accessor lie
-    about its return type.
-    """
-    return value if isinstance(value, str) else None
