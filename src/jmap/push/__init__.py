@@ -38,6 +38,7 @@ from jmap.push.subscription import (
     renewal_update,
     verification_update,
 )
+from jmap.push.webpush import PushKeyPair, PushPayloadError, read_push
 from jmap.push.websocket import (
     SUBPROTOCOL,
     Incoming,
@@ -65,7 +66,9 @@ __all__ = [
     "InsecurePushUrlError",
     "PendingVerification",
     "Ping",
+    "PushKeyPair",
     "PushListener",
+    "PushPayloadError",
     "RequestErrorMessage",
     "ResponseMessage",
     "SSEParser",
@@ -83,6 +86,7 @@ __all__ = [
     "needs_recreating",
     "new_subscription",
     "parse_event",
+    "read_push",
     "renewal_update",
     "should_reauthenticate",
     "verification_update",
