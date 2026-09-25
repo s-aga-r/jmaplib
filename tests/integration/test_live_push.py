@@ -36,6 +36,7 @@ from jmap.capabilities.push import (
 from jmap.models.push import PushSubscription, StateChange
 from jmap.push import EventSourceClient, Ping, new_subscription
 from jmap.push.eventsource import MIN_PORTABLE_PING
+from jmap.push.websocket_client import WebSocketClient
 from tests.integration.conftest import connect
 
 if TYPE_CHECKING:
@@ -321,6 +322,48 @@ class TestCapabilityObjects:
         # RFC 9749 §3 makes the key mandatory once the capability is present, and
         # a subscription created without one cannot be authenticated.
         assert capability.application_server_key
+
+
+def requires_websocket(client: JMAPClient, *, push: bool = False) -> None:
+    capability = WebSocketCapability.of(client.session.capability_value(WEBSOCKET_URN))
+    if capability.url is None:
+        pytest.skip("server does not advertise urn:ietf:params:jmap:websocket")
+    if push and not capability.supports_push:
+        pytest.skip("server's WebSocket does not carry push")
+
+
+@requires_server
+class TestWebSocket:
+    """RFC 8887 against a real server: the handshake, a request, a push."""
+
+    def test_a_batch_travels_over_the_socket(self, alice):
+        requires_websocket(alice)
+        with WebSocketClient(alice) as socket, socket.batch() as batch:
+            mailboxes = batch.mail.mailbox.get(ids=None)
+        assert mailboxes.result.items
+
+    def test_a_change_is_pushed_over_the_socket(self, alice, drafts):
+        requires_websocket(alice, push=True)
+        requires_method(alice, "Email/set")
+        with WebSocketClient(alice) as socket:
+            socket.enable_push(["Email"])
+            email_id = make_draft(alice, drafts, f"jmaplib ws {uuid.uuid4().hex[:8]}")
+            try:
+                change = _first_within(socket.notifications(), PUSH_TIMEOUT)
+            finally:
+                destroy(alice, email_id)
+        assert change is not None, f"no StateChange over the WebSocket within {PUSH_TIMEOUT}s"
+        assert "Email" in change.types()
+
+
+def _first_within(changes: Iterator[StateChange], seconds: float) -> StateChange | None:
+    """The first item, or ``None`` if none comes in time - so a lost push fails
+    the test rather than hanging the suite."""
+    found: list[StateChange] = []
+    reader = threading.Thread(target=lambda: found.append(next(changes)), daemon=True)
+    reader.start()
+    reader.join(seconds)
+    return found[0] if found else None
 
 
 def _wait_for_state_change(source: EventSourceClient, type_name: str) -> StateChange | None:

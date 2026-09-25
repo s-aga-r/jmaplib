@@ -102,6 +102,17 @@ def _check_endpoint_scheme(field: str, url: str, base_scheme: str, *, base_url: 
         raise InsecureEndpointError(field, url, base_url=base_url)
 
 
+def check_endpoint(field: str, url: str, *, base_url: str) -> None:
+    """Refuse ``url`` if it is a weaker channel than the one ``base_url`` uses.
+
+    The rule the session parse applies to its own endpoints, for a URL it does
+    not check - the WebSocket endpoint lives in a capability object. ``wss`` and
+    ``https`` always pass; ``ws`` and ``http`` only when ``base_url`` is not
+    https, or on loopback.
+    """
+    _check_endpoint_scheme(field, url, urlsplit(base_url).scheme, base_url=base_url)
+
+
 def check_session_redirects(requested_url: str, hops: Iterable[str]) -> None:
     """Refuse a session fetch that a redirect moved onto a weaker channel.
 

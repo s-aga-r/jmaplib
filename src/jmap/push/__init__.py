@@ -48,6 +48,7 @@ from jmap.push.websocket import (
     WebSocketProtocolError,
     should_reauthenticate,
 )
+from jmap.push.websocket_client import WebSocketClient, WebSocketUnavailableError
 
 __all__ = [
     "ALL_TYPES",
@@ -69,8 +70,10 @@ __all__ = [
     "ServerSentEvent",
     "SubprotocolError",
     "UnknownPushTypeError",
+    "WebSocketClient",
     "WebSocketProtocol",
     "WebSocketProtocolError",
+    "WebSocketUnavailableError",
     "application_server_key",
     "check_push_url",
     "event_source_url",

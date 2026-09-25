@@ -15,7 +15,7 @@ session document with the ``Authorization`` header intact.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import httpx
 
@@ -59,6 +59,19 @@ if TYPE_CHECKING:
     from jmap.discovery import SRVTarget
 
 
+class Executor(Protocol):
+    """What a :class:`BatchContext` sends its batch through.
+
+    A :class:`JMAPClient` posts it over HTTP; a
+    :class:`~jmap.push.websocket_client.WebSocketClient` sends it over a socket.
+    """
+
+    @property
+    def capabilities(self) -> ActiveCapabilities: ...
+
+    def execute(self, batch: Batch, *, extra_using: frozenset[str] = ...) -> None: ...
+
+
 class BatchContext:
     """A batch that executes when its ``with`` block exits.
 
@@ -69,7 +82,7 @@ class BatchContext:
 
     __slots__ = ("_batch", "_client", "_extra_using", "_namespaces")
 
-    def __init__(self, client: JMAPClient, batch: Batch, extra_using: frozenset[str]) -> None:
+    def __init__(self, client: Executor, batch: Batch, extra_using: frozenset[str]) -> None:
         self._client = client
         self._batch = batch
         self._extra_using = extra_using
