@@ -1,4 +1,4 @@
-"""``urn:ietf:params:jmap:calendars`` and companions - draft-ietf-jmap-calendars-27.
+"""``urn:ietf:params:jmap:calendars`` and companions - draft-ietf-jmap-calendars-29.
 
 Experimental, and more so than FileNode: this draft is in the RFC Editor queue but
 *blocked* on ``draft-ietf-calext-jscalendarbis``, which is itself still moving. Its
@@ -48,7 +48,7 @@ CALENDARS_URN: Final = "urn:ietf:params:jmap:calendars"
 CALENDARS_PARSE_URN: Final = "urn:ietf:params:jmap:calendars:parse"
 AVAILABILITY_URN: Final = "urn:ietf:params:jmap:principals:availability"
 
-#: draft-27 §6.4. A push pseudo-type, and the EventSource event name differs from
+#: draft-29 §6.4. A push pseudo-type, and the EventSource event name differs from
 #: it in case - ``calendarAlert`` on the wire, ``CalendarAlert`` as a type.
 CALENDAR_ALERT_TYPE: Final = "CalendarAlert"
 CALENDAR_ALERT_EVENT: Final = "calendarAlert"
@@ -103,7 +103,7 @@ def duration_seconds(value: str) -> int | None:
 
 
 class CalendarsCapability(JMAPModel):
-    """The per-account ``:calendars`` object (draft-27 §1.5.1)."""
+    """The per-account ``:calendars`` object (draft-29 §1.5.1)."""
 
     #: How many calendars one event may be in. ``None`` means no limit.
     max_calendars_per_event: int | None = None
@@ -125,7 +125,7 @@ class CalendarsCapability(JMAPModel):
 
 
 class AvailabilityCapability(JMAPModel):
-    """The per-account ``:principals:availability`` object (draft-27 §1.5.2)."""
+    """The per-account ``:principals:availability`` object (draft-29 §1.5.2)."""
 
     #: An ISO-8601 duration bounding one ``Principal/getAvailability`` call.
     max_availability_duration: str | None = None
@@ -195,7 +195,7 @@ def check_expand_filter(filter_: Any, *, expand: bool) -> None:
 CALENDARS: Final = CapabilitySpec(
     urn=CALENDARS_URN,
     attr="calendars",
-    reference="draft-ietf-jmap-calendars-27",
+    reference="draft-ietf-jmap-calendars-29",
     experimental=True,
     account_value=CalendarsCapability,
     data_types=(
@@ -282,7 +282,7 @@ CALENDARS: Final = CapabilitySpec(
 #: separate URN rather than a method a client may assume.
 CALENDARS_PARSE: Final = CapabilitySpec(
     urn=CALENDARS_PARSE_URN,
-    reference="draft-ietf-jmap-calendars-27 §5.13",
+    reference="draft-ietf-jmap-calendars-29 §5.13",
     experimental=True,
     requires=frozenset({CALENDARS_URN}),
     methods=(
@@ -302,7 +302,7 @@ CALENDARS_PARSE: Final = CapabilitySpec(
 #: module docstring.
 AVAILABILITY: Final = CapabilitySpec(
     urn=AVAILABILITY_URN,
-    reference="draft-ietf-jmap-calendars-27 §2.2",
+    reference="draft-ietf-jmap-calendars-29 §2.2",
     experimental=True,
     requires=frozenset({"urn:ietf:params:jmap:principals"}),
     account_value=AvailabilityCapability,

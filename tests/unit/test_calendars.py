@@ -1,4 +1,4 @@
-"""draft-ietf-jmap-calendars-27 models and the calendar capabilities' local gates.
+"""draft-ietf-jmap-calendars-29 models and the calendar capabilities' local gates.
 
 Calendars is the spec where the wrong answer looks like the right one. A
 recurrence override keyed by an aware date-time is accepted and orphaned; an

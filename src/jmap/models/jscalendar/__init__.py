@@ -1,4 +1,4 @@
-"""JSCalendar 2.0 (draft-ietf-calext-jscalendarbis): the Event and its objects.
+"""JSCalendar 2.0 (draft-ietf-calext-jscalendarbis-20): the Event and its objects.
 
 The revision JMAP Calendars builds on, and not RFC 8984: a single
 ``recurrenceRule``, ``organizerCalendarAddress`` for ``replyTo``, and a

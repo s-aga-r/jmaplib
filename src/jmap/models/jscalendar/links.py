@@ -25,7 +25,8 @@ class Link(JSObject):
     content_type: str | None = None
     #: Octets once decoded - an estimate, not a promise.
     size: int | None = None
-    #: A link relation (RFC 8288): ``enclosure`` marks an attachment.
+    #: A link relation (RFC 8288). Unset means ``enclosure``: an attachment.
+    #: ``icon`` marks an image to show, and is the only one ``display`` goes with.
     rel: str | None = None
     #: A set-as-map of ``badge``, ``graphic``, ``fullsize`` and ``thumbnail``.
     display: dict[str, bool] | None = None

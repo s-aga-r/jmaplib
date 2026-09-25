@@ -1,4 +1,4 @@
-"""Calendars (draft-ietf-jmap-calendars-27, JSCalendar).
+"""Calendars (draft-ietf-jmap-calendars-29, JSCalendar).
 
 Experimental: this tracks an Internet-Draft that is itself blocked on another
 draft, so it is excluded from the SemVer promise and only resolved when the caller
@@ -43,7 +43,7 @@ from jmap.core.errors import JMAPError
 from jmap.models.base import JMAPModel
 from jmap.models.jscalendar import Alert, Event
 
-#: draft-27 §5.11. ``expandRecurrences`` on a query whose window is too wide.
+#: draft-29 §5.11. ``expandRecurrences`` on a query whose window is too wide.
 EXPAND_DURATION_TOO_LARGE: Final = "expandDurationTooLarge"
 #: §5.11. The server cannot work out a recurrence the query needs.
 CANNOT_CALCULATE_OCCURRENCES: Final = "cannotCalculateOccurrences"
@@ -93,7 +93,7 @@ def check_recurrence_id(value: str) -> str:
 
 
 class CalendarRights(JMAPModel):
-    """What the requesting user may do with a calendar (draft-27 §4).
+    """What the requesting user may do with a calendar (draft-29 §4).
 
     ``mayWriteAll`` implies ``mayWriteOwn``, ``mayUpdatePrivate`` and ``mayRSVP``;
     a server is required to report all four together.
@@ -113,7 +113,7 @@ class CalendarRights(JMAPModel):
 
 
 class Calendar(JMAPModel):
-    """A calendar (draft-ietf-jmap-calendars-27 §4)."""
+    """A calendar (draft-ietf-jmap-calendars-29 §4)."""
 
     id: str | None = None
     #: Must not be empty, and is bounded at 255 octets as UTF-8.
@@ -141,7 +141,7 @@ class Calendar(JMAPModel):
 
 
 class ParticipantIdentity(JMAPModel):
-    """An address the user schedules as (draft-27 §3).
+    """An address the user schedules as (draft-29 §3).
 
     Matching a Participant to an identity compares ``calendarAddress`` after
     RFC 3986 §6.2.2 syntax normalisation, not as raw strings - so
@@ -157,7 +157,7 @@ class ParticipantIdentity(JMAPModel):
 
 
 class CalendarEvent(Event):
-    """A calendar event (draft-27 §5).
+    """A calendar event (draft-29 §5).
 
     A JSCalendar :class:`~jmap.models.jscalendar.Event` plus the JMAP-layer
     properties below.
@@ -194,7 +194,7 @@ class CalendarEvent(Event):
 
 
 class BusyPeriod(JMAPModel):
-    """One busy span from ``Principal/getAvailability`` (draft-27 §2.2).
+    """One busy span from ``Principal/getAvailability`` (draft-29 §2.2).
 
     ``utc_start`` is inclusive and ``utc_end`` exclusive, on both the request and
     each period returned.
@@ -215,7 +215,7 @@ class BusyPeriod(JMAPModel):
 
 
 class AvailabilityResponse(JMAPModel):
-    """``Principal/getAvailability`` (draft-27 §2.2).
+    """``Principal/getAvailability`` (draft-29 §2.2).
 
     Not a ``/get`` despite the name: it takes one ``id`` rather than ``ids`` and
     answers with a bare ``list`` - no ``state``, no ``notFound``, nothing to sync
@@ -226,7 +226,7 @@ class AvailabilityResponse(JMAPModel):
 
 
 class CalendarEventNotification(JMAPModel):
-    """Someone else changed an event you can see (draft-27 §7).
+    """Someone else changed an event you can see (draft-29 §7).
 
     ``event`` holds the state **before** the change for ``updated`` and
     ``destroyed``, and after it for ``created``. Rendering it as "the new event"
@@ -254,7 +254,7 @@ class CalendarEventNotification(JMAPModel):
 
 
 class ParsedEvents(JMAPModel):
-    """``CalendarEvent/parse`` (draft-27 §5.13).
+    """``CalendarEvent/parse`` (draft-29 §5.13).
 
     ``parsed`` maps a blob id to an **array** of events, because one iCalendar
     file holds many VEVENTs. Reading it as one event per blob is the shape most

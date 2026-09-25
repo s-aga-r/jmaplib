@@ -672,8 +672,8 @@ It asks for the password, or reads `$JMAP_PASSWORD`.
 | RFC 9670 | Principals and sharing | `batch.principals`, `jmap.sharing` |
 | RFC 9749 | Web Push VAPID keys | `jmap.push` |
 | Fastmail and Cyrus contacts | The pre-RFC contacts APIs | `batch.fastmail_contacts`, `batch.cyrus_contacts` |
-| draft-ietf-jmap-calendars-27 | Calendars *(experimental)* | `batch.calendars` |
-| draft-ietf-calext-jscalendarbis | JSCalendar 2.0: the event format *(experimental)* | `jmap.models.jscalendar` |
+| draft-ietf-jmap-calendars-29 | Calendars *(experimental)* | `batch.calendars` |
+| draft-ietf-calext-jscalendarbis-20 | JSCalendar 2.0: the event format *(experimental)* | `jmap.models.jscalendar` |
 | draft-ietf-jmap-filenode-14 | File storage *(experimental)* | `batch.files` |
 
 Signing in follows the OAuth 2.0 family: RFC 6749 and 6750, PKCE (RFC 7636),

@@ -40,13 +40,13 @@ SPEC_REVISIONS: Final[dict[str, str]] = {
     # Experimental — tracking drafts, excluded from the SemVer promise.
     #
     # The calendars draft is in the RFC Editor queue but *blocked* on
-    # draft-ietf-calext-jscalendarbis, and its own normative reference (bis-17) is
-    # already behind the current bis-18. Its wire names can still change; the
-    # event body is JSCalendar 2.0, not RFC 8984.
-    "urn:ietf:params:jmap:calendars": "draft-ietf-jmap-calendars-27",
-    "urn:ietf:params:jmap:calendars:parse": "draft-ietf-jmap-calendars-27",
+    # draft-ietf-calext-jscalendarbis, which is with the IESG; -29 cites bis-20,
+    # the current revision, and jmap.models.jscalendar follows it. Wire names can
+    # still change; the event body is JSCalendar 2.0, not RFC 8984.
+    "urn:ietf:params:jmap:calendars": "draft-ietf-jmap-calendars-29",
+    "urn:ietf:params:jmap:calendars:parse": "draft-ietf-jmap-calendars-29",
     # Availability lives in the calendars draft, *not* in RFC 9670 — that
     # document defines no custom methods at all.
-    "urn:ietf:params:jmap:principals:availability": "draft-ietf-jmap-calendars-27",
+    "urn:ietf:params:jmap:principals:availability": "draft-ietf-jmap-calendars-29",
     "urn:ietf:params:jmap:filenode": "draft-ietf-jmap-filenode-14",
 }

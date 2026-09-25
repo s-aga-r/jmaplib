@@ -36,7 +36,7 @@ from jmap.models.responses import QueryResponse
 
 
 class CalendarEventQueryable(Queryable[Any]):
-    """``CalendarEvent/query`` (draft-ietf-jmap-calendars-27 §5.11)."""
+    """``CalendarEvent/query`` (draft-ietf-jmap-calendars-29 §5.11)."""
 
     __slots__ = ()
 
@@ -67,7 +67,7 @@ class CalendarEventQueryable(Queryable[Any]):
 
 
 class CalendarEventParsable(EntityBase[Any]):
-    """``CalendarEvent/parse`` (draft-ietf-jmap-calendars-27 §5.13)."""
+    """``CalendarEvent/parse`` (draft-ietf-jmap-calendars-29 §5.13)."""
 
     __slots__ = ()
 
@@ -109,7 +109,7 @@ class ContactCardParsable(EntityBase[Any]):
 
 
 class AvailabilityGettable(EntityBase[Any]):
-    """``Principal/getAvailability`` (draft-ietf-jmap-calendars-27 §2.2)."""
+    """``Principal/getAvailability`` (draft-ietf-jmap-calendars-29 §2.2)."""
 
     __slots__ = ()
 
