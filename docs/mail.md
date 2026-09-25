@@ -261,9 +261,10 @@ per-recipient results once the server has them.
 If the server advertises a non-zero `maxDelayedSend`, a submission can ask to be
 held with the SMTP `HOLDFOR` or `HOLDUNTIL` parameter on `mailFrom` (RFC 4865,
 FUTURERELEASE), for up to that many seconds; the server reports the release time
-as the submission's `sendAt`. The delay is not checked against `maxDelayedSend`
-locally - a longer one is the server's to refuse. `SubmissionCapability` reads the
-limit, and `supports("FUTURERELEASE")` whether holding is offered at all:
+as the submission's `sendAt`. `email_submission.set` checks the hold against
+`maxDelayedSend` first - a `HOLDUNTIL` measured from this machine's clock - and
+refuses one that is longer, or any where the limit is 0. `SubmissionCapability`
+reads the limit, and `supports("FUTURERELEASE")` whether holding is offered:
 
 ```python
 batch.submission.email_submission.set(

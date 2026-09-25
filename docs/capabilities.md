@@ -127,19 +127,28 @@ locally rather than letting you discover them from an error. Each check raises
 | `maxExpandedQueryDuration` | an expanding `batch.calendars.calendar_event.query` |
 | `maxAvailabilityDuration` | asking `batch.principals.principal.get_availability` |
 | `maxSizeMailboxName`, `mayCreateTopLevelMailbox` | naming or creating a mailbox with `batch.mail.mailbox.set` |
+| `maxMailboxesPerEmail` | filing an email with `batch.mail.email.set` or `.import_` |
+| `maxDelayedSend` | holding a submission with `batch.submission.email_submission.set` |
 | `maxSizeScriptName` | naming a script with `batch.sieve.sieve_script.set` |
 | `forbiddenNameChars`, `forbiddenNodeNames`, `maxSizeFileNodeName` | naming a node with `batch.files.file_node.set` |
 
 The sort checks run in the batch itself, so a call queued with `batch.add` gets
 them too; every other one lives in its builder, and `batch.add` skips it. Each
-list is checked only if the server advertised it - one left out refuses
-nothing. `maxFileNodeDepth` needs to know where in the tree a node goes, which a
-`/set` does not say, so `jmap.capabilities.files.check_depth` is yours to call.
+limit is checked only if the server advertised it - one left out refuses
+nothing.
 
-`maxDelayedSend`, `maxMailboxDepth`, `maxMailboxesPerEmail` and
-`maxSizeAttachmentsPerEmail` are not checked; read them with
-`jmap.capabilities.mail.MailCapability` and `SubmissionCapability`, as
-`BlobCapability` is read above.
+Three limits depend on what a request does not say - how deep in the tree a
+parent sits, how large the blobs an email attaches are - so they are functions
+for you to call with what you know:
+
+| Field | Function |
+|---|---|
+| `maxMailboxDepth` | `jmap.capabilities.mail.check_mailbox_depth` |
+| `maxSizeAttachmentsPerEmail` | `jmap.capabilities.mail.check_attachment_size` |
+| `maxFileNodeDepth` | `jmap.capabilities.files.check_depth` |
+
+`MailCapability` and `SubmissionCapability`, in `jmap.capabilities.mail`, read
+the mail and submission objects the way `BlobCapability` is read above.
 
 A check is a real round trip saved, but more importantly it is a better error:
 the exception names the field and the value the server advertised, which a

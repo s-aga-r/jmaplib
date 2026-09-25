@@ -662,6 +662,7 @@ It asks for the password, or reads `$JMAP_PASSWORD`.
 | RFC 8620 | JMAP core: sessions, requests, blobs, push | `batch.core`, `jmap.push` |
 | RFC 8621 | Mail, sending, vacation responses | `batch.mail`, `batch.submission`, `batch.vacation` |
 | RFC 8887 | JMAP over WebSocket | `jmap.push.WebSocketClient`, `AsyncWebSocketClient` |
+| RFC 8984 | JSCalendar 1.0, read beside 2.0 *(experimental)* | `jmap.models.jscalendar` |
 | RFC 9007 | Read receipts (MDN) | `batch.mdn` |
 | RFC 9219 | S/MIME signature verification | properties on `Email` |
 | RFC 9404 | Blob management | `batch.blob` |

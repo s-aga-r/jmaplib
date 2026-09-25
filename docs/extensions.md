@@ -120,7 +120,8 @@ to fill in.
 
 The models are forgiving. A property whose value does not fit its type is kept
 exactly as the server sent it, and reads `None` as an attribute: one odd value
-never costs the card, and a card always round-trips unchanged.
+never costs the card, and a card always round-trips unchanged. `created`,
+`updated` and a Timestamp's `utc` read as aware datetimes in UTC.
 `card.jscontact("name")` reads any property by its wire name, in wire form,
 modelled or not - a vendor property included.
 
@@ -157,20 +158,22 @@ the span between them within the advertised duration. It raises
 `CapabilityFieldError` otherwise, and you can chunk the window deliberately. A
 query queued with `batch.add` goes out unchecked.
 
-**Events are typed too**, as JSCalendar 2.0 (jscalendarbis) - the revision the
-draft builds on, not RFC 8984: one `recurrenceRule` rather than an array, and a
-participant's `calendarAddress` rather than `sendTo`. A `CalendarEvent` is the
+**Events are typed too**, as JSCalendar 2.0 (jscalendarbis-20) - the revision
+the draft builds on, not RFC 8984: one `recurrenceRule` rather than an array, and
+a participant's `calendarAddress` rather than `sendTo`. A `CalendarEvent` is the
 Event in `jmap.models.jscalendar` plus the JMAP properties, forgiving in the same
 way as a card, and `event.jscalendar(name)` reads by wire name:
 
 ```python
+from datetime import datetime
+
 from jmap.models.calendars import CalendarEvent
 from jmap.models.jscalendar import Alert, NDay, OffsetTrigger, RecurrenceRule
 
 event = CalendarEvent(
     calendar_ids={calendar_id: True},
     title="Standup",
-    start="2026-10-05T09:00:00",  # a LocalDateTime, read in time_zone
+    start=datetime(2026, 10, 5, 9),  # naive: it is read in time_zone
     time_zone="Europe/London",
     duration="PT15M",
     recurrence_rule=RecurrenceRule(frequency="weekly", by_day=[NDay(day="mo")]),
@@ -181,8 +184,18 @@ with client.batch() as batch:
 ```
 
 An alert's trigger reads as an `OffsetTrigger`, an `AbsoluteTrigger`, or an
-`UnknownTrigger` holding a type this build does not know. Dates stay strings in
-JSCalendar's own forms.
+`UnknownTrigger` holding a type this build does not know.
+
+Dates are datetimes. A UTCDateTime - `updated`, an absolute trigger's `when` - is
+an aware one in UTC; a LocalDateTime - `start`, a task's `due` - is a naive one,
+its zone being `time_zone` beside it. Each refuses the other kind rather than
+guess, and both go back out in JSCalendar's exact form. Durations stay strings
+(`"PT15M"`), as do the keys of `recurrence_overrides`, which are ids.
+
+The models also cover the rest of JSCalendar: `Task` and `Group` beside `Event`,
+and the RFC 8984 properties jscalendarbis dropped or renamed - `recurrence_rules`,
+`reply_to`, a participant's `send_to`, inline `time_zones` - so data from a 1.0
+source reads typed too. Nothing converts between the two revisions.
 
 **Parsing iCalendar** is optional for a server, behind
 `urn:ietf:params:jmap:calendars:parse`. When it is advertised,
