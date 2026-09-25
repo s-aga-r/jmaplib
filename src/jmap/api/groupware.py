@@ -5,26 +5,65 @@ Each lives in a companion capability with no namespace of its own -
 it appears on the data type it acts on, and only when the server advertises it:
 ``batch.calendars.calendar_event.parse``, ``batch.contacts.contact_card.parse``
 and ``batch.principals.principal.get_availability``.
+
+``CalendarEvent/query`` does have the standard shape; its builder here only
+adds the checks an expanding query needs before it goes out.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-from jmap.api.entity import EntityBase, builder
+from jmap.api.entity import EntityBase, Queryable, builder
 from jmap.capabilities.calendars import (
     AVAILABILITY_URN,
+    CALENDARS_URN,
     AvailabilityCapability,
+    CalendarsCapability,
     check_availability_window,
+    check_expand_filter,
+    check_expand_window,
 )
 from jmap.core.ids import CreationRef, Id
-from jmap.core.ijson import parse_utc_date
+from jmap.core.ijson import InvalidDateError, parse_local_date, parse_utc_date
 from jmap.core.invocation import Handle, ResultRef
 from jmap.models.arguments import UTCDate
 from jmap.models.base import UNSET, Unset, omit_unset
 from jmap.models.calendars import AvailabilityResponse, ParsedEvents
 from jmap.models.contacts import ParsedCards
+from jmap.models.responses import QueryResponse
+
+
+class CalendarEventQueryable(Queryable[Any]):
+    """``CalendarEvent/query`` (draft-ietf-jmap-calendars-27 §5.11)."""
+
+    __slots__ = ()
+
+    @builder
+    def query(
+        self,
+        *,
+        # `filter` mirrors the wire name.
+        filter: Mapping[str, Any] | ResultRef[Any] | Unset | None = UNSET,
+        **extra: Any,
+    ) -> Handle[QueryResponse]:
+        """Search for events; with ``expandRecurrences=True``, for occurrences.
+
+        An expanding query is checked before it goes out, because each way it can
+        fail returns no ids at all: §5.11 wants a bare FilterCondition naming both
+        ``after`` and ``before``, and the span between them within the account's
+        ``maxExpandedQueryDuration``. The span is read as the filter gives it, in
+        local time, so across a daylight-saving change it may be an hour off what
+        the server counts.
+        """
+        if extra.get("expandRecurrences") is True and not isinstance(filter, ResultRef):
+            check_expand_filter(filter, expand=True)
+            seconds = _local_span(filter)
+            if seconds is not None:
+                capability = CalendarsCapability.of(self._batch.capability_value(CALENDARS_URN))
+                check_expand_window(seconds, capability)
+        return super().query(filter=filter, **extra)
 
 
 class CalendarEventParsable(EntityBase[Any]):
@@ -106,3 +145,17 @@ class AvailabilityGettable(EntityBase[Any]):
                 **extra,
             ),
         )
+
+
+def _local_span(condition: Any) -> float | None:
+    """Seconds from ``after`` to ``before``, or ``None`` if either is not a LocalDateTime.
+
+    A value this cannot read - a back-reference, a UTCDate some servers also
+    accept - is left for the server to judge.
+    """
+    try:
+        after = parse_local_date(condition["after"])
+        before = parse_local_date(condition["before"])
+    except (InvalidDateError, TypeError):
+        return None
+    return (before - after).total_seconds()

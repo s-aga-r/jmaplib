@@ -56,12 +56,13 @@ def tls_context() -> ssl.SSLContext | bool:
     return True
 
 
-def connect(username: str, password: str) -> JMAPClient:
+def connect(username: str, password: str, *, experimental: bool = False) -> JMAPClient:
     """A client for ``username``, with the suite's TLS policy applied."""
     return JMAPClient.connect(
         JMAP_URL,
         auth=BasicAuth(username, password),
         http=httpx.Client(verify=tls_context(), follow_redirects=True),
+        experimental=experimental,
     )
 
 

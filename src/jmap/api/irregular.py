@@ -24,7 +24,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from jmap.api.entity import EntityBase, builder
-from jmap.api.groupware import AvailabilityGettable, CalendarEventParsable, ContactCardParsable
+from jmap.api.groupware import (
+    AvailabilityGettable,
+    CalendarEventParsable,
+    CalendarEventQueryable,
+    ContactCardParsable,
+)
 from jmap.api.mail import EmailImportable, EmailParsable, SearchSnippetGettable
 from jmap.capabilities.blob import (
     BLOB_URN,
@@ -336,6 +341,7 @@ CUSTOM_BUILDERS: dict[str, type[EntityBase[Any]]] = {
     "Email/import": EmailImportable,
     "Email/parse": EmailParsable,
     "SearchSnippet/get": SearchSnippetGettable,
+    "CalendarEvent/query": CalendarEventQueryable,
     "CalendarEvent/parse": CalendarEventParsable,
     "ContactCard/parse": ContactCardParsable,
     "Principal/getAvailability": AvailabilityGettable,

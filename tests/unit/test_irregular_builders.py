@@ -3,7 +3,8 @@
 ``Email/import``, ``Email/parse``, ``SearchSnippet/get``, ``CalendarEvent/parse``,
 ``ContactCard/parse`` and ``Principal/getAvailability``. The last three live in
 companion capabilities with no namespace of their own, so they are lent to the
-namespace holding their data type.
+namespace holding their data type. ``CalendarEvent/query`` has the standard shape
+but checks an expanding query first.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from pydantic import ValidationError
 
 from jmap.api.namespace import Namespaces
 from jmap.batch import Batch
-from jmap.capabilities.calendars import AVAILABILITY_URN, CALENDARS_PARSE_URN
+from jmap.capabilities.calendars import AVAILABILITY_URN, CALENDARS_PARSE_URN, CALENDARS_URN
 from jmap.capabilities.contacts import CONTACTS_PARSE_URN
 from jmap.core.errors import CapabilityFieldError
 from jmap.core.ids import Id
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
 URNS = (
     "urn:ietf:params:jmap:core",
     "urn:ietf:params:jmap:mail",
-    "urn:ietf:params:jmap:calendars",
+    CALENDARS_URN,
     CALENDARS_PARSE_URN,
     "urn:ietf:params:jmap:principals",
     AVAILABILITY_URN,
@@ -47,12 +48,17 @@ URNS = (
 
 
 def active(
-    *, without: tuple[str, ...] = (), availability: dict[str, Any] | None = None
+    *,
+    without: tuple[str, ...] = (),
+    availability: dict[str, Any] | None = None,
+    calendars: dict[str, Any] | None = None,
 ) -> ActiveCapabilities:
     urns = [urn for urn in URNS if urn not in without]
     account_capabilities: dict[str, Any] = {urn: {} for urn in urns}
     if availability is not None:
         account_capabilities[AVAILABILITY_URN] = availability
+    if calendars is not None:
+        account_capabilities[CALENDARS_URN] = calendars
     session = Session.from_wire(
         {
             "capabilities": {urn: {} for urn in urns},
@@ -232,6 +238,76 @@ class TestParsingCalendarsAndCards:
     def test_blob_ids_are_a_list(self):
         with pytest.raises(ValidationError):
             namespaces().contacts.contact_card.parse(blob_ids="B1")
+
+
+class TestExpandingEventQueries:
+    AFTER = "2026-10-01T00:00:00"
+
+    def query(self, batch: Any = None, **arguments: Any) -> Any:
+        return (batch or namespaces()).calendars.calendar_event.query(**arguments)
+
+    def test_a_query_that_does_not_expand_is_not_checked(self):
+        handle = self.query(filter={"operator": "OR", "conditions": []}, limit=5)
+        assert wire(handle) == {"filter": {"operator": "OR", "conditions": []}, "limit": 5}
+
+    @pytest.mark.parametrize(
+        ("query_filter", "message"),
+        [
+            ({"operator": "AND", "conditions": []}, "bare FilterCondition"),
+            ({"after": AFTER}, "missing before"),
+            (None, "a FilterCondition"),
+        ],
+    )
+    def test_the_filter_must_bound_what_is_expanded(self, query_filter, message):
+        # §5.11: otherwise the server could be asked for infinitely many results.
+        with pytest.raises(CapabilityFieldError, match=message):
+            self.query(filter=query_filter, expandRecurrences=True)
+
+    def test_expanding_needs_a_filter_at_all(self):
+        with pytest.raises(CapabilityFieldError, match="a FilterCondition"):
+            self.query(expandRecurrences=True)
+
+    def test_a_window_wider_than_the_server_expands_is_refused(self):
+        batch = namespaces(calendars={"maxExpandedQueryDuration": "P7D"})
+        with pytest.raises(CapabilityFieldError, match="maxExpandedQueryDuration"):
+            self.query(
+                batch,
+                filter={"after": self.AFTER, "before": "2026-10-08T00:00:01"},
+                expandRecurrences=True,
+            )
+
+    def test_a_window_within_it_goes_out_as_given(self):
+        batch = namespaces(calendars={"maxExpandedQueryDuration": "P7D"})
+        window = {"after": self.AFTER, "before": "2026-10-08T00:00:00"}
+        handle = self.query(batch, filter=window, expandRecurrences=True, timeZone="Europe/Paris")
+        assert wire(handle) == {
+            "filter": window,
+            "expandRecurrences": True,
+            "timeZone": "Europe/Paris",
+        }
+
+    @pytest.mark.parametrize(
+        "window",
+        [
+            # UTCDates, which §5.11.1 does not allow: left for the server to judge.
+            {"after": "2026-10-01T00:00:00Z", "before": "2027-10-01T00:00:00Z"},
+            {"after": AFTER, "before": 20271001},
+        ],
+    )
+    def test_bounds_it_cannot_read_are_the_servers_to_judge(self, window):
+        batch = namespaces(calendars={"maxExpandedQueryDuration": "P7D"})
+        handle = self.query(batch, filter=window, expandRecurrences=True)
+        assert wire(handle)["filter"] == window
+
+    def test_a_filter_from_a_back_reference_is_the_servers_to_judge(self):
+        batch = namespaces(calendars={"maxExpandedQueryDuration": "P7D"})
+        source = batch.calendars.calendar_event.get(ids=["E1"])
+        handle = self.query(batch, filter=source.ref("/list/0/window"), expandRecurrences=True)
+        assert "#filter" in wire(handle)
+
+    def test_the_standard_arguments_are_still_checked(self):
+        with pytest.raises(ValueError, match="either `anchor` or `position`"):
+            self.query(anchor="E1", position=3)
 
 
 class TestAvailability:

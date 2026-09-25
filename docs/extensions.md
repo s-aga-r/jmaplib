@@ -117,15 +117,19 @@ excluded from the SemVer promise.
 with client.batch() as batch:
     calendars = batch.calendars.calendar.get(ids=None)
     events = batch.calendars.calendar_event.query(
-        filter={"after": "2026-08-01T00:00:00Z", "before": "2026-09-01T00:00:00Z"},
+        filter={"after": "2026-08-01T00:00:00", "before": "2026-09-01T00:00:00"},
         expandRecurrences=True,
     )
 ```
 
-Expanding recurrences is bounded by the server's `maxExpandedQueryDuration`, and
-exceeding it earns `expandDurationTooLarge`. The library checks the window
-against the advertised duration first, so you can chunk deliberately instead of
-discovering the limit from an error.
+`after` and `before` are LocalDateTimes, read in the query's `timeZone` argument
+(UTC unless you pass one). Expanding recurrences is bounded by the server's
+`maxExpandedQueryDuration`, and exceeding it earns `expandDurationTooLarge` with
+no ids at all. So `calendar_event.query` checks an expanding query before it goes
+out: the filter must be a single condition with both `after` and `before`, and
+the span between them within the advertised duration. It raises
+`CapabilityFieldError` otherwise, and you can chunk the window deliberately. A
+query queued with `batch.add` goes out unchecked.
 
 As with contacts, JSCalendar bodies are carried through rather than modelled
 field by field.
