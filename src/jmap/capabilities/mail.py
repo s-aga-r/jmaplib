@@ -119,6 +119,30 @@ def check_mailboxes_per_email(count: int, capability: MailCapability) -> None:
         raise CapabilityFieldError(MAIL_URN, "maxMailboxesPerEmail", limit, count)
 
 
+def check_mailbox_depth(ancestor_count: int, capability: MailCapability) -> None:
+    """Reject a mailbox placed deeper than the account allows (§1.3.1).
+
+    ``ancestor_count`` is how many mailboxes stand above it, so a top-level one
+    passes zero. A ``/set`` names only the parent, so where the tree is deep
+    enough to matter, this is yours to call with what ``Mailbox/get`` said.
+    """
+    limit = capability.max_mailbox_depth
+    if limit is not None and ancestor_count + 1 > limit:
+        raise CapabilityFieldError(MAIL_URN, "maxMailboxDepth", limit, ancestor_count + 1)
+
+
+def check_attachment_size(octets: int, capability: MailCapability) -> None:
+    """Reject attachments larger, together, than one email may carry (§1.3.1).
+
+    ``octets`` is the sum of their *unencoded* sizes - what ``client.upload``
+    reports for each - which only the caller knows: an email names its
+    attachments by blob id.
+    """
+    limit = capability.max_size_attachments_per_email
+    if limit is not None and octets > limit:
+        raise CapabilityFieldError(MAIL_URN, "maxSizeAttachmentsPerEmail", limit, octets)
+
+
 def check_delayed_send(seconds: float, capability: SubmissionCapability) -> None:
     """Reject a hold longer than the account allows (§1.3.2); a limit of 0 allows none."""
     limit = capability.max_delayed_send

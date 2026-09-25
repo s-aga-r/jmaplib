@@ -13,7 +13,13 @@ import pytest
 
 from jmap.api.namespace import Namespaces
 from jmap.batch import Batch
-from jmap.capabilities.mail import MAIL_URN, SUBMISSION_URN
+from jmap.capabilities.mail import (
+    MAIL_URN,
+    SUBMISSION_URN,
+    MailCapability,
+    check_attachment_size,
+    check_mailbox_depth,
+)
 from jmap.core.errors import CapabilityFieldError
 from jmap.core.ids import Id
 from jmap.core.limits import URN_CORE
@@ -145,3 +151,28 @@ class TestDelayedSend:
             onSuccessDestroyEmail=["#s"],
         )
         assert handle.call.to_wire_arguments()["onSuccessDestroyEmail"] == ["#s"]
+
+
+class TestLimitsOnlyTheCallerCanCheck:
+    """Depth needs the mailbox tree, and size the blobs: a ``/set`` names neither."""
+
+    CAPABILITY = MailCapability.of({"maxMailboxDepth": 3, "maxSizeAttachmentsPerEmail": 1000})
+
+    def test_a_mailbox_as_deep_as_allowed_passes(self):
+        check_mailbox_depth(2, self.CAPABILITY)
+
+    def test_one_deeper_is_refused(self):
+        with pytest.raises(CapabilityFieldError, match="maxMailboxDepth") as excinfo:
+            check_mailbox_depth(3, self.CAPABILITY)
+        assert excinfo.value.requested == 4
+
+    def test_attachments_within_the_limit_pass(self):
+        check_attachment_size(1000, self.CAPABILITY)
+
+    def test_larger_ones_are_refused(self):
+        with pytest.raises(CapabilityFieldError, match="maxSizeAttachmentsPerEmail"):
+            check_attachment_size(1001, self.CAPABILITY)
+
+    def test_a_server_that_said_nothing_refuses_nothing(self):
+        check_mailbox_depth(100, MailCapability())
+        check_attachment_size(10**12, MailCapability())
