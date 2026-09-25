@@ -22,6 +22,7 @@ do the HTTP, which is what lets one implementation serve both sync and async.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from jmap.capabilities.parsing import parser_for
@@ -30,12 +31,11 @@ from jmap.capabilities.spec import MethodKind
 from jmap.chunking import ChunkedHandle, chunk_get_call
 from jmap.core.errors import CapabilityFieldError, JMAPError, MethodError
 from jmap.core.invocation import Handle, MethodCall
-from jmap.core.narrow import as_list, as_object, is_list, is_object
 from jmap.core.request import plan_requests
 from jmap.core.response import dispatch
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping, Sequence
+    from collections.abc import Iterator, Sequence
 
     from jmap.capabilities.registry import ActiveCapabilities
     from jmap.capabilities.spec import MethodSpec
@@ -173,32 +173,24 @@ class Batch:
         self._check_read_only(name, spec, args)
         self._check_properties(name, spec, args)
 
-        # Only a literal list can be inspected. Both of these arguments are
+        # Only a literal array can be inspected. Both of these arguments are
         # routinely back-references - RFC 9425 §4.3 feeds `/updatedProperties`
         # straight into a Quota/get - and a ResultRef names values that do not
         # exist yet, so there is nothing here to derive `using` from. The server
         # resolves it against a response that has already declared what it needs.
-        properties = args.get("properties")
-        if is_list(properties):
-            for prop in as_list(properties):
-                self._properties.append((spec.type_name, str(prop)))
+        for prop in _array(args.get("properties")) or ():
+            self._properties.append((spec.type_name, str(prop)))
         if spec.type_names_argument is not None:
-            type_names = args.get(spec.type_names_argument)
-            if is_list(type_names):
-                for type_name in as_list(type_names):
-                    self._type_names.append(str(type_name))
-        conditions = args.get("filter")
-        if is_object(conditions):
+            for type_name in _array(args.get(spec.type_names_argument)) or ():
+                self._type_names.append(str(type_name))
+        conditions = _object(args.get("filter"))
+        if conditions is not None:
             filter_type = spec.filter_type or spec.type_name
-            self._filter_fields.extend(
-                (filter_type, name) for name in _condition_names(as_object(conditions))
-            )
-        sort = args.get("sort")
-        if is_list(sort):
-            for comparator in as_list(sort):
-                named = as_object(comparator).get("property") if is_object(comparator) else None
-                if isinstance(named, str):
-                    self._sort_options.append((spec.type_name, named))
+            self._filter_fields.extend((filter_type, name) for name in _condition_names(conditions))
+        for comparator in _array(args.get("sort")) or ():
+            named = fields.get("property") if (fields := _object(comparator)) is not None else None
+            if isinstance(named, str):
+                self._sort_options.append((spec.type_name, named))
 
         self._counter += 1
         call_id = f"c{self._counter}"
@@ -287,16 +279,16 @@ class Batch:
         Asking for ``PushSubscription``'s ``url`` earns ``forbidden`` for the
         whole call, which is a confusing way to learn about a typo.
         """
-        requested = args.get("properties")
+        requested = _array(args.get("properties"))
         # A back-reference names properties that do not exist yet, so there is
         # nothing to check against; the earlier call it points at was gated when
         # it was queued.
-        if not is_list(requested):
+        if requested is None:
             return
         data_type = self._capabilities.data_type(spec.type_name)
         if data_type is None:
             return
-        forbidden = sorted(data_type.never_request_properties.intersection(as_list(requested)))
+        forbidden = sorted(data_type.never_request_properties.intersection(requested))
         if forbidden:
             raise CapabilityFieldError(
                 spec.type_name, "properties", "never returned by the server", forbidden
@@ -360,8 +352,7 @@ class Batch:
             total = 0
             for key in ("create", "update", "destroy"):
                 value = args.get(key)
-                if is_list(value) or is_object(value):
-                    total += len(value)
+                total += len(_object(value) or _array(value) or ())
             if total > limit:
                 raise CapabilityFieldError(handle.call.name, "maxObjectsInSet", limit, total)
 
@@ -400,7 +391,22 @@ class Batch:
 MISSING_RESPONSE: Final = "missingResponse"
 
 
-def _condition_names(filter_: dict[str, Any]) -> list[str]:
+def _array(value: Any) -> list[Any] | None:
+    """A literal array argument as a list; ``None`` for a back-reference or anything else.
+
+    A tuple goes out as an array just as a list does. Only lists were read as
+    one, so ``properties=("id", "smimeStatus")`` - which a typed builder passes
+    through as given - derived no ``using`` and skipped the property gate.
+    """
+    return list(cast("Sequence[Any]", value)) if isinstance(value, (list, tuple)) else None
+
+
+def _object(value: Any) -> Mapping[str, Any] | None:
+    """A literal object argument - any mapping, as a filter may be - or ``None``."""
+    return cast("Mapping[str, Any]", value) if isinstance(value, Mapping) else None
+
+
+def _condition_names(filter_: Mapping[str, Any]) -> list[str]:
     """Every FilterCondition property named anywhere in a filter tree (RFC 8620 §5.5).
 
     A FilterOperator nests further filters under ``conditions``; anything else is
@@ -413,9 +419,10 @@ def _condition_names(filter_: dict[str, Any]) -> list[str]:
     while pending:
         node = pending.pop()
         if "operator" in node:
-            nested = node.get("conditions")
-            if is_list(nested):
-                pending.extend(as_object(item) for item in as_list(nested) if is_object(item))
+            for item in _array(node.get("conditions")) or ():
+                nested = _object(item)
+                if nested is not None:
+                    pending.append(nested)
         else:
             names.extend(node)
     return names

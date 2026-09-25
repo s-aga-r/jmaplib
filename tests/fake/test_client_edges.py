@@ -1009,3 +1009,9 @@ class TestSetSizeGate:
         batch.add("Email/set", {"update": {f"e{i}": {} for i in range(501)}})
         with pytest.raises(CapabilityFieldError):
             batch.plan()
+
+    def test_a_tuple_destroy_is_counted_like_a_list(self):
+        batch = Batch(capabilities())
+        batch.add("Email/set", {"destroy": tuple(f"e{i}" for i in range(501))})
+        with pytest.raises(CapabilityFieldError, match="maxObjectsInSet"):
+            batch.plan()

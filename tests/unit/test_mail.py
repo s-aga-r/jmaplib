@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Any
 
 import pytest
@@ -407,6 +408,19 @@ class TestSmimeVerify:
             "Email/query",
             {"filter": {"operator": "AND", "conditions": [{"inMailbox": "m1"}, nested]}},
         )
+        assert SMIME_URN in batch.using()
+
+    def test_a_tuple_of_properties_is_read_like_a_list(self):
+        # A typed builder passes the tuple through as given, and only lists were
+        # read: the property went out with its capability missing from `using`.
+        batch = self.batch()
+        batch.add("Email/get", {"ids": ["m1"], "properties": ("id", "smimeStatus")})
+        assert SMIME_URN in batch.using()
+
+    def test_a_filter_may_be_any_mapping_and_its_conditions_a_tuple(self):
+        batch = self.batch()
+        nested = MappingProxyType({"operator": "NOT", "conditions": ({"hasSmime": True},)})
+        batch.add("Email/query", {"filter": nested})
         assert SMIME_URN in batch.using()
 
     def test_a_snippet_filter_is_an_email_filter(self):

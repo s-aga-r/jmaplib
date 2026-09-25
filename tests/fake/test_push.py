@@ -380,6 +380,12 @@ class TestSubscriptionLifecycle:
         with connect(fake) as client, client.batch() as batch, refused:
             batch.core.push_subscription.get(ids=None, properties=["url"])
 
+    def test_a_tuple_of_properties_is_checked_too(self):
+        fake = server()
+        refused = pytest.raises(CapabilityFieldError, match="never returned")
+        with connect(fake) as client, client.batch() as batch, refused:
+            batch.core.push_subscription.get(ids=None, properties=("id", "keys"))
+
     def test_subscriptions_parse_as_typed_objects(self):
         fake = server()
         fake.respond(
