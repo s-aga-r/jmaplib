@@ -273,6 +273,22 @@ for exactly which revision of each spec this build implements.
 - `jmap.api.entity.builder`, `jmap.api.entity.Creation` and `EntityBase.type_name`.
 - `new_subscription(keys=...)` takes a `PushKeys` model as well as a mapping.
 
+- **Typed builders for the six methods that had none.**
+  `batch.mail.email.import_()` and `.parse()`, `batch.mail.search_snippet.get()` -
+  the `search_snippet` namespace had no methods at all -
+  `batch.calendars.calendar_event.parse()`, `batch.contacts.contact_card.parse()`
+  and `batch.principals.principal.get_availability()`, which checks the window
+  against `maxAvailabilityDuration` before sending. The mail ones answer with new
+  models - `EmailImportResponse`, `ParsedEmails` and `SearchSnippetResponse`, in
+  `jmap.models.mail.irregular`, with `EmailImport` for building an import - while
+  a raw `batch.add` of those methods still answers with the wire dict.
+- **A capability with no namespace of its own lends its methods to the one
+  holding their data type.** `:calendars:parse`, `:contacts:parse` and
+  `:principals:availability` add methods to types other capabilities declare, and
+  those methods appear there only when the server advertises them.
+- `response_model=` on `Batch.add()` and `jmap.capabilities.parsing.parser_for()`,
+  and a `companions` argument on `jmap.api.entity.entity_for()`.
+
 - `Batch.requests()`, which yields a batch's requests one at a time, each carrying
   the creation ids learnt so far - the lazy form of `plan()` that both clients now
   send from.
