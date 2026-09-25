@@ -17,10 +17,13 @@ from jmap.models.jscalendar import (
     AbsoluteTrigger,
     Alert,
     Event,
+    Group,
     Link,
     OffsetTrigger,
     Participant,
     RecurrenceRule,
+    Task,
+    UnknownEntry,
     UnknownTrigger,
 )
 
@@ -255,3 +258,114 @@ class TestForgiveness:
         assert event.participants["p1"].roles is None
         assert event.jscalendar("participants") == {"p1": {"roles": ["owner"]}}
         assert event.to_wire() == wire
+
+
+class TestTasks:
+    """jscalendarbis §5.2 and §5.5."""
+
+    SIMPLE: ClassVar[dict[str, Any]] = {
+        "@type": "Task",
+        "version": "2.0",
+        "uid": "2a358cee-6489-4f14-a57f-c104db4dc2f2",
+        "updated": "2020-01-09T14:32:01Z",
+        "title": "Do something",
+    }
+
+    def test_a_simple_task_round_trips(self):
+        task = Task.from_wire(self.SIMPLE)
+        assert task.title == "Do something"
+        assert task.to_wire() == self.SIMPLE
+
+    def test_a_task_with_a_due_date(self):
+        wire = {
+            "@type": "Task",
+            "title": "Buy groceries",
+            "due": "2020-01-19T18:00:00",
+            "timeZone": "Europe/Vienna",
+            "estimatedDuration": "PT1H",
+            "percentComplete": 10,
+            "progress": "in-process",
+        }
+        task = Task.from_wire(wire)
+        assert (task.due, task.estimated_duration, task.progress) == (
+            "2020-01-19T18:00:00",
+            "PT1H",
+            "in-process",
+        )
+        assert task.model_extra == {}
+        assert task.to_wire() == wire
+
+    def test_a_task_shares_what_an_event_has(self):
+        task = Task(recurrence_rule=RecurrenceRule(frequency="weekly"), start="2020-01-06T09:00:00")
+        assert task.to_wire() == {
+            "@type": "Task",
+            "recurrenceRule": {"frequency": "weekly"},
+            "start": "2020-01-06T09:00:00",
+        }
+
+
+class TestGroups:
+    """jscalendarbis §5.3."""
+
+    SIMPLE: ClassVar[dict[str, Any]] = {
+        "@type": "Group",
+        "version": "2.0",
+        "uid": "bf0ac22b-4989-4caf-9ebd-54301b4ee51a",
+        "updated": "2020-01-15T18:00:00Z",
+        "title": "A simple group",
+        "entries": [
+            {
+                "@type": "Event",
+                "uid": "a8df6573-0474-496d-8496-033ad45d7fea",
+                "updated": "2020-01-02T18:23:04Z",
+                "title": "Some event",
+                "start": "2020-01-15T13:00:00",
+                "timeZone": "America/New_York",
+                "duration": "PT1H",
+            },
+            {
+                "@type": "Task",
+                "uid": "2a358cee-6489-4f14-a57f-c104db4dc2f2",
+                "updated": "2020-01-09T14:32:01Z",
+                "title": "Do something",
+            },
+        ],
+    }
+
+    def test_each_entry_is_its_own_type(self):
+        group = Group.from_wire(self.SIMPLE)
+        assert group.entries is not None
+        assert [type(entry) for entry in group.entries] == [Event, Task]
+        assert group.to_wire() == self.SIMPLE
+
+    def test_an_entry_of_an_unknown_type_is_kept(self):
+        # §4.3.1 has it ignored; kept, the group still goes back unchanged.
+        wire = {"@type": "Group", "entries": [{"@type": "Journal", "title": "Notes"}]}
+        group = Group.from_wire(wire)
+        assert group.entries is not None
+        assert isinstance(group.entries[0], UnknownEntry)
+        assert group.to_wire() == wire
+
+    def test_one_built_in_python_types_its_entries(self):
+        group = Group(title="Week", entries=[Event(title="Standup"), Task(title="Write up")])
+        assert group.to_wire() == {
+            "@type": "Group",
+            "title": "Week",
+            "entries": [
+                {"@type": "Event", "title": "Standup"},
+                {"@type": "Task", "title": "Write up"},
+            ],
+        }
+
+    def test_a_group_takes_the_shared_properties_only(self):
+        # A Group has no recurrence; the property is kept, but not modelled.
+        group = Group.from_wire({"@type": "Group", "recurrenceRule": {"frequency": "daily"}})
+        assert group.model_extra == {"recurrenceRule": {"frequency": "daily"}}
+
+
+class TestStandingAlone:
+    def test_an_event_always_says_what_it_is(self):
+        assert Event(title="Lunch").to_wire() == {"@type": "Event", "title": "Lunch"}
+
+    def test_a_calendar_event_leaves_that_to_the_server(self):
+        assert CalendarEvent(title="Lunch").to_wire() == {"title": "Lunch"}

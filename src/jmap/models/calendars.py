@@ -35,7 +35,7 @@ Writing that back wipes the series.
 from __future__ import annotations
 
 import re
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 from pydantic import Field
 
@@ -162,6 +162,10 @@ class CalendarEvent(Event):
     A JSCalendar :class:`~jmap.models.jscalendar.Event` plus the JMAP-layer
     properties below.
     """
+
+    #: The server sets ``@type``, so an event built in Python sends only what it
+    #: was given.
+    REQUIRED_TYPE: ClassVar[str] = ""
 
     id: str | None = None
     #: Server-set, immutable, and non-null only on a synthetic expanded instance.
