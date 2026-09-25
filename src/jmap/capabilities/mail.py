@@ -112,6 +112,13 @@ def check_mailbox_name(name: str, capability: MailCapability) -> None:
         )
 
 
+def check_mailboxes_per_email(count: int, capability: MailCapability) -> None:
+    """Reject an email filed in more mailboxes than the account allows (§1.3.1)."""
+    limit = capability.max_mailboxes_per_email
+    if limit is not None and count > limit:
+        raise CapabilityFieldError(MAIL_URN, "maxMailboxesPerEmail", limit, count)
+
+
 #: RFC 8621 §4.2. What ``Email/get`` returns when ``properties`` is null. Worth
 #: stating because it is a *subset* - notably it excludes ``bodyStructure`` and
 #: ``bodyValues``, so "fetch an email" without naming properties gets no body.

@@ -27,7 +27,7 @@ models as well as plain mappings.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Generic, TypeAlias, TypeVar
 
 from pydantic import Field
 
@@ -57,6 +57,23 @@ _F = TypeVar("_F", bound="Callable[..., Any]")
 #: An object to create: the wire mapping, or a typed model, which serialises
 #: itself through ``to_wire()``.
 Creation = Mapping[str, Any] | JMAPModel
+
+
+#: A ``create`` or an ``update`` argument, as a ``/set`` builder takes it.
+_Changes: TypeAlias = Mapping[str, Creation] | Mapping[str, Mapping[str, Any]]
+
+
+def wire_objects(changes: _Changes | ResultRef[Any] | Unset | None) -> list[Mapping[str, Any]]:
+    """A ``/set``'s objects to create, or patches to apply, as wire mappings.
+
+    For a builder checking what it is given: a back-reference, or nothing
+    given, has nothing to check.
+    """
+    if not isinstance(changes, Mapping):
+        return []
+    return [
+        change.to_wire() if isinstance(change, JMAPModel) else change for change in changes.values()
+    ]
 
 
 class EntityBase(Generic[T]):

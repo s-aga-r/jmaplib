@@ -11,15 +11,15 @@ a back-reference, or a call queued with ``batch.add``, is the server's to judge.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, TypeAlias
+from typing import Any
 
-from jmap.api.entity import Creation, Settable, builder
+from jmap.api.entity import Creation, Settable, builder, wire_objects
 from jmap.capabilities.files import FILENODE_URN, FileNodeCapability, check_node_name
 from jmap.capabilities.mail import MAIL_URN, MailCapability, check_mailbox_name
 from jmap.capabilities.sieve import SIEVE_URN, SieveAccountCapability, check_script_name
 from jmap.core.errors import CapabilityFieldError
 from jmap.core.invocation import Handle, ResultRef
-from jmap.models.base import UNSET, JMAPModel, Unset
+from jmap.models.base import UNSET, Unset
 from jmap.models.responses import SetResponse
 
 
@@ -40,8 +40,8 @@ class _NameChecked(Settable[Any]):
 
         See :meth:`jmap.api.entity.Settable.set` for the rest.
         """
-        created = _objects(create)
-        for changed in (*created, *_objects(update)):
+        created = wire_objects(create)
+        for changed in (*created, *wire_objects(update)):
             name = changed.get("name")
             if isinstance(name, str):
                 self._check_name(name)
@@ -93,16 +93,3 @@ class FileNodeSettable(_NameChecked):
 
     def _check_name(self, name: str) -> None:
         check_node_name(name, FileNodeCapability.of(self._batch.capability_value(FILENODE_URN)))
-
-
-#: A ``create`` or an ``update`` argument, as a builder takes it.
-_Changes: TypeAlias = Mapping[str, Creation] | Mapping[str, Mapping[str, Any]]
-
-
-def _objects(changes: _Changes | ResultRef[Any] | Unset | None) -> list[Mapping[str, Any]]:
-    """The objects to create, or the patches to apply, as wire mappings."""
-    if not isinstance(changes, Mapping):
-        return []
-    return [
-        change.to_wire() if isinstance(change, JMAPModel) else change for change in changes.values()
-    ]
