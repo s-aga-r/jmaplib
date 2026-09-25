@@ -288,6 +288,18 @@ for exactly which revision of each spec this build implements.
   those methods appear there only when the server advertises them.
 - `response_model=` on `Batch.add()` and `jmap.capabilities.parsing.parser_for()`,
   and a `companions` argument on `jmap.api.entity.entity_for()`.
+- **A WebSocket client (RFC 8887).** `jmap.push.WebSocketClient` and
+  `AsyncWebSocketClient` open a JMAP WebSocket with a connected client's session
+  and credentials, send batches over it with the same builders, and yield the
+  state changes the server pushes. The async one reads in the background, so
+  several requests may be in flight at once, each answer matched to its request
+  by id. A 1008 close raises `AuthenticationError`, since the credentials
+  expired; the endpoint must be no weaker than the API, or it is refused with
+  `InsecureEndpointError`; and `push_state` resumes push on a new connection.
+  Needs `jmaplib[ws]`, which until now installed a dependency nothing used.
+- `jmap.core.session.check_endpoint()`, and the `Executor` and `AsyncExecutor`
+  protocols that `BatchContext` and `AsyncBatchContext` now accept in place of
+  a client.
 
 - `Batch.requests()`, which yields a batch's requests one at a time, each carrying
   the creation ids learnt so far - the lazy form of `plan()` that both clients now
