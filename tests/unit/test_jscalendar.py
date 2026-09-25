@@ -7,6 +7,7 @@ create - including the alerts' and locations' ``@type``, which it adds itself.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -69,12 +70,12 @@ class TestAStalwartEvent:
         assert isinstance(offset, OffsetTrigger)
         assert (offset.offset, offset.relative_to) == ("-PT15M", "start")
         assert isinstance(absolute, AbsoluteTrigger)
-        assert absolute.when == "2026-10-05T08:00:00Z"
+        assert absolute.when == datetime(2026, 10, 5, 8, tzinfo=UTC)
 
     def test_where_and_what_read_through(self, event):
         assert (event.title, event.start, event.time_zone, event.duration) == (
             "Engine review",
-            "2026-10-05T10:00:00",
+            datetime(2026, 10, 5, 10),
             "Europe/London",
             "PT1H30M",
         )
@@ -289,7 +290,7 @@ class TestTasks:
         }
         task = Task.from_wire(wire)
         assert (task.due, task.estimated_duration, task.progress) == (
-            "2020-01-19T18:00:00",
+            datetime(2020, 1, 19, 18),
             "PT1H",
             "in-process",
         )

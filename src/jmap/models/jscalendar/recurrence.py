@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from jmap.models.jsdates import LocalDateTime
 from jmap.models.jsobject import JSObject
 
 
@@ -40,5 +41,5 @@ class RecurrenceRule(JSObject):
     by_set_position: list[int] | None = None
     #: At most one of ``count`` and ``until``.
     count: int | None = None
-    #: A LocalDateTime, in the event's time zone.
-    until: str | None = None
+    #: In the event's time zone.
+    until: LocalDateTime | None = None

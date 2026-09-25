@@ -7,6 +7,7 @@ from typing import Annotated, Any, ClassVar, TypeAlias
 from pydantic import Discriminator, Tag
 
 from jmap.models.jscalendar.links import Relation
+from jmap.models.jsdates import UTCDateTime
 from jmap.models.jsobject import JSObject, type_tag
 
 
@@ -25,8 +26,7 @@ class AbsoluteTrigger(JSObject):
 
     REQUIRED_TYPE: ClassVar[str] = "AbsoluteTrigger"
 
-    #: A UTCDateTime.
-    when: str | None = None
+    when: UTCDateTime | None = None
 
 
 class UnknownTrigger(JSObject):
@@ -55,8 +55,8 @@ class Alert(JSObject):
     """A reminder (§3.5.1)."""
 
     trigger: Trigger | None = None
-    #: When the user dismissed it, as a UTCDateTime.
-    acknowledged: str | None = None
+    #: When the user dismissed it.
+    acknowledged: UTCDateTime | None = None
     #: Alert id -> relation; a snoozed alert points at the one it snoozes.
     related_to: dict[str, Relation] | None = None
     #: ``display`` (the default) or ``email``.

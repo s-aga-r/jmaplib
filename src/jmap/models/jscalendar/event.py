@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from jmap.models.jscalendar.common import Entry
+from jmap.models.jsdates import LocalDateTime
 
 
 class Event(Entry):
@@ -17,7 +18,7 @@ class Event(Entry):
 
     REQUIRED_TYPE: ClassVar[str] = "Event"
 
-    start: str | None = None
+    start: LocalDateTime | None = None
     #: A Duration, ``PT0S`` by default.
     duration: str | None = None
     end_time_zone: str | None = None

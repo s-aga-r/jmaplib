@@ -42,6 +42,7 @@ from pydantic import Field
 from jmap.core.errors import JMAPError
 from jmap.models.base import JMAPModel
 from jmap.models.jscalendar import Alert, Event
+from jmap.models.jsdates import UTCDateTime
 
 #: draft-29 §5.11. ``expandRecurrences`` on a query whose window is too wide.
 EXPAND_DURATION_TOO_LARGE: Final = "expandDurationTooLarge"
@@ -182,8 +183,8 @@ class CalendarEvent(Event):
     #: request overwrites the rest.
     is_origin: bool | None = None
     #: Computed at fetch time, and absent unless explicitly requested.
-    utc_start: str | None = None
-    utc_end: str | None = None
+    utc_start: UTCDateTime | None = None
+    utc_end: UTCDateTime | None = None
     use_default_alerts: bool | None = None
 
     @property

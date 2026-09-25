@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from jmap.models.jscalendar.links import Link
+from jmap.models.jsdates import UTCDateTime
 from jmap.models.jsobject import JSObject
 
 
@@ -40,7 +41,7 @@ class Participant(JSObject):
     #: draft-ietf-jmap-calendars §5.2: the latest iTIP reply applied for this
     #: participant, to discard older ones that arrive late.
     schedule_sequence: int | None = None
-    schedule_updated: str | None = None
+    schedule_updated: UTCDateTime | None = None
 
     # -- RFC 8984, which jscalendarbis replaced ------------------------------ #
     #: Scheduling method -> URI, where jscalendarbis has ``calendar_address``.
@@ -56,4 +57,4 @@ class Participant(JSObject):
     schedule_status: list[str] | None = None
     #: The participant id of whoever invited this one.
     invited_by: str | None = None
-    progress_updated: str | None = None
+    progress_updated: UTCDateTime | None = None

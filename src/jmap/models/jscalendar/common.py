@@ -10,6 +10,7 @@ from jmap.models.jscalendar.locations import Location, VirtualLocation
 from jmap.models.jscalendar.participants import Participant
 from jmap.models.jscalendar.recurrence import RecurrenceRule
 from jmap.models.jscalendar.timezones import TimeZone
+from jmap.models.jsdates import LocalDateTime, UTCDateTime
 from jmap.models.jsobject import JSObject, wire_property
 
 
@@ -25,8 +26,8 @@ class CalendarObject(JSObject):
     #: on a Group's entries.
     version: str | None = None
     prod_id: str | None = None
-    created: str | None = None
-    updated: str | None = None
+    created: UTCDateTime | None = None
+    updated: UTCDateTime | None = None
     title: str | None = None
     description: str | None = None
     description_content_type: str | None = None
@@ -65,7 +66,7 @@ class Entry(CalendarObject):
 
     # -- recurrence (§3.3) -------------------------------------------------- #
     #: Set on one occurrence of a recurring object, never with the two below.
-    recurrence_id: str | None = None
+    recurrence_id: LocalDateTime | None = None
     recurrence_id_time_zone: str | None = None
     recurrence_rule: RecurrenceRule | None = None
     #: LocalDateTime -> a PatchObject for that occurrence, or

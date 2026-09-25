@@ -9,14 +9,15 @@ from __future__ import annotations
 from typing import Any
 
 from jmap.models.jscalendar.recurrence import RecurrenceRule
+from jmap.models.jsdates import LocalDateTime, UTCDateTime
 from jmap.models.jsobject import JSObject
 
 
 class TimeZoneRule(JSObject):
     """One observance - standard or daylight time - and when it applies."""
 
-    #: A LocalDateTime: when the observance first applies.
-    start: str | None = None
+    #: When the observance first applies.
+    start: LocalDateTime | None = None
     #: UTC offsets as ``+hhmm`` or ``-hhmm``.
     offset_from: str | None = None
     offset_to: str | None = None
@@ -31,9 +32,9 @@ class TimeZone(JSObject):
     """A time zone defined inline, keyed by the id that ``timeZone`` names."""
 
     tz_id: str | None = None
-    updated: str | None = None
+    updated: UTCDateTime | None = None
     url: str | None = None
-    valid_until: str | None = None
+    valid_until: UTCDateTime | None = None
     #: Other ids for the zone, as a set-as-map.
     aliases: dict[str, bool] | None = None
     standard: list[TimeZoneRule] | None = None

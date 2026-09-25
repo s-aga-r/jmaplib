@@ -17,6 +17,7 @@ from jmap.models.jscontact.contact import (
 from jmap.models.jscontact.name import Name, Nickname, Organization, SpeakToAs, Title
 from jmap.models.jscontact.personal import Anniversary, Note, PersonalInfo
 from jmap.models.jscontact.resource import Calendar, CryptoKey, Directory, Link, Media
+from jmap.models.jsdates import UTCDateTime
 from jmap.models.jsobject import JSObject, wire_property
 
 
@@ -42,7 +43,7 @@ class Card(JSObject):
     # -- metadata (§2.1) ---------------------------------------------------- #
     #: ``"1.0"``.
     version: str | None = None
-    created: str | None = None
+    created: UTCDateTime | None = None
     #: ``individual`` (the default), ``group``, ``org``, ``location``, ``device``
     #: or ``application``.
     kind: str | None = None
@@ -56,7 +57,7 @@ class Card(JSObject):
     related_to: dict[str, Relation] | None = None
     #: The same entity across systems - not a JMAP id.
     uid: str | None = None
-    updated: str | None = None
+    updated: UTCDateTime | None = None
 
     # -- name and organization (§2.2) --------------------------------------- #
     name: Name | None = None

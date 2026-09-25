@@ -8,7 +8,7 @@ Calendars track an Internet-Draft, so the client connects with
 from __future__ import annotations
 
 import os
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
@@ -153,7 +153,7 @@ class TestContactCards:
             assert (birth.year, birth.month, birth.day) == (1815, 12, 10)
             death = stored.anniversaries["d1"].date
             assert isinstance(death, Timestamp)
-            assert death.utc == "1852-11-27T12:00:00Z"
+            assert death.utc == datetime(1852, 11, 27, 12, tzinfo=UTC)
         finally:
             with alice.batch() as batch:
                 batch.contacts.contact_card.set(destroy=[card_id])
@@ -205,7 +205,7 @@ class TestCalendarEvents:
             assert isinstance(stored.alerts["a1"].trigger, OffsetTrigger)
             absolute = stored.alerts["a2"].trigger
             assert isinstance(absolute, AbsoluteTrigger)
-            assert absolute.when == "2026-10-05T08:00:00Z"
+            assert absolute.when == datetime(2026, 10, 5, 8, tzinfo=UTC)
         finally:
             with alice.batch() as batch:
                 batch.calendars.calendar_event.set(destroy=[event_id])

@@ -7,6 +7,7 @@ from typing import Annotated, Any, ClassVar, TypeAlias
 from pydantic import Discriminator, Tag
 
 from jmap.models.jscontact.contact import Address
+from jmap.models.jsdates import UTCDateTime
 from jmap.models.jsobject import JSObject, type_tag
 
 
@@ -26,8 +27,7 @@ class Timestamp(JSObject):
 
     REQUIRED_TYPE: ClassVar[str] = "Timestamp"
 
-    #: A UTCDateTime.
-    utc: str | None = None
+    utc: UTCDateTime | None = None
 
 
 def _date_type(value: Any) -> str:
@@ -65,7 +65,7 @@ class Note(JSObject):
     """A free-text note about the entity (§2.8.3)."""
 
     note: str | None = None
-    created: str | None = None
+    created: UTCDateTime | None = None
     author: Author | None = None
 
 

@@ -7,6 +7,7 @@ so it is what a real server sends rather than what the RFC hopes for.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -93,7 +94,7 @@ class TestAStalwartCard:
         assert isinstance(birth, PartialDate)
         assert (birth.year, birth.month, birth.day) == (1815, 12, 10)
         assert isinstance(death, Timestamp)
-        assert death.utc == "1852-11-27T12:00:00Z"
+        assert death.utc == datetime(1852, 11, 27, 12, tzinfo=UTC)
 
     def test_the_rest_reads_through(self, card):
         assert card.addresses is not None

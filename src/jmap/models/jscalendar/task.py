@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from jmap.models.jscalendar.common import Entry
+from jmap.models.jsdates import LocalDateTime, UTCDateTime
 
 
 class Task(Entry):
@@ -16,10 +17,10 @@ class Task(Entry):
 
     REQUIRED_TYPE: ClassVar[str] = "Task"
 
-    #: A LocalDateTime, in the task's time zone.
-    due: str | None = None
-    #: A LocalDateTime; required when the task recurs.
-    start: str | None = None
+    #: In the task's time zone.
+    due: LocalDateTime | None = None
+    #: Required when the task recurs.
+    start: LocalDateTime | None = None
     #: A Duration.
     estimated_duration: str | None = None
     #: 0 to 100.
@@ -28,4 +29,4 @@ class Task(Entry):
     #: ``cancelled``. Unset, it follows the participants' progress.
     progress: str | None = None
     #: RFC 8984: when ``progress`` last changed.
-    progress_updated: str | None = None
+    progress_updated: UTCDateTime | None = None
