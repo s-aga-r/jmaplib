@@ -17,7 +17,7 @@ Optional extras, none of which you need for mail:
 | Extra | Pulls in | For |
 |---|---|---|
 | `jmaplib[discovery]` | `dnspython` | Finding a server from an email address via SRV records |
-| `jmaplib[ws]` | `httpx-ws` | A socket to carry JMAP over WebSocket; see [Push](push.md#websocket) |
+| `jmaplib[ws]` | `httpx-ws` | JMAP over WebSocket - requests and push on one connection; see [Push](push.md#websocket) |
 | `jmaplib[push]` | `cryptography` | Decrypting Web Push payloads in your own push endpoint |
 | `jmaplib[cli]` | `typer`, `rich` | Reserved for command-line tools; nothing needs it yet |
 

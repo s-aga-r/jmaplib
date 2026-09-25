@@ -67,7 +67,7 @@ Optional extras - you need none of them for mail:
 | Extra | Adds | Install it when |
 |---|---|---|
 | `jmaplib[discovery]` | `dnspython` | You want `JMAPClient.discover()` to look up SRV records. Without it, discovery tries only `https://<domain>/.well-known/jmap`. |
-| `jmaplib[ws]` | `httpx-ws` | You speak JMAP over WebSocket (RFC 8887). `jmap.push.WebSocketProtocol` frames and matches the messages; this extra gives you a socket to carry them. |
+| `jmaplib[ws]` | `httpx-ws` | You speak JMAP over WebSocket (RFC 8887): `jmap.push.WebSocketClient` and its async twin send batches and receive push over one connection. |
 | `jmaplib[push]` | `cryptography` | Your own Web Push endpoint decrypts push payloads (RFC 8291). |
 | `jmaplib[cli]` | `typer`, `rich` | Nothing yet - it is reserved for command-line tools. The conformance report below needs only the standard library. |
 
@@ -414,9 +414,21 @@ for event in EventSourceClient(client, types=("Email", "Mailbox"), ping=30).list
         print(account, "changed:", sorted(moved))  # e.g. ['Email']: catch up on it
 ```
 
-`listen()` reconnects on its own and resumes where it left off. Push
-subscriptions (the server calls your URL), Web Push encryption and WebSocket are
-covered in [Push](docs/push.md).
+`listen()` reconnects on its own and resumes where it left off. To carry
+requests *and* push over one connection, use a WebSocket instead
+(`jmaplib[ws]`):
+
+```python
+from jmap.push import WebSocketClient
+
+with WebSocketClient(client) as socket:
+    socket.enable_push(["Email"])
+    for change in socket.notifications():
+        ...  # socket.batch() works here too, over the same connection
+```
+
+Push subscriptions (the server calls your URL), Web Push encryption and the async
+WebSocket client are covered in [Push](docs/push.md).
 
 ### Use it from async code
 
@@ -648,7 +660,7 @@ It asks for the password, or reads `$JMAP_PASSWORD`.
 |---|---|---|
 | RFC 8620 | JMAP core: sessions, requests, blobs, push | `batch.core`, `jmap.push` |
 | RFC 8621 | Mail, sending, vacation responses | `batch.mail`, `batch.submission`, `batch.vacation` |
-| RFC 8887 | JMAP over WebSocket | `jmap.push.WebSocketProtocol` |
+| RFC 8887 | JMAP over WebSocket | `jmap.push.WebSocketClient`, `AsyncWebSocketClient` |
 | RFC 9007 | Read receipts (MDN) | `batch.mdn` |
 | RFC 9219 | S/MIME signature verification | properties on `Email` |
 | RFC 9404 | Blob management | `batch.blob` |
@@ -725,8 +737,6 @@ the [changelog](CHANGELOG.md) for what changed.
   field is readable by its wire name, for example
   `event.jscalendar("recurrenceRule")`. The JMAP layer around them is fully
   modelled.
-- **WebSocket is a protocol layer.** `WebSocketProtocol` frames requests and
-  matches responses and notifications; the socket itself is yours.
 
 ## Contributing
 

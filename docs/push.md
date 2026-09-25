@@ -163,26 +163,61 @@ cached key - a rotation means re-subscribing.
 
 ## WebSocket
 
-RFC 8887, one connection carrying both method calls and push. The URL is
-advertised in the session:
+RFC 8887: one connection carrying method calls, their answers and push. It needs
+`jmaplib[ws]`. A `WebSocketClient` opens on a connected client, using its
+session to find the endpoint and its credentials for the handshake, and offers
+the same builders:
 
 ```python
-from jmap.capabilities.push import WEBSOCKET_URN, WebSocketCapability
+from jmap.push import WebSocketClient
 
-capability = WebSocketCapability.of(client.session.capability_value(WEBSOCKET_URN))
-print(capability.url, capability.supports_push, capability.is_secure)
+with WebSocketClient(client) as socket:
+    with socket.batch() as batch:
+        mailboxes = batch.mail.mailbox.get(ids=None)
+
+    socket.enable_push(["Email", "Mailbox"])
+    for change in socket.notifications():
+        ...  # a StateChange, as from the event source
 ```
 
-The library's part is the protocol rather than the socket.
-`jmap.push.WebSocketProtocol` frames requests and the push enable and disable
-messages, and classifies whatever comes back: a response, a request-level error
-or a state change. Responses may arrive out of order (RFC 8887 §4.3.2), so it
-matches them to requests by id rather than by arrival, and it keeps the latest
-`pushState`, which lets a reconnect catch up in one exchange instead of a
-`/changes` call per type. Carry the frames over any WebSocket client that
-negotiates the `jmap` subprotocol (`jmap.push.SUBPROTOCOL`); `jmaplib[ws]`
-installs `httpx-ws` for that.
+`notifications()` ends when the server closes the socket normally. The sync
+client reads only while it waits: a request reads until its own answer arrives,
+and any state change it passes on the way is kept for `notifications()`. Use it
+from one thread at a time.
 
-`is_secure` is worth checking before you send credentials over it. RFC 8887 §4.2
-requires TLS; a `ws://` URL from an `https://` session is a downgrade and worth
-refusing.
+`AsyncWebSocketClient` is the async twin, and does more: a background task reads
+the socket, so several requests may be in flight at once. RFC 8887 §4.3.2 lets
+the server answer them in any order, and each answer is matched to its request by
+id:
+
+```python
+from jmap.push import AsyncWebSocketClient
+
+async with AsyncWebSocketClient(client) as socket:
+    async with socket.batch() as batch:
+        mailboxes = batch.mail.mailbox.get(ids=None)
+    await socket.enable_push(["Email"])
+    async for change in socket.notifications():
+        ...
+```
+
+A few things differ from the HTTP path:
+
+- **A request that loses its socket is not re-sent.** Over HTTP the client
+  retries only what provably never ran; a socket that drops mid-request gives no
+  such proof, so the `TransportError` comes back to you.
+- **A 1008 close means new credentials.** RFC 8887 §4.1 has the server close with
+  1008 when the credentials that opened the socket expire, and redialling with
+  the same ones earns the same close. It raises `AuthenticationError`.
+- **Resume with `push_state`.** The latest `pushState` is on `socket.push_state`.
+  Pass it to the next connection - `WebSocketClient(client, push_state=saved)` -
+  and `enable_push()` asks the server to replay what changed in between, one
+  exchange instead of a `/changes` call per type.
+- **The endpoint is checked.** RFC 8887 §4.2 requires TLS, and a `ws://` URL
+  from an `https://` session is a downgrade: it is refused with
+  `InsecureEndpointError`. A session reached over plain http, or on loopback, may
+  use `ws://`.
+
+Underneath both is `jmap.push.WebSocketProtocol`, which frames the messages and
+classifies whatever comes back, with no I/O of its own - usable over any other
+WebSocket library that negotiates the `jmap` subprotocol.
