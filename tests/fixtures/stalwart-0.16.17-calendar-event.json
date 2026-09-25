@@ -1,0 +1,84 @@
+{
+  "start": "2026-10-05T10:00:00",
+  "recurrenceRule": {
+    "frequency": "weekly",
+    "count": 4,
+    "byDay": [
+      {
+        "day": "mo"
+      }
+    ]
+  },
+  "privacy": "public",
+  "virtualLocations": {
+    "v1": {
+      "uri": "https://meet.example.com/x",
+      "@type": "VirtualLocation",
+      "name": "Call",
+      "features": {
+        "video": true
+      }
+    }
+  },
+  "alerts": {
+    "a1": {
+      "trigger": {
+        "@type": "OffsetTrigger",
+        "offset": "-PT15M",
+        "relativeTo": "start"
+      },
+      "@type": "Alert",
+      "action": "display"
+    },
+    "a2": {
+      "@type": "Alert",
+      "trigger": {
+        "@type": "AbsoluteTrigger",
+        "when": "2026-10-05T08:00:00Z"
+      }
+    }
+  },
+  "links": {
+    "k1": {
+      "href": "https://example.com/agenda.pdf",
+      "@type": "Link",
+      "rel": "enclosure",
+      "size": 1234,
+      "contentType": "application/pdf"
+    }
+  },
+  "description": "Notes",
+  "showWithoutTime": false,
+  "timeZone": "Europe/London",
+  "uid": "df861a3d-105f-4d73-a2b7-4105b9985fac",
+  "keywords": {
+    "work": true
+  },
+  "updated": "2026-09-25T09:29:41Z",
+  "locations": {
+    "l1": {
+      "name": "Library",
+      "@type": "Location",
+      "coordinates": "geo:51.5,-0.13"
+    }
+  },
+  "priority": 3,
+  "freeBusyStatus": "busy",
+  "title": "Engine review",
+  "status": "confirmed",
+  "recurrenceOverrides": {
+    "2026-10-12T10:00:00": {
+      "title": "Engine review (moved)",
+      "updated": "2026-09-25T09:29:41Z"
+    }
+  },
+  "@type": "Event",
+  "duration": "PT1H30M",
+  "color": "blue",
+  "id": "b",
+  "calendarIds": {
+    "b": true
+  },
+  "isDraft": false,
+  "isOrigin": true
+}

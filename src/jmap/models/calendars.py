@@ -9,9 +9,9 @@ ways that silently corrupt data rather than failing: ``recurrenceRules`` (an arr
 became ``recurrenceRule`` (one object), ``replyTo`` became
 ``organizerCalendarAddress`` with a different *type*, ``Participant.sendTo`` became
 ``calendarAddress`` - while ``Participant.email`` survives unchanged, contrary to
-what is often assumed. Because the target is still moving, JSCalendar content is
-carried losslessly through ``extra`` rather than modelled field by field; what is
-modelled here is the JMAP layer, where the traps are.
+what is often assumed. The body is modelled in :mod:`jmap.models.jscalendar`,
+forgivingly, since the target is still moving: what a model cannot read is kept
+as it arrived. What is modelled here is the JMAP layer, where the traps are.
 
 Three of those traps are worth stating up front.
 
@@ -41,6 +41,7 @@ from pydantic import Field
 
 from jmap.core.errors import JMAPError
 from jmap.models.base import JMAPModel
+from jmap.models.jscalendar import Alert, Event
 
 #: draft-27 §5.11. ``expandRecurrences`` on a query whose window is too wide.
 EXPAND_DURATION_TOO_LARGE: Final = "expandDurationTooLarge"
@@ -130,8 +131,8 @@ class Calendar(JMAPModel):
     include_in_availability: str | None = None
     #: Alert id -> Alert. Triggers here must be relative, never absolute, and the
     #: ids are unique across the whole *account* rather than per calendar.
-    default_alerts_with_time: dict[str, dict[str, Any]] | None = None
-    default_alerts_without_time: dict[str, dict[str, Any]] | None = None
+    default_alerts_with_time: dict[str, Alert] | None = None
+    default_alerts_without_time: dict[str, Alert] | None = None
     #: ``None`` falls back to the owning Principal's zone.
     time_zone: str | None = None
     share_with: dict[str, CalendarRights] | None = None
@@ -155,12 +156,11 @@ class ParticipantIdentity(JMAPModel):
     is_default: bool | None = None
 
 
-class CalendarEvent(JMAPModel):
+class CalendarEvent(Event):
     """A calendar event (draft-27 §5).
 
-    A JSCalendar ``Event`` plus the JMAP-layer properties below. The JSCalendar
-    body rides in ``extra`` and round-trips losslessly - see the module docstring
-    for why it is not modelled field by field yet.
+    A JSCalendar :class:`~jmap.models.jscalendar.Event` plus the JMAP-layer
+    properties below.
     """
 
     id: str | None = None
@@ -191,15 +191,6 @@ class CalendarEvent(JMAPModel):
     def calendars(self) -> list[str]:
         """The calendars this event is in, as a plain list."""
         return [key for key, value in (self.calendar_ids or {}).items() if value]
-
-    def jscalendar(self, name: str) -> Any:
-        """Read a JSCalendar property by its exact wire name.
-
-        ``event.jscalendar("recurrenceRule")``. They live in ``extra`` because the
-        target revision is still moving; reading them by name is stable across
-        that churn in a way generated fields would not be.
-        """
-        return (self.__pydantic_extra__ or {}).get(name)
 
 
 class BusyPeriod(JMAPModel):
@@ -252,7 +243,7 @@ class CalendarEventNotification(JMAPModel):
     #: Always the *base* event, even when one occurrence changed.
     calendar_event_id: str | None = None
     is_draft: bool | None = None
-    event: dict[str, Any] | None = None
+    event: Event | None = None
     #: Only present for ``updated``.
     event_patch: dict[str, Any] | None = None
 

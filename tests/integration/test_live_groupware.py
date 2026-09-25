@@ -16,7 +16,17 @@ import pytest
 from jmap.capabilities.calendars import CALENDARS_URN, CalendarsCapability, duration_seconds
 from jmap.core.errors import CapabilityFieldError
 from jmap.core.ijson import format_local_date, parse_local_date
+from jmap.models.calendars import CalendarEvent
 from jmap.models.contacts import ContactCard
+from jmap.models.jscalendar import (
+    AbsoluteTrigger,
+    Alert,
+    Location,
+    NDay,
+    OffsetTrigger,
+    Participant,
+    RecurrenceRule,
+)
 from jmap.models.jscontact import (
     Anniversary,
     EmailAddress,
@@ -147,3 +157,55 @@ class TestContactCards:
         finally:
             with alice.batch() as batch:
                 batch.contacts.contact_card.set(destroy=[card_id])
+
+
+@requires_server
+class TestCalendarEvents:
+    def test_an_event_built_from_models_comes_back_as_models(self, alice):
+        requires_method(alice, "CalendarEvent/set")
+        with alice.batch() as batch:
+            calendars = batch.calendars.calendar.get(ids=None)
+        calendar = next(calendar for calendar in calendars.result.items if calendar.is_default)
+        event = CalendarEvent(
+            calendar_ids={str(calendar.id): True},
+            title="Engine review",
+            start="2026-10-05T10:00:00",
+            time_zone="Europe/London",
+            duration="PT1H",
+            recurrence_rule=RecurrenceRule(frequency="weekly", by_day=[NDay(day="mo")], count=4),
+            locations={"l1": Location(name="Library")},
+            participants={
+                "p1": Participant(
+                    calendar_address=f"mailto:{ALICE}", roles={"owner": True, "attendee": True}
+                )
+            },
+            alerts={
+                "a1": Alert(trigger=OffsetTrigger(offset="-PT15M")),
+                "a2": Alert(trigger=AbsoluteTrigger(when="2026-10-05T08:00:00Z")),
+            },
+        )
+        with alice.batch() as batch:
+            created = batch.calendars.calendar_event.set(create={"e": event})
+        event_id = str(created.result.created_id("e"))
+        try:
+            with alice.batch() as batch:
+                fetched = batch.calendars.calendar_event.get(ids=[event_id])
+            stored = fetched.result.items[0]
+            assert stored.model_extra == {}
+            assert stored.uid  # the server made one
+            assert stored.recurrence_rule is not None
+            assert stored.recurrence_rule.by_day == [NDay(day="mo")]
+            assert stored.locations is not None
+            assert stored.locations["l1"].name == "Library"
+            assert stored.participants is not None
+            owner = stored.participants["p1"]
+            assert owner.calendar_address == f"mailto:{ALICE}"
+            assert owner.roles == {"owner": True, "attendee": True}
+            assert stored.alerts is not None
+            assert isinstance(stored.alerts["a1"].trigger, OffsetTrigger)
+            absolute = stored.alerts["a2"].trigger
+            assert isinstance(absolute, AbsoluteTrigger)
+            assert absolute.when == "2026-10-05T08:00:00Z"
+        finally:
+            with alice.batch() as batch:
+                batch.calendars.calendar_event.set(destroy=[event_id])

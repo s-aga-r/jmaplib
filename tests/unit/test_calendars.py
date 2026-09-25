@@ -53,6 +53,7 @@ from jmap.models.calendars import (
     ParticipantIdentity,
     check_recurrence_id,
 )
+from jmap.models.jscalendar import OffsetTrigger, RecurrenceRule
 
 
 class TestRecurrenceId:
@@ -136,12 +137,12 @@ class TestCalendarModel:
         # a per-calendar zone, and to_wire has to keep it.
         assert Calendar(time_zone=None).to_wire() == {"timeZone": None}
 
-    def test_default_alerts_are_kept_as_raw_alert_objects(self):
+    def test_default_alerts_are_alert_objects(self):
         calendar = Calendar.from_wire(
             {"defaultAlertsWithTime": {"a1": {"trigger": {"offset": "-PT10M"}}}}
         )
         assert calendar.default_alerts_with_time is not None
-        assert calendar.default_alerts_with_time["a1"]["trigger"] == {"offset": "-PT10M"}
+        assert calendar.default_alerts_with_time["a1"].trigger == OffsetTrigger(offset="-PT10M")
         assert calendar.default_alerts_without_time is None
 
     def test_share_with_parses_into_rights_objects(self):
@@ -213,8 +214,8 @@ class TestCalendarEvent:
         assert CalendarEvent.from_wire({"calendarIds": {}}).calendars == []
 
     def test_jscalendar_properties_are_read_by_their_wire_name(self):
-        # The JSCalendar body is not modelled field by field; it rides in extra
-        # and is addressed by the exact name the draft uses.
+        # Modelled or not, a property answers by the exact name the draft uses,
+        # in its wire form.
         event = CalendarEvent.from_wire(
             {"id": "e1", "title": "Standup", "recurrenceRule": {"frequency": "weekly"}}
         )
@@ -227,11 +228,9 @@ class TestCalendarEvent:
     def test_an_event_with_no_extras_at_all_reports_none(self):
         assert CalendarEvent().jscalendar("recurrenceRule") is None
 
-    def test_a_jscalendar_property_is_not_reachable_as_an_attribute(self):
-        # `event.recurrence_rule` would be a plausible-looking AttributeError in
-        # production code; jscalendar() is the only supported reader.
+    def test_a_jscalendar_property_is_a_typed_attribute(self):
         event = CalendarEvent.from_wire({"recurrenceRule": {"frequency": "weekly"}})
-        assert not hasattr(event, "recurrence_rule")
+        assert event.recurrence_rule == RecurrenceRule(frequency="weekly")
 
     def test_the_jscalendar_body_round_trips_losslessly(self):
         # The draft is still moving, so unmodelled properties must survive a
@@ -241,6 +240,7 @@ class TestCalendarEvent:
             "@type": "Event",
             "title": "Standup",
             "recurrenceOverrides": {"2024-03-04T09:00:00": {"title": "Retro"}},
+            "iCalComponent": {"name": "vevent"},
         }
         assert CalendarEvent.from_wire(wire).to_wire() == wire
 
@@ -337,7 +337,8 @@ class TestCalendarEventNotification:
             }
         )
         assert notification.describes_the_state_before is True
-        assert notification.event == {"title": "Old"}
+        assert notification.event is not None
+        assert notification.event.title == "Old"
         assert notification.event_patch == {"title": "New"}
 
     def test_a_destroy_also_describes_the_state_before(self):
