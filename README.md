@@ -666,12 +666,14 @@ It asks for the password, or reads `$JMAP_PASSWORD`.
 | RFC 9219 | S/MIME signature verification | properties on `Email` |
 | RFC 9404 | Blob management | `batch.blob` |
 | RFC 9425 | Quotas | `batch.quota` |
+| RFC 9553 | JSContact: the contact card format | `jmap.models.jscontact` |
 | RFC 9610 | Contacts (JSContact) | `batch.contacts` |
 | RFC 9661 | Sieve scripts | `batch.sieve` |
 | RFC 9670 | Principals and sharing | `batch.principals`, `jmap.sharing` |
 | RFC 9749 | Web Push VAPID keys | `jmap.push` |
 | Fastmail and Cyrus contacts | The pre-RFC contacts APIs | `batch.fastmail_contacts`, `batch.cyrus_contacts` |
 | draft-ietf-jmap-calendars-27 | Calendars *(experimental)* | `batch.calendars` |
+| draft-ietf-calext-jscalendarbis | JSCalendar 2.0: the event format *(experimental)* | `jmap.models.jscalendar` |
 | draft-ietf-jmap-filenode-14 | File storage *(experimental)* | `batch.files` |
 
 Signing in follows the OAuth 2.0 family: RFC 6749 and 6750, PKCE (RFC 7636),
@@ -733,11 +735,10 @@ the [changelog](CHANGELOG.md) for what changed.
 - **Experimental capabilities are outside the SemVer promise.** Calendars and
   files track Internet-Drafts whose wire names can still change, so they are off
   unless you pass `experimental=True`.
-- **Contact and calendar bodies are carried, not modelled.** A `ContactCard`
-  (JSContact) or `CalendarEvent` (JSCalendar) round-trips losslessly and each
-  field is readable by its wire name, for example
-  `event.jscalendar("recurrenceRule")`. The JMAP layer around them is fully
-  modelled.
+- **Contact and calendar bodies are typed, and forgiving.** A `ContactCard`
+  (JSContact) and a `CalendarEvent` (JSCalendar 2.0) are modelled property by
+  property, and a value that does not fit its type is kept as the server sent
+  it rather than failing the object - so both round-trip unchanged.
 
 ## Contributing
 

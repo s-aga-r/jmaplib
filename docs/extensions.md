@@ -93,10 +93,35 @@ their own vendor URNs. The library models both and picks whichever the server
 advertises - `batch.contacts` for the standard one, `batch.fastmail_contacts` or
 `batch.cyrus_contacts` for the legacy pair.
 
-**JSContact bodies are carried, not modelled.** A `ContactCard` round-trips
-losslessly and is readable by exact wire name, but there are no field-by-field
-Python models for the JSContact vocabulary itself. What *is* modelled is the JMAP
-layer around it, which is where the traps live.
+**Cards are typed.** A `ContactCard` is RFC 9553's Card, modelled in
+`jmap.models.jscontact`, plus `id` and `addressBookIds`. Its parts read as
+attributes, and the same models build a card to create:
+
+```python
+from jmap.models.contacts import ContactCard
+from jmap.models.jscontact import EmailAddress, Name, NameComponent
+
+card = ContactCard(
+    address_book_ids={book_id: True},
+    name=Name(components=[NameComponent(kind="given", value="Ada")]),
+    emails={"e1": EmailAddress(address="ada@example.com", contexts={"work": True})},
+)
+with client.batch() as batch:
+    created = batch.contacts.contact_card.set(create={"c1": card})
+```
+
+The maps - `emails`, `phones`, `addresses` and the rest - are keyed by ids local
+to the card, which survive edits and are what a patch names
+(`emails/e1/address`). Two properties have other names in Python: `members` is
+`member_uids` and `media` is `media_resources`, since `card.members()` and
+`card.media()` already read them. `@type` and `version` are left for the server
+to fill in.
+
+The models are forgiving. A property whose value does not fit its type is kept
+exactly as the server sent it, and reads `None` as an attribute: one odd value
+never costs the card, and a card always round-trips unchanged.
+`card.jscontact("name")` reads any property by its wire name, in wire form,
+modelled or not - a vendor property included.
 
 **Parsing vCards server-side** is a Stalwart extension, behind
 `urn:ietf:params:jmap:contacts:parse` - an IETF-spelled URN that no RFC defines;
@@ -131,8 +156,32 @@ the span between them within the advertised duration. It raises
 `CapabilityFieldError` otherwise, and you can chunk the window deliberately. A
 query queued with `batch.add` goes out unchecked.
 
-As with contacts, JSCalendar bodies are carried through rather than modelled
-field by field.
+**Events are typed too**, as JSCalendar 2.0 (jscalendarbis) - the revision the
+draft builds on, not RFC 8984: one `recurrenceRule` rather than an array, and a
+participant's `calendarAddress` rather than `sendTo`. A `CalendarEvent` is the
+Event in `jmap.models.jscalendar` plus the JMAP properties, forgiving in the same
+way as a card, and `event.jscalendar(name)` reads by wire name:
+
+```python
+from jmap.models.calendars import CalendarEvent
+from jmap.models.jscalendar import Alert, NDay, OffsetTrigger, RecurrenceRule
+
+event = CalendarEvent(
+    calendar_ids={calendar_id: True},
+    title="Standup",
+    start="2026-10-05T09:00:00",  # a LocalDateTime, read in time_zone
+    time_zone="Europe/London",
+    duration="PT15M",
+    recurrence_rule=RecurrenceRule(frequency="weekly", by_day=[NDay(day="mo")]),
+    alerts={"a1": Alert(trigger=OffsetTrigger(offset="-PT5M"))},
+)
+with client.batch() as batch:
+    created = batch.calendars.calendar_event.set(create={"e1": event})
+```
+
+An alert's trigger reads as an `OffsetTrigger`, an `AbsoluteTrigger`, or an
+`UnknownTrigger` holding a type this build does not know. Dates stay strings in
+JSCalendar's own forms.
 
 **Parsing iCalendar** is optional for a server, behind
 `urn:ietf:params:jmap:calendars:parse`. When it is advertised,
