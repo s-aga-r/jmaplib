@@ -18,7 +18,7 @@ Optional extras, none of which you need for mail:
 |---|---|---|
 | `jmaplib[discovery]` | `dnspython` | Finding a server from an email address via SRV records |
 | `jmaplib[ws]` | `httpx-ws` | JMAP over WebSocket - requests and push on one connection; see [Push](push.md#websocket) |
-| `jmaplib[push]` | `cryptography` | Decrypting Web Push payloads in your own push endpoint |
+| `jmaplib[push]` | `cryptography` | Encrypted push payloads - the keys, and decrypting them; see [Push](push.md#encrypted-payloads) |
 | `jmaplib[cli]` | `typer`, `rich` | Reserved for command-line tools; nothing needs it yet |
 
 OAuth sign-in needs no extra: it uses only the standard library and httpx.

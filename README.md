@@ -68,7 +68,7 @@ Optional extras - you need none of them for mail:
 |---|---|---|
 | `jmaplib[discovery]` | `dnspython` | You want `JMAPClient.discover()` to look up SRV records. Without it, discovery tries only `https://<domain>/.well-known/jmap`. |
 | `jmaplib[ws]` | `httpx-ws` | You speak JMAP over WebSocket (RFC 8887): `jmap.push.WebSocketClient` and its async twin send batches and receive push over one connection. |
-| `jmaplib[push]` | `cryptography` | Your own Web Push endpoint decrypts push payloads (RFC 8291). |
+| `jmaplib[push]` | `cryptography` | Your push endpoint receives encrypted payloads: `jmap.push.PushKeyPair` makes the keys and decrypts them (RFC 8291). |
 | `jmaplib[cli]` | `typer`, `rich` | Nothing yet - it is reserved for command-line tools. The conformance report below needs only the standard library. |
 
 ## Quick start
@@ -658,6 +658,7 @@ It asks for the password, or reads `$JMAP_PASSWORD`.
 
 | Specification | Covers | Where |
 |---|---|---|
+| RFC 8291 | Encrypted push payloads | `jmap.push.PushKeyPair`, `read_push` |
 | RFC 8620 | JMAP core: sessions, requests, blobs, push | `batch.core`, `jmap.push` |
 | RFC 8621 | Mail, sending, vacation responses | `batch.mail`, `batch.submission`, `batch.vacation` |
 | RFC 8887 | JMAP over WebSocket | `jmap.push.WebSocketClient`, `AsyncWebSocketClient` |

@@ -144,11 +144,54 @@ library rejects asking for them rather than letting the whole call earn
 Subscriptions expire. `expires` is a hint the server may shorten, and
 `needs_recreating` / `renewal_update` handle the two cases.
 
-### Encrypted payloads (VAPID)
+### Reading what arrives
+
+Each `POST` to your URL carries one JSON object: a `StateChange`, or the
+`PushVerification` from step 2. `read_push` turns the body into whichever it is,
+and raises `PushPayloadError` for anything else:
+
+```python
+from jmap.models.push import PushVerification
+from jmap.push import read_push
+
+pushed = read_push(body)  # the raw bytes of the POST
+if isinstance(pushed, PushVerification):
+    pending.record(pushed)  # a PendingVerification
+else:
+    ...  # a StateChange: compare its states, fetch what moved
+```
+
+### Encrypted payloads
+
+Give the subscription `keys` and the server encrypts everything it sends to the
+URL, the verification included (RFC 8620 §7.2), so the push service in the middle
+learns nothing but the length. `PushKeyPair` makes the keys and decrypts with
+them (RFC 8291); it needs `jmaplib[push]`:
+
+```python
+from jmap.push import PushKeyPair, new_subscription, read_push
+
+pair = PushKeyPair.generate()
+creation = new_subscription(
+    device_client_id="my-app-on-this-device",
+    url="https://push.example.com/hook/abc",
+    keys=pair.keys,  # the public half, and the authentication secret
+)
+# Store pair.private_key and pair.auth where the endpoint runs, then rebuild
+# the pair there with PushKeyPair(private_key, auth) and pass it for every POST:
+pushed = read_push(body, pair)
+```
+
+`pair.private_key` is the secret that matters: never send it, and keep it as
+safely as a password. The body must be one `aes128gcm` record ending in the
+`0x02` delimiter, as RFC 8291 §4 requires; one that is not, or that was
+encrypted to other keys, raises `PushPayloadError` and should be dropped.
+
+### VAPID
 
 RFC 9749. If the server advertises `urn:ietf:params:jmap:webpush-vapid`, it
-publishes a public key you can pin, and payloads can be encrypted so the push
-service in the middle learns nothing:
+signs its requests to a push service with a key it publishes, so a browser push
+service can check who is sending:
 
 ```python
 from jmap.push import application_server_key
@@ -156,10 +199,8 @@ from jmap.push import application_server_key
 key = application_server_key(client.session)
 ```
 
-Reading the key needs no extra. Decrypting the payloads (RFC 8291) is your push
-endpoint's job rather than this library's; `jmaplib[push]` installs
-`cryptography`, which that needs. Check `vapid_key_rotated` before trusting a
-cached key - a rotation means re-subscribing.
+Reading the key needs no extra. Check `needs_recreating` before trusting a
+cached key - a rotation destroys the subscription, so it has to be made again.
 
 ## WebSocket
 
