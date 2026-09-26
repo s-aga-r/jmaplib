@@ -12,7 +12,7 @@ from typing import Final
 
 # Unannotated on purpose: hatchling's default version regex only matches a bare
 # `__version__ = "..."` assignment.
-__version__ = "1.1.0"
+__version__ = "2.0.0"
 
 #: Maps a capability URN to the exact spec revision this library implements.
 SPEC_REVISIONS: Final[dict[str, str]] = {

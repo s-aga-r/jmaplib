@@ -5,7 +5,11 @@ with one deliberate exception: capabilities marked `experimental=True` track IET
 drafts and are excluded from the compatibility promise. See `jmap.SPEC_REVISIONS`
 for exactly which revision of each spec this build implements.
 
-## Unreleased
+## 2.0.0
+
+A major release: some of what existing code relies on changed, and **Changed**
+below lists each - errors a call now raises before sending, and exceptions that
+are now a different class.
 
 ### Security
 
